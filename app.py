@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import psycopg2
+from psycopg2 import OperationalError, InterfaceError
 from datetime import datetime, timedelta
 import json
 import os
@@ -24,153 +25,131 @@ def check_password():
 
 if not check_password(): st.stop()
 
-# 2. CONEXÃO NEON (Com reconexão automática)
-def get_connection():
-    # Verifica se já existe uma conexão na sessão e se ela está aberta (closed == 0)
-    if 'db_conn' in st.session_state:
-        try:
-            if st.session_state.db_conn.closed == 0:
-                # Testa se a conexão responde
-                with st.session_state.db_conn.cursor() as cur:
-                    cur.execute("SELECT 1")
-                return st.session_state.db_conn
-        except:
-            pass # Se der erro, vamos reconectar abaixo
+# 2. CONEXÃO BLINDADA (Reconecta se cair)
+@st.cache_resource(ttl=600) # Cache dura 10 min, depois força renovar
+def get_connection_raw():
+    return psycopg2.connect(st.secrets["DATABASE_URL"])
 
-    # Se não existir ou estiver fechada, cria uma nova
+def executar_sql(sql, params=None, is_select=False):
+    """
+    Função central que gerencia transações e reconexões automáticas.
+    """
+    conn = None
     try:
-        conn = psycopg2.connect(st.secrets["DATABASE_URL"])
-        st.session_state.db_conn = conn
-        return conn
-    except Exception as e:
-        st.error(f"Erro crítico ao conectar ao banco: {e}")
-        st.stop()
+        conn = get_connection_raw()
+        # Testa se a conexão está viva
+        if conn.closed != 0:
+            st.cache_resource.clear()
+            conn = get_connection_raw()
+            
+        with conn.cursor() as cur:
+            # Garante esquema public
+            cur.execute("SET search_path TO public")
+            
+            if is_select:
+                if params:
+                    return pd.read_sql(sql, conn, params=params)
+                else:
+                    return pd.read_sql(sql, conn)
+            else:
+                cur.execute(sql, params)
+                conn.commit()
+                return True
 
-conn = get_connection()
+    except (InterfaceError, OperationalError) as e:
+        # SE A CONEXÃO CAIU: Limpa cache e tenta de novo (Retry)
+        st.cache_resource.clear()
+        try:
+            conn = get_connection_raw()
+            with conn.cursor() as cur:
+                cur.execute("SET search_path TO public")
+                if is_select:
+                    if params: return pd.read_sql(sql, conn, params=params)
+                    else: return pd.read_sql(sql, conn)
+                else:
+                    cur.execute(sql, params)
+                    conn.commit()
+                    return True
+        except Exception as e2:
+            st.error(f"Erro fatal de conexão: {e2}")
+            return pd.DataFrame() if is_select else False
+
+    except Exception as e:
+        # Outros erros (SQL errado, dados inválidos)
+        if conn: conn.rollback()
+        st.error(f"Erro na operação: {e}")
+        return pd.DataFrame() if is_select else False
 
 # 3. METAS
 META_KCAL = 1600
 META_PROTEINA = 150
 
-# 4. FUNÇÕES DE BANCO (Garantindo esquema public)
+# 4. FUNÇÕES DE BANCO (Usando a conexão blindada)
 def inicializar_banco():
-    try:
-        with conn.cursor() as cur:
-            conn.rollback() # Limpa transações anteriores
-            cur.execute("SET search_path TO public")
-            
-            # Tabela TACO
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS public.tabela_taco (
-                    id SERIAL PRIMARY KEY, alimento TEXT, kcal REAL, proteina REAL, carbo REAL, gordura REAL
-                );
-            """)
-            
-            # Tabela Consumo
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS public.consumo (
-                    id SERIAL PRIMARY KEY, 
-                    data DATE, 
-                    alimento TEXT, 
-                    quantidade REAL, 
-                    kcal REAL, 
-                    proteina REAL, 
-                    carbo REAL, 
-                    gordura REAL,
-                    gluten TEXT DEFAULT 'Não informado'
-                );
-            """)
-            
-            # Garante coluna gluten
-            cur.execute("""
-                DO $$ 
-                BEGIN 
-                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='consumo' AND column_name='gluten') THEN
-                        ALTER TABLE public.consumo ADD COLUMN gluten TEXT DEFAULT 'Não informado';
-                    END IF;
-                END $$;
-            """)
-            
-            # Tabela Peso
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS public.peso (
-                    id SERIAL PRIMARY KEY, data DATE, peso_kg REAL
-                );
-            """)
-            conn.commit()
-    except Exception as e:
-        conn.rollback()
-        # Se for erro de conexão, a próxima execução do get_connection resolverá
-
-def limpar_valor_taco(valor):
-    if pd.isna(valor) or str(valor).strip().upper() in ['NA', 'TR', '', '-']: return 0.0
-    try: return float(str(valor).replace(',', '.'))
-    except: return 0.0
+    # Criação das tabelas
+    executar_sql("""
+        CREATE TABLE IF NOT EXISTS public.tabela_taco (
+            id SERIAL PRIMARY KEY, alimento TEXT, kcal REAL, proteina REAL, carbo REAL, gordura REAL
+        );
+    """)
+    executar_sql("""
+        CREATE TABLE IF NOT EXISTS public.consumo (
+            id SERIAL PRIMARY KEY, data DATE, alimento TEXT, quantidade REAL, kcal REAL, proteina REAL, carbo REAL, gordura REAL, gluten TEXT DEFAULT 'Não informado'
+        );
+    """)
+    # Garante coluna gluten
+    executar_sql("""
+        DO $$ 
+        BEGIN 
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='consumo' AND column_name='gluten') THEN
+                ALTER TABLE public.consumo ADD COLUMN gluten TEXT DEFAULT 'Não informado';
+            END IF;
+        END $$;
+    """)
+    executar_sql("""
+        CREATE TABLE IF NOT EXISTS public.peso (
+            id SERIAL PRIMARY KEY, data DATE, peso_kg REAL
+        );
+    """)
 
 def carregar_csv_completo():
+    if not os.path.exists('alimentos.csv'): return False
     try:
-        if not os.path.exists('alimentos.csv'): return False
         df = pd.read_csv('alimentos.csv', sep=';', encoding='latin-1')
-        tabela_preparada = []
+        # Precisamos fazer isso de forma diferente para usar o executar_sql ou conexão direta
+        # Para simplificar a carga massiva, usamos conexão direta aqui
+        conn = get_connection_raw()
+        cur = conn.cursor()
+        cur.execute("TRUNCATE TABLE public.tabela_taco")
+        
         for _, row in df.iterrows():
-            tabela_preparada.append((
-                str(row.iloc[2]), float(limpar_valor_taco(row.iloc[4])),  
-                float(limpar_valor_taco(row.iloc[6])), float(limpar_valor_taco(row.iloc[9])), float(limpar_valor_taco(row.iloc[7]))   
-            ))
-        with conn.cursor() as cur:
-            conn.rollback()
-            cur.execute("SET search_path TO public")
-            cur.execute("TRUNCATE TABLE public.tabela_taco")
-            cur.executemany("INSERT INTO public.tabela_taco (alimento, kcal, proteina, carbo, gordura) VALUES (%s, %s, %s, %s, %s)", tabela_preparada)
-            conn.commit()
+             # Limpeza básica inline
+            val = lambda x: float(str(x).replace(',', '.')) if str(x).strip() not in ['NA', 'TR', '', '-'] else 0.0
+            cur.execute(
+                "INSERT INTO public.tabela_taco (alimento, kcal, proteina, carbo, gordura) VALUES (%s, %s, %s, %s, %s)",
+                (str(row.iloc[2]), val(row.iloc[4]), val(row.iloc[6]), val(row.iloc[9]), val(row.iloc[7]))
+            )
+        conn.commit()
         return True
     except:
-        conn.rollback()
+        st.cache_resource.clear()
         return False
-
-def deletar_registro(tabela, id_registro):
-    try:
-        with conn.cursor() as cur:
-            conn.rollback()
-            cur.execute(f"DELETE FROM public.{tabela} WHERE id = %s", (id_registro,))
-            conn.commit()
-        return True
-    except: return False
-
-def buscar_alimento(termo):
-    if not termo: return pd.DataFrame()
-    try:
-        return pd.read_sql("SELECT * FROM public.tabela_taco WHERE alimento ILIKE %s ORDER BY alimento ASC LIMIT 50", conn, params=(f'%{termo}%',))
-    except:
-        return pd.DataFrame()
-
-def ler_dados_periodo(dias=30):
-    data_inicio = (datetime.now() - timedelta(days=dias)).date()
-    try:
-        return pd.read_sql("SELECT * FROM public.consumo WHERE data >= %s ORDER BY data DESC, id DESC", conn, params=(data_inicio,))
-    except:
-        return pd.DataFrame()
 
 # 5. INICIALIZAÇÃO
 inicializar_banco()
 
 # 6. INTERFACE
 st.title("🦁 Leo Tracker Pro")
-
-tab_prato, tab_ia, tab_plano, tab_hist, tab_peso, tab_admin = st.tabs([
-    "🍽️ Registro", 
-    "🤖 IA/JSON", 
-    "📝 Meu Plano", 
-    "📊 Histórico", 
-    "⚖️ Peso", 
-    "⚙️ Admin"
-])
+tab_prato, tab_ia, tab_plano, tab_hist, tab_peso, tab_admin = st.tabs(["🍽️ Registro", "🤖 IA/JSON", "📝 Meu Plano", "📊 Histórico", "⚖️ Peso", "⚙️ Admin"])
 
 # --- ABA 1: BUSCA MANUAL ---
 with tab_prato:
     st.subheader("Registo Rápido (Base TACO)")
     
-    df_hoje = ler_dados_periodo(0)
+    # Métricas
+    data_hoje = datetime.now().date()
+    df_hoje = executar_sql("SELECT * FROM public.consumo WHERE data = %s", (data_hoje,), is_select=True)
+    
     kcal_hoje = float(df_hoje['kcal'].sum()) if not df_hoje.empty else 0.0
     prot_hoje = float(df_hoje['proteina'].sum()) if not df_hoje.empty else 0.0
     
@@ -180,9 +159,9 @@ with tab_prato:
     st.progress(min(kcal_hoje/META_KCAL, 1.0))
     st.divider()
 
-    termo = st.text_input("🔍 Pesquisar alimento (ex: banana, arroz):")
+    termo = st.text_input("🔍 Pesquisar alimento (ex: banana):")
     if termo:
-        df_res = buscar_alimento(termo)
+        df_res = executar_sql("SELECT * FROM public.tabela_taco WHERE alimento ILIKE %s ORDER BY alimento ASC LIMIT 50", (f'%{termo}%',), is_select=True)
         if not df_res.empty:
             escolha = st.selectbox("Selecione:", df_res["alimento"])
             dados = df_res[df_res["alimento"] == escolha].iloc[0]
@@ -195,28 +174,21 @@ with tab_prato:
             c = float(round(float(dados['carbo']) * fator, 1))
             g = float(round(float(dados['gordura']) * fator, 1))
             
-            st.info(f"🥘 {k} kcal | P: {p}g | C: {c}g | G: {g}g")
+            st.info(f"🥘 {k} kcal | P: {p}g | C: {c}g")
             
             if st.button("Confirmar Refeição"):
-                try:
-                    with conn.cursor() as cur:
-                        conn.rollback()
-                        cur.execute("SET search_path TO public")
-                        cur.execute("""
-                            INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) 
-                            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-                        """, (datetime.now().date(), str(escolha), float(qtd), k, p, c, g, "Não informado"))
-                        conn.commit()
+                sucesso = executar_sql("""
+                    INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) 
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                """, (datetime.now().date(), str(escolha), float(qtd), k, p, c, g, "Não informado"))
+                
+                if sucesso:
                     st.success("Registrado!")
                     st.rerun()
-                except Exception as e:
-                    conn.rollback()
-                    st.error(f"Erro ao salvar: {e}")
 
 # --- ABA 2: IMPORTAR DA IA ---
 with tab_ia:
     st.subheader("Importar JSON da IA")
-    st.info("Cole o JSON gerado pelo Gemini aqui.")
     json_input = st.text_area("JSON:", height=150)
     
     if st.button("Processar JSON"):
@@ -226,44 +198,26 @@ with tab_ia:
                 dados_ia = json.loads(limpo)
                 for item in dados_ia:
                     gluten_status = item.get('gluten', 'Não informado')
-                    with conn.cursor() as cur:
-                        conn.rollback()
-                        cur.execute("SET search_path TO public")
-                        cur.execute("""
-                            INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) 
-                            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-                        """, (datetime.now().date(), item['alimento'], 1.0, float(item['kcal']), float(item['p']), float(item['c']), float(item['g']), gluten_status))
-                        conn.commit()
-                    st.success(f"Salvo: {item['alimento']}")
+                    executar_sql("""
+                        INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) 
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                    """, (datetime.now().date(), item['alimento'], 1.0, float(item['kcal']), float(item['p']), float(item['c']), float(item['g']), gluten_status))
+                st.success("Importação concluída!")
                 st.rerun()
             except Exception as e:
-                st.error(f"Erro: {e}")
+                st.error(f"Erro no JSON: {e}")
 
-# --- ABA 3: MEU PLANO ---
+# --- ABA 3: PLANO ---
 with tab_plano:
-    st.header("📋 Orientações da Dieta")
-    col_p1, col_p2 = st.columns(2)
-    with col_p1:
-        st.subheader("⏰ Horários e Refeições")
-        with st.expander("🌅 Café da Manhã (07:00 - 08:30)"):
-            st.write("- 3 ovos (mexidos ou cozidos) + Fruta")
-            st.caption("Foco: Proteína.")
-        with st.expander("🍲 Almoço (12:00 - 13:30)"):
-            st.write("- Arroz integral/Batata + Feijão + Carne magra + Salada")
-        with st.expander("🍎 Lanche (16:00 - 17:00)"):
-            st.write("- Iogurte natural ou castanhas")
-        with st.expander("🌙 Jantar (19:30 - 20:30)"):
-            st.write("- Proteína + Vegetais (Low Carb)")
-    with col_p2:
-        st.subheader("💡 Regras")
-        st.warning("1. Beber 3L de água.")
-        st.warning("2. Zero açúcar.")
-        st.warning("3. Proteína em todas as refeições.")
+    st.header("📋 Orientações")
+    st.write("Seguir plano alimentar de baixo índice glicêmico e alta proteína.")
 
 # --- ABA 4: HISTÓRICO ---
 with tab_hist:
-    st.subheader("Registros Recentes")
-    df_hist = ler_dados_periodo(7)
+    st.subheader("Últimos 7 dias")
+    data_limite = (datetime.now() - timedelta(days=7)).date()
+    df_hist = executar_sql("SELECT * FROM public.consumo WHERE data >= %s ORDER BY data DESC, id DESC", (data_limite,), is_select=True)
+    
     if not df_hist.empty:
         for i, row in df_hist.iterrows():
             c1, c2, c3 = st.columns([3, 2, 0.5])
@@ -271,7 +225,7 @@ with tab_hist:
             gl_tag = "🚫" if row['gluten'] == "Contém" else ""
             c2.write(f"{int(row['kcal'])} kcal {gl_tag}")
             if c3.button("🗑️", key=f"d_{row['id']}"):
-                deletar_registro("consumo", row['id'])
+                executar_sql("DELETE FROM public.consumo WHERE id = %s", (row['id'],))
                 st.rerun()
 
 # --- ABA 5: PESO ---
@@ -280,34 +234,17 @@ with tab_peso:
     with c1:
         p_val = st.number_input("Peso (kg):", 40.0, 200.0, 145.0)
         if st.button("Gravar Peso"):
-            with conn.cursor() as cur:
-                conn.rollback()
-                cur.execute("SET search_path TO public")
-                cur.execute("INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", (datetime.now().date(), float(p_val)))
-                conn.commit()
+            executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", (datetime.now().date(), float(p_val)))
             st.rerun()
     with c2:
-        df_p = pd.read_sql("SELECT * FROM public.peso ORDER BY data DESC", conn)
+        df_p = executar_sql("SELECT * FROM public.peso ORDER BY data DESC", is_select=True)
         if not df_p.empty:
             st.line_chart(df_p.set_index('data'))
             st.dataframe(df_p)
 
 # --- ABA 6: ADMIN ---
 with tab_admin:
-    st.subheader("⚙️ Configurações")
-    with st.expander("➕ Cadastrar Alimento Manual"):
-        nome_novo = st.text_input("Nome:")
-        k_n = st.number_input("Kcal/100g:", 0.0)
-        p_n = st.number_input("Prot/100g:", 0.0)
-        if st.button("Salvar na Base"):
-            with conn.cursor() as cur:
-                conn.rollback()
-                cur.execute("SET search_path TO public")
-                cur.execute("INSERT INTO public.tabela_taco (alimento, kcal, proteina, carbo, gordura) VALUES (%s,%s,%s,0,0)", (nome_novo, float(k_n), float(p_n)))
-                conn.commit()
-            st.success("Adicionado!")
-    st.divider()
-    if st.button("🚀 Sincronizar TACO (CSV)"):
+    if st.button("Sincronizar CSV"):
         if carregar_csv_completo():
-            st.success("Sincronizado!")
+            st.success("Feito!")
             st.rerun()
