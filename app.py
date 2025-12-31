@@ -19,7 +19,7 @@ def check_password():
         if password == st.secrets["PASSWORD"]:
             st.session_state["password_correct"] = True
             st.rerun()
-        else: st.error("Incorreta!")
+        else: st.error("Senha incorreta!")
     return False
 
 if not check_password(): st.stop()
@@ -67,7 +67,7 @@ def inicializar_banco():
             );
         """)
         
-        # Garante que a coluna gluten existe
+        # Garante coluna gluten
         cur.execute("""
             DO $$ 
             BEGIN 
@@ -133,11 +133,20 @@ inicializar_banco()
 
 # 6. INTERFACE
 st.title("🦁 Leo Tracker Pro")
-tab_prato, tab_ia, tab_hist, tab_peso, tab_admin = st.tabs(["🍽️ Buscar (TACO)", "🤖 Importar JSON", "📊 Histórico", "⚖️ Peso", "⚙️ Admin"])
 
-# --- ABA 1: BUSCA MANUAL NA TACO (Banana, Arroz, etc) ---
+# DEFINIÇÃO DE TODAS AS ABAS
+tab_prato, tab_ia, tab_plano, tab_hist, tab_peso, tab_admin = st.tabs([
+    "🍽️ Registro", 
+    "🤖 IA/JSON", 
+    "📝 Meu Plano", 
+    "📊 Histórico", 
+    "⚖️ Peso", 
+    "⚙️ Admin"
+])
+
+# --- ABA 1: BUSCA MANUAL NA TACO ---
 with tab_prato:
-    st.subheader("O que comeu hoje?")
+    st.subheader("Registo Rápido (Base TACO)")
     
     # Métricas do Dia
     df_hoje = ler_dados_periodo(0)
@@ -151,7 +160,7 @@ with tab_prato:
     st.divider()
 
     # Busca
-    termo = st.text_input("🔍 Pesquisar alimento (ex: banana, arroz):")
+    termo = st.text_input("🔍 Pesquisar alimento (ex: banana, arroz, frango):")
     if termo:
         df_res = buscar_alimento(termo)
         if not df_res.empty:
@@ -161,7 +170,6 @@ with tab_prato:
             qtd = st.number_input("Peso (g):", 0, 2000, 100)
             fator = float(qtd) / 100.0
             
-            # Conversão SEGURA para float python (evita erro numpy/schema)
             k = float(round(float(dados['kcal']) * fator))
             p = float(round(float(dados['proteina']) * fator, 1))
             c = float(round(float(dados['carbo']) * fator, 1))
@@ -185,10 +193,10 @@ with tab_prato:
                     conn.rollback()
                     st.error(f"Erro ao salvar: {e}")
 
-# --- ABA 2: IMPORTAR DA IA (Parmegiana, Trufa, etc) ---
+# --- ABA 2: IMPORTAR DA IA ---
 with tab_ia:
-    st.subheader("Importar JSON da IA")
-    st.info("Cole o JSON gerado pelo Gemini/GPT aqui.")
+    st.subheader("Importar JSON da IA (Gemini/GPT)")
+    st.info("Cole o JSON gerado pelo chat aqui.")
     json_input = st.text_area("JSON:", height=150)
     
     if st.button("Processar JSON"):
@@ -211,7 +219,39 @@ with tab_ia:
             except Exception as e:
                 st.error(f"Erro: {e}")
 
-# --- ABA 3: HISTÓRICO ---
+# --- ABA 3: MEU PLANO (RECUPERADA) ---
+with tab_plano:
+    st.header("📋 Orientações da Dieta")
+    st.info("Foco: Controle glicémico, saciedade e preservação de massa muscular.")
+    
+    col_p1, col_p2 = st.columns(2)
+    with col_p1:
+        st.subheader("⏰ Horários e Refeições")
+        with st.expander("🌅 Café da Manhã (07:00 - 08:30)"):
+            st.write("- 3 ovos (mexidos ou cozidos)")
+            st.write("- 1 porção de fruta (preferência mamão ou morango)")
+            st.caption("Foco: Proteína logo ao acordar.")
+            
+        with st.expander("🍲 Almoço (12:00 - 13:30)"):
+            st.write("- 100g de Arroz integral / Batata Doce")
+            st.write("- 1 concha de Feijão")
+            st.write("- 150g de Proteína magra (Frango ou Patinho)")
+            st.write("- Salada verde à vontade")
+            
+        with st.expander("🍎 Lanche (16:00 - 17:00)"):
+            st.write("- Iogurte natural ou 30g de castanhas")
+
+        with st.expander("🌙 Jantar (19:30 - 20:30)"):
+            st.write("- 150g de Proteína + Vegetais")
+            st.write("- Evitar carboidratos simples à noite")
+
+    with col_p2:
+        st.subheader("💡 Regras de Ouro")
+        st.warning("1. Beber 3L de água por dia.")
+        st.warning("2. Zero açúcar e farinha branca.")
+        st.warning("3. Priorizar proteínas em todas as refeições.")
+
+# --- ABA 4: HISTÓRICO ---
 with tab_hist:
     st.subheader("Registros Recentes")
     df_hist = ler_dados_periodo(7)
@@ -225,7 +265,7 @@ with tab_hist:
                 deletar_registro("consumo", row['id'])
                 st.rerun()
 
-# --- ABA 4: PESO ---
+# --- ABA 5: PESO ---
 with tab_peso:
     c1, c2 = st.columns([1,2])
     with c1:
@@ -243,8 +283,24 @@ with tab_peso:
             st.line_chart(df_p.set_index('data'))
             st.dataframe(df_p)
 
-# --- ABA 5: ADMIN ---
+# --- ABA 6: ADMIN ---
 with tab_admin:
+    st.subheader("⚙️ Configurações")
+    
+    # Cadastro Manual (Para itens que não estão na TACO)
+    with st.expander("➕ Cadastrar Alimento Novo (Manual)"):
+        nome_novo = st.text_input("Nome:")
+        k_n = st.number_input("Kcal/100g:", 0.0)
+        p_n = st.number_input("Prot/100g:", 0.0)
+        if st.button("Salvar na Base"):
+            with conn.cursor() as cur:
+                conn.rollback()
+                cur.execute("SET search_path TO public")
+                cur.execute("INSERT INTO public.tabela_taco (alimento, kcal, proteina, carbo, gordura) VALUES (%s,%s,%s,0,0)", (nome_novo, float(k_n), float(p_n)))
+                conn.commit()
+            st.success("Adicionado!")
+
+    st.divider()
     if st.button("🚀 Sincronizar TACO (CSV)"):
         if carregar_csv_completo():
             st.success("Tabela TACO atualizada!")
