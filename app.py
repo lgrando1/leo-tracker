@@ -38,9 +38,9 @@ except:
     st.error("Erro de conexão.")
     st.stop()
 
-# 3. METAS DA DIETA (AJUSTÁVEIS)
+# 3. METAS
 META_KCAL = 1600
-META_PROTEINA = 150 # Foco em manter massa muscular
+META_PROTEINA = 150
 
 # 4. FUNÇÕES DE BANCO
 def inicializar_banco():
@@ -58,16 +58,25 @@ def buscar_alimento(termo):
 
 def ler_dados_periodo(dias=30):
     data_inicio = (datetime.now() - timedelta(days=dias)).date()
-    return pd.read_sql("SELECT * FROM public.consumo WHERE data >= %s ORDER BY data DESC", conn, params=(data_inicio,))
+    return pd.read_sql("SELECT id, data, alimento, quantidade, kcal, proteina FROM public.consumo WHERE data >= %s ORDER BY data DESC, id DESC", conn, params=(data_inicio,))
+
+def deletar_registro(tabela, id_registro):
+    try:
+        with conn.cursor() as cur:
+            conn.rollback()
+            cur.execute(f"DELETE FROM public.{tabela} WHERE id = %s", (id_registro,))
+            conn.commit()
+        return True
+    except:
+        return False
 
 # 5. INTERFACE
 inicializar_banco()
 st.title("🦁 Leo Tracker Pro")
 
-tab_prato, tab_plano, tab_dash, tab_peso, tab_admin = st.tabs(["🍽️ Registro", "📝 Meu Plano", "📊 Evolução", "⚖️ Peso", "⚙️ Config"])
+tab_prato, tab_plano, tab_dash, tab_peso, tab_admin = st.tabs(["🍽️ Registro", "📝 Meu Plano", "📊 Histórico", "⚖️ Peso", "⚙️ Config"])
 
 with tab_prato:
-    # Barra de Progresso do Dia
     df_hoje = ler_dados_periodo(0)
     kcal_hoje = df_hoje['kcal'].sum() if not df_hoje.empty else 0
     prot_hoje = df_hoje['proteina'].sum() if not df_hoje.empty else 0
@@ -75,7 +84,6 @@ with tab_prato:
     col_m1, col_m2 = st.columns(2)
     col_m1.metric("Calorias", f"{int(kcal_hoje)} / {META_KCAL} kcal", f"{int(META_KCAL - kcal_hoje)} restando")
     col_m2.metric("Proteína", f"{int(prot_hoje)} / {META_PROTEINA}g", f"{int(META_PROTEINA - prot_hoje)} restando")
-    
     st.progress(min(kcal_hoje/META_KCAL, 1.0))
     
     st.divider()
@@ -98,50 +106,40 @@ with tab_prato:
                 st.success("Salvo!")
                 st.rerun()
 
-with tab_plano:
-    st.subheader("📋 Sugestão de Rotina (Foco: Perda de Peso)")
-    
-    with st.expander("🌅 Café da Manhã (07:00 - 08:30)"):
-        st.write("**Sugestão:** Ovos mexidos (2 a 3 unidades) + 1 fatia de mamão ou 1 dose de Whey Protein.")
-        st.caption("Foco: Proteína e Gordura boa para saciedade matinal.")
-        
-    with st.expander("🍲 Almoço (12:00 - 13:30)"):
-        st.write("**Sugestão:** 100g de Arroz integral + 1 concha de feijão + 150g de proteína magra (Frango/Patinho) + Vegetais verdes à vontade.")
-        st.caption("Foco: Carboidrato complexo para energia no treino/trabalho.")
-
-    with st.expander("🍎 Lanche da Tarde (16:00 - 17:00)"):
-        st.write("**Sugestão:** 1 iogurte natural ou uma fruta com aveia ou 30g de castanhas.")
-        st.caption("Foco: Evitar o pico de fome no final do dia.")
-
-    with st.expander("🌙 Jantar (19:30 - 20:30)"):
-        st.write("**Sugestão:** Proteína (Peixe ou Frango) + Salada caprichada + Batata doce (opcional).")
-        st.caption("Foco: Baixo carboidrato para facilitar a queima de gordura no sono.")
-
 with tab_dash:
-    df_dados = ler_dados_periodo(30)
-    if not df_dados.empty:
-        df_dados['data'] = pd.to_datetime(df_dados['data'])
-        fig = px.line(df_dados.groupby('data')['kcal'].sum().reset_index(), x='data', y='kcal', title="Histórico de Calorias")
-        st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(df_dados)
+    st.subheader("📊 Histórico de Refeições")
+    df_hist = ler_dados_periodo(7) # Últimos 7 dias
+    if not df_hist.empty:
+        for i, row in df_hist.iterrows():
+            col_data, col_info, col_btn = st.columns([1, 3, 1])
+            col_data.write(f"**{row['data']}**")
+            col_info.write(f"{row['alimento']} ({row['quantidade']}g) - {row['kcal']}kcal")
+            if col_btn.button("🗑️", key=f"del_cons_{row['id']}"):
+                if deletar_registro("consumo", row['id']):
+                    st.rerun()
+    else:
+        st.info("Nenhum registro encontrado.")
 
 with tab_peso:
     col_p1, col_p2 = st.columns([1, 2])
     with col_p1:
+        st.subheader("Novo Registro")
         p_in = st.number_input("Peso (kg):", 40.0, 250.0, 145.0)
-        if st.button("Gravar"):
+        if st.button("Gravar Peso"):
             with conn.cursor() as cur:
                 conn.rollback()
                 cur.execute("INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", (datetime.now().date(), float(p_in)))
                 conn.commit()
-            st.success("Gravado!")
             st.rerun()
+    
     with col_p2:
-        df_p = pd.read_sql("SELECT data, peso_kg FROM public.peso ORDER BY data DESC", conn)
+        st.subheader("Histórico de Peso")
+        df_p = pd.read_sql("SELECT id, data, peso_kg FROM public.peso ORDER BY data DESC, id DESC", conn)
         if not df_p.empty:
-            st.line_chart(df_p.set_index('data'))
-
-with tab_admin:
-    if st.button("🚀 Sincronizar Base TACO"):
-        # Código de sincronização do CSV...
-        pass
+            for i, row in df_p.iterrows():
+                c_p1, c_p2, c_p3 = st.columns([2, 2, 1])
+                c_p1.write(f"{row['data']}")
+                c_p2.write(f"**{row['peso_kg']} kg**")
+                if c_p3.button("🗑️", key=f"del_peso_{row['id']}"):
+                    if deletar_registro("peso", row['id']):
+                        st.rerun()
