@@ -84,7 +84,6 @@ def carregar_csv_completo():
         df = pd.read_csv('alimentos.csv', sep=';', encoding='latin-1')
         tabela_preparada = []
         for _, row in df.iterrows():
-            # Uso de iloc para evitar erros de nomes de colunas com acentos
             tabela_preparada.append((
                 str(row.iloc[2]),               
                 float(limpar_valor_taco(row.iloc[4])),  
@@ -152,7 +151,7 @@ with tab_prato:
     st.progress(min(kcal_hoje/META_KCAL, 1.0))
     
     st.divider()
-    termo = st.text_input("🔍 O que você comeu agora?")
+    termo = st.text_input("🔍 O que comeu agora?")
     if termo:
         df_res = buscar_alimento(termo)
         if not df_res.empty:
@@ -186,7 +185,7 @@ with tab_prato:
 
 with tab_plano:
     st.header("📋 Orientações da Dieta")
-    st.info("Foco: Controle glicêmico, saciedade e preservação de massa muscular.")
+    st.info("Foco: Controle glicémico, saciedade e preservação de massa muscular.")
     
     col_p1, col_p2 = st.columns(2)
     with col_p1:
@@ -235,10 +234,11 @@ with tab_peso:
     with cp1:
         st.subheader("Registrar Peso")
         p_val = st.number_input("Peso (kg):", 40.0, 250.0, 145.0)
+        data_p = st.date_input("Data do registro:", datetime.now())
         if st.button("Gravar Peso"):
             with conn.cursor() as cur:
                 conn.rollback()
-                cur.execute("INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", (datetime.now().date(), float(p_val)))
+                cur.execute("INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", (data_p, float(p_val)))
                 conn.commit()
             st.success("Gravado!")
             st.rerun()
@@ -256,6 +256,32 @@ with tab_peso:
 
 with tab_admin:
     st.subheader("⚙️ Configurações de Sistema")
+    
+    with st.expander("➕ Cadastrar Alimento Manualmente"):
+        nome_novo = st.text_input("Nome do Alimento:")
+        c1, c2, c3, c4 = st.columns(4)
+        kcal_n = c1.number_input("Kcal (100g)", 0.0)
+        prot_n = c2.number_input("Prot (100g)", 0.0)
+        carb_n = c3.number_input("Carb (100g)", 0.0)
+        gord_n = c4.number_input("Gord (100g)", 0.0)
+        
+        if st.button("Salvar Novo Alimento"):
+            if nome_novo:
+                try:
+                    with conn.cursor() as cur:
+                        conn.rollback()
+                        cur.execute("SET search_path TO public")
+                        cur.execute("INSERT INTO public.tabela_taco (alimento, kcal, proteina, carbo, gordura) VALUES (%s,%s,%s,%s,%s)",
+                                    (nome_novo, float(kcal_n), float(prot_n), float(carb_n), float(gord_n)))
+                        conn.commit()
+                    st.success(f"{nome_novo} adicionado com sucesso!")
+                except Exception as e:
+                    conn.rollback()
+                    st.error(f"Erro ao cadastrar: {e}")
+            else:
+                st.warning("Por favor, insira o nome do alimento.")
+
+    st.divider()
     if st.button("🚀 Sincronizar Alimentos (CSV -> Banco)"):
         with st.spinner("Processando base de dados..."):
             if carregar_csv_completo():
