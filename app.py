@@ -167,99 +167,100 @@ with tabs[2]:
     except Exception as e: st.error(f"Erro gráfico: {e}")
 
 with tabs[3]:
-    st.subheader("📋 Estratégia: Detox & Anti-inflamatória")
-    st.markdown("Foco em recuperar a mucosa gástrica com alimentos de fácil digestão e baixo custo.")
+    st.subheader("📋 Estratégia: Detox Gástrico & Anti-inflamatório")
+    st.markdown("Foco: Recuperar a mucosa do estômago, digestão facilitada e zero glúten.")
 
     # --- CAFÉ DA MANHÃ ---
-    with st.expander("☕ Café da Manhã (Foco: Proteção Gástrica)", expanded=True):
+    with st.expander("☕ Café da Manhã (Proteção & Digestão)", expanded=True):
         c1, c2 = st.columns(2)
         with c1:
-            st.info("💎 **Original (PDF)**")
+            st.info("💎 **Original**")
             st.markdown("""
-            * [cite_start]**Prot:** Whey Protein (17g) [cite: 18]
-            * [cite_start]**Fruta:** Morango (200g) ou Mamão Papaia [cite: 7, 8]
-            * [cite_start]**Fibra:** Chia (30g) ou Linhaça Dourada [cite: 11, 12]
-            * [cite_start]**Líquido:** Leite Desnatado ou Água [cite: 16, 22]
+            * **Prot:** Whey Protein (17g)
+            * **Fruta:** Morango ou Mamão Papaia
+            * **Fibra:** Chia ou Linhaça Dourada
+            * **Líquido:** Leite ou Água
             """)
         with c2:
             st.success("💰 **Econômica (Detox)**")
             st.markdown("""
-            * **Prot:** 3 Ovos Cozidos (Clara é excelente, gema com moderação se houver azia).
-            * **Fruta:** **Mamão Formosa** (Mais barato que o Papaia e rico em papaína, que ajuda na digestão).
-            * **Fibra:** **Linhaça Marrom** (Deixe de molho antes: o gel que ela forma protege o estômago).
-            * **Líquido:** Água ou Chá de Espinheira Santa.
+            * **Prot:** 3 Ovos (Cozidos ou mexidos sem gordura). A clara é rica em albumina (cicatrizante).
+            * **Fruta:** **Mamão Formosa** (Mais barato e rico em papaína, que ajuda a digerir proteínas).
+            * **Fibra:** **Linhaça Marrom Hidratada** (Deixe na água à noite. O "gel" que forma reveste e protege o estômago).
+            * **Líquido:** Chá de Espinheira Santa ou Camomila (Morno).
             """)
 
     # --- ALMOÇO ---
-    with st.expander("🥗 Almoço (Leve & Nutritivo)"):
+    with st.expander("🥗 Almoço (Leve & Cozido)"):
         c1, c2 = st.columns(2)
         with c1:
-            st.info("💎 **Original (PDF)**")
+            st.info("💎 **Original**")
             st.markdown("""
-            * [cite_start]**Prot:** Salmão (120g) ou Sardinha [cite: 36, 37]
-            * [cite_start]**Carbo:** Quinoa (160g) ou Mandioquinha [cite: 42, 43]
-            * [cite_start]**Vegetal:** Espinafre ou Couve Refogada [cite: 32, 33]
+            * **Prot:** Salmão ou Sardinha
+            * **Carbo:** Quinoa ou Mandioquinha
+            * **Vegetal:** Espinafre ou Couve
             """)
         with c2:
             st.success("💰 **Econômica (Detox)**")
             st.markdown("""
-            * **Prot:** **Sardinha** (Rica em Ômega-3, o maior anti-inflamatório natural) ou Peito de Frango desfiado.
-            * **Carbo:** **Arroz bem cozido + Caldo de Feijão** (Evitar o grão do feijão se tiver gases).
-            * **Vegetal:** Abobrinha ou Chuchu cozidos (Fáceis de digerir).
+            * **Prot:** **Sardinha** (Ômega-3 desinflama) ou Peito de Frango desfiado/moído.
+            * **Carbo:** **Arroz bem cozido ("unidos")**. Evite grãos integrais duros agora. Se tolerar, caldo de feijão.
+            * **Vegetal:** **Chuchu, Cenoura ou Abobrinha cozidos**. Evite folhas cruas e duras por enquanto.
             """)
 
     # --- LANCHE ---
-    with st.expander("🍎 Lanche da Tarde"):
+    with st.expander("🍎 Lanche da Tarde (Cicatrizante)"):
         c1, c2 = st.columns(2)
         with c1:
-            st.info("💎 **Original (PDF)**")
+            st.info("💎 **Original**")
             st.markdown("""
-            * [cite_start]**Fruta:** Pera Willians ou Morango [cite: 50, 51]
-            * [cite_start]**Gordura:** Castanha do Pará [cite: 52]
+            * **Fruta:** Pera ou Morango
+            * **Gordura:** Castanha do Pará
             """)
         with c2:
             st.success("💰 **Econômica (Detox)**")
             st.markdown("""
-            * **Fruta:** Maçã cozida com canela (Pura "medicina" para o estômago).
-            * **Gordura:** Sementes de Girassol ou Abóbora (Baratas na zona cerealista).
+            * **Fruta:** **Maçã Cozida com Canela**. (A pectina da maçã cozida é excelente para "acalmar" o estômago).
+            * **Gordura:** Sementes de Girassol (sem sal) ou apenas o azeite da refeição principal.
             """)
 
     # --- JANTAR ---
-    with st.expander("Moon Jantar (Fácil Digestão)"):
+    with st.expander("Moon Jantar (Consistência Pastosa)"):
         c1, c2 = st.columns(2)
         with c1:
-            st.info("💎 **Original (PDF)**")
+            st.info("💎 **Original**")
             st.markdown("""
-            * [cite_start]**Prot:** Filé Mignon ou Alcatra [cite: 63, 64]
-            * [cite_start]**Carbo:** Batata Sauté ou Inhame [cite: 66, 68]
-            * [cite_start]**Vegetal:** Brócolis ou Couve-flor [cite: 59, 60]
+            * **Prot:** Filé Mignon ou Alcatra
+            * **Carbo:** Batata Sauté ou Inhame
+            * **Vegetal:** Brócolis ou Shimeji
             """)
         with c2:
             st.success("💰 **Econômica (Detox)**")
             st.markdown("""
-            * **Prot:** Carne Moída (Patinho ou Acém magro) ou Omelete.
-            * **Carbo:** **Purê de Batata ou Mandioca** (A consistência pastosa facilita o trabalho do estômago).
-            * **Vegetal:** Cenoura cozida.
+            * **Prot:** Carne Moída magra (Patinho/Acém) ou Omelete. Carnes fibrosas dificultam a digestão.
+            * **Carbo:** **Purê** de Batata, Mandioca ou Abóbora. A textura de purê facilita muito o trabalho gástrico.
+            * **Vegetal:** Vegetais cozidos no vapor até ficarem bem macios.
             """)
 
     # --- CEIA ---
-    with st.expander("🌙 Ceia"):
+    with st.expander("🌙 Ceia (Reparação Noturna)"):
         c1, c2 = st.columns(2)
         with c1:
-            st.info("💎 **Original (PDF)**")
+            st.info("💎 **Original**")
             st.markdown("""
-            * [cite_start]**Base:** Iogurte Natural [cite: 75]
-            * [cite_start]**Extra:** Pipoca sem óleo ou Bolacha de Arroz [cite: 71, 74]
+            * **Base:** Iogurte Proteico
+            * **Extra:** Pipoca ou Bolacha de Arroz
             """)
         with c2:
             st.success("💰 **Econômica (Detox)**")
             st.markdown("""
-            * **Base:** Iogurte Natural Caseiro (Probióticos recuperam o intestino).
-            * **Extra:** Gelatina incolor (Colágeno ajuda na mucosa) ou fruta cozida. Evitar pipoca se estiver com gastrite (casca dura).
+            * **Base:** Iogurte Natural (Probióticos para o intestino).
+            * **Extra:** **Gelatina Incolor** (Rica em glicina, ajuda na parede do estômago) ou Fruta cozida.
+            * **Obs:** Evite pipoca nesta fase (a casca do milho pode irritar a inflamação).
             """)
 
     st.markdown("---")
-    st.warning("⚠️ **Dica de Biohacker:** Para desinflamar, evite líquidos junto com a comida e mastigue até virar pasta. A digestão começa na boca!")
+    st.warning("⚠️ **Biohacking Gástrico:** Mastigue até o alimento virar líquido na boca. Evite beber líquidos 30min antes e depois de comer para não diluir o suco gástrico.")
 
 with tabs[4]:
     st.subheader("⚖️ Peso & Admin")
