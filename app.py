@@ -23,9 +23,7 @@ except Exception as e:
 def inicializar_banco():
     try:
         with conn.cursor() as cur:
-            # Força o rollback de qualquer transação pendente que falhou
             conn.rollback() 
-            
             cur.execute("SET search_path TO public")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS public.tabela_taco (
@@ -81,10 +79,10 @@ def carregar_csv_completo():
         for _, row in df.iterrows():
             tabela_preparada.append((
                 str(row.iloc[2]),               
-                limpar_valor_taco(row.iloc[4]),  
-                limpar_valor_taco(row.iloc[6]),  
-                limpar_valor_taco(row.iloc[9]),  
-                limpar_valor_taco(row.iloc[7])   
+                float(limpar_valor_taco(row.iloc[4])),  
+                float(limpar_valor_taco(row.iloc[6])),  
+                float(limpar_valor_taco(row.iloc[9])),  
+                float(limpar_valor_taco(row.iloc[7]))   
             ))
 
         with conn.cursor() as cur:
@@ -128,17 +126,7 @@ def ler_peso():
 # 4. INICIALIZAÇÃO
 inicializar_banco()
 
-# 5. MEDIDAS CASEIRAS
-MEDIDAS_CASEIRAS = {
-    "arroz": {"unidade": "Colher de Sopa Cheia", "g": 25},
-    "feijão": {"unidade": "Concha Média", "g": 86},
-    "frango": {"unidade": "Filé Médio", "g": 100},
-    "carne": {"unidade": "Bife Médio", "g": 100},
-    "ovo": {"unidade": "Unidade", "g": 50},
-    "banana": {"unidade": "Unidade", "g": 60}
-}
-
-# 6. INTERFACE
+# 5. INTERFACE
 st.title("🦁 Leo Tracker Pro")
 tab_prato, tab_dash, tab_peso, tab_admin = st.tabs(["🍽️ Montar Prato", "📊 Dashboard", "⚖️ Peso", "⚙️ Admin"])
 
@@ -152,23 +140,25 @@ with tab_prato:
             dados = df_res[df_res["alimento"] == escolha].iloc[0]
             
             qtd = st.number_input("Peso (g):", 0, 1000, 100)
-            fator = qtd / 100
+            fator = float(qtd) / 100.0
             
-            k = round(dados['kcal']*fator)
-            p = round(dados['proteina']*fator, 1)
-            c = round(dados['carbo']*fator, 1)
-            g = round(dados['gordura']*fator, 1)
+            # Conversão explícita para float nativo do Python para evitar erro np.float64
+            k = float(round(float(dados['kcal']) * fator))
+            p = float(round(float(dados['proteina']) * fator, 1))
+            c = float(round(float(dados['carbo']) * fator, 1))
+            g = float(round(float(dados['gordura']) * fator, 1))
             
             st.info(f"🥘 {k} kcal | P: {p}g | C: {c}g | G: {g}g")
             
             if st.button("Salvar Refeição"):
                 try:
                     with conn.cursor() as cur:
+                        conn.rollback()
                         cur.execute("SET search_path TO public")
                         cur.execute("""
                             INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura) 
                             VALUES (%s,%s,%s,%s,%s,%s,%s)
-                        """, (datetime.now().date(), escolha, qtd, k, p, c, g))
+                        """, (datetime.now().date(), str(escolha), float(qtd), k, p, c, g))
                         conn.commit()
                     st.success("Registrado com sucesso!")
                     st.rerun()
@@ -189,12 +179,14 @@ with tab_peso:
     if st.button("Gravar Peso"):
         try:
             with conn.cursor() as cur:
+                conn.rollback()
                 cur.execute("SET search_path TO public")
-                cur.execute("INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", (datetime.now().date(), p_in))
+                cur.execute("INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", (datetime.now().date(), float(p_in)))
                 conn.commit()
             st.success("Peso gravado!")
-        except:
+        except Exception as e:
             conn.rollback()
+            st.error(f"Erro ao salvar peso: {e}")
 
 with tab_admin:
     st.subheader("⚙️ Admin")
