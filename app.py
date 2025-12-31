@@ -84,6 +84,7 @@ with tabs[0]:
     termo = st.text_input("🔍 Pesquisar alimento:")
     if termo:
         conn = get_connection()
+        # Busca sem diferenciar maiúsculas/minúsculas
         df_res = pd.read_sql("SELECT * FROM public.tabela_taco WHERE alimento ILIKE %s LIMIT 50", conn, params=(f'%{termo}%',))
         if not df_res.empty:
             escolha = st.selectbox("Selecione:", df_res["alimento"])
@@ -140,18 +141,21 @@ with tabs[4]:
         st.success("Peso gravado!")
     
     st.divider()
-    if st.button("🚀 Sincronizar TACO (Correção de Acentos)"):
+    if st.button("🚀 Sincronizar TACO (Corrigir Acentos)"):
         try:
-            # Tenta ler com latin-1 que é comum em arquivos CSV de órgãos brasileiros (TACO)
-            df_csv = pd.read_csv('alimentos.csv', sep=';', encoding='latin-1')
+            # FIX: Tenta UTF-8 primeiro (padrão moderno), se falhar, tenta latin-1
+            try:
+                df_csv = pd.read_csv('alimentos.csv', sep=';', encoding='utf-8')
+            except UnicodeDecodeError:
+                df_csv = pd.read_csv('alimentos.csv', sep=';', encoding='latin-1')
+                
             preparada = []
             for _, r in df_csv.iterrows():
-                # Forçamos a conversão para string e limpamos espaços
                 nome_limpo = str(r.iloc[2]).strip()
                 preparada.append((nome_limpo, limpar_valor_taco(r.iloc[4]), limpar_valor_taco(r.iloc[6]), limpar_valor_taco(r.iloc[9]), limpar_valor_taco(r.iloc[7])))
             
             with get_cursor() as cur:
                 cur.execute("TRUNCATE TABLE tabela_taco")
                 cur.executemany("INSERT INTO tabela_taco (alimento, kcal, proteina, carbo, gordura) VALUES (%s,%s,%s,%s,%s)", preparada)
-            st.success("TACO Sincronizada com acentos corrigidos!")
-        except Exception as e: st.error(f"Erro: {e}")
+            st.success("Sucesso! A base TACO foi atualizada com a codificação correta.")
+        except Exception as e: st.error(f"Erro ao ler CSV: {e}")
