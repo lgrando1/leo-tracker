@@ -9,6 +9,53 @@ import os
 # 1. CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="Leo Tracker Pro", page_icon="🦁", layout="wide")
 
+# --- DADOS NUTRICIONAIS (NOVO) ---
+nutrition_data = {
+    "contexto_nutricional": {
+        "dieta": "Restrição ao Glúten (foco auxiliar no controle da ansiedade).",
+        "suplementacao_ativos": [
+            "L-teanina",
+            "Griffonia simplicifolia (5-HTP)",
+            "L-triptofano",
+            "GABA"
+        ],
+        "atencao_farmacologica": "Considerar interação com o uso contínuo de Bupropiona."
+    },
+    "substitutos": {
+        "farinhas_espessantes": [
+            "Farinha de Amêndoas ou Castanhas (baixo carboidrato)",
+            "Farinha de Arroz (textura neutra)",
+            "Polvilho Doce/Azedo ou Tapioca (para liga e elasticidade)",
+            "Farinha de Aveia (certificada Gluten-Free)"
+        ],
+        "fontes_triptofano_gaba": [
+            "Ovos, peixes e banana",
+            "Cacau (chocolate amargo)",
+            "Chá verde (fonte natural de L-teanina)"
+        ]
+    },
+    "prompts_ia": {
+        "encontrar_substituicao": (
+            "Estou seguindo uma dieta estrita **sem glúten** e focada em alimentos anti-inflamatórios "
+            "para controle de ansiedade. Quero fazer [NOME DA RECEITA/PRATO], mas a receita original leva "
+            "[INGREDIENTE COM GLÚTEN, EX: FARINHA DE TRIGO].\n\n"
+            "Por favor, liste 3 opções de substituição que funcionem quimicamente nessa receita (mantendo a textura) "
+            "e que sejam seguras para minha dieta. Explique como ajustar a quantidade para cada opção."
+        ),
+        "avaliar_alimento": (
+            "Atue como um nutricionista focado em saúde mental e dietas restritivas.\n\n"
+            "**Meu Perfil:** Dieta sem glúten, uso de Bupropiona e suplementação de precursores de "
+            "serotonina/GABA (L-teanina, Triptofano).\n\n"
+            "**O Alimento:** [COLAR LISTA DE INGREDIENTES OU NOME DO PRATO AQUI]\n\n"
+            "**Tarefa:**\n"
+            "1. Este alimento contém glúten ou traços perigosos?\n"
+            "2. Existe algum ingrediente que possa interagir negativamente com minha medicação ou piorar a ansiedade "
+            "(ex: excesso de estimulantes, glutamato monossódico)?\n"
+            "3. Dê uma nota de 0 a 10 para o quão seguro este alimento é para meu perfil."
+        )
+    }
+}
+
 # --- SISTEMA DE LOGIN ---
 def check_password():
     if "password_correct" not in st.session_state:
@@ -207,10 +254,43 @@ with tab_ia:
             except Exception as e:
                 st.error(f"Erro no JSON: {e}")
 
-# --- ABA 3: PLANO ---
+# --- ABA 3: PLANO (ATUALIZADA) ---
 with tab_plano:
-    st.header("📋 Orientações")
-    st.write("Seguir plano alimentar de baixo índice glicêmico e alta proteína.")
+    st.header("📋 Plano Alimentar & Estratégia")
+    
+    # Contexto Visual
+    c_info, c_warn = st.columns(2)
+    with c_info:
+        st.info(f"**Foco da Dieta:**\n{nutrition_data['contexto_nutricional']['dieta']}")
+    with c_warn:
+        st.warning(f"**Atenção Farmacológica:**\n{nutrition_data['contexto_nutricional']['atencao_farmacologica']}")
+        
+    st.markdown("### 💊 Suplementação Atual (Ativos)")
+    st.write(", ".join(nutrition_data['contexto_nutricional']['suplementacao_ativos']))
+    
+    st.divider()
+    
+    st.subheader("🔄 Substituições Inteligentes")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("#### 🚫 Substitutos de Glúten")
+        for item in nutrition_data['substitutos']['farinhas_espessantes']:
+            st.markdown(f"- {item}")
+    with col2:
+        st.markdown("#### 🧠 Fontes Triptofano/GABA")
+        for item in nutrition_data['substitutos']['fontes_triptofano_gaba']:
+            st.markdown(f"- {item}")
+
+    st.divider()
+
+    st.subheader("🤖 Prompts para Copiar")
+    st.markdown("Use estes prompts no ChatGPT/Claude para adaptar receitas ou analisar rótulos.")
+    
+    with st.expander("1. Prompt: Encontrar Substituição em Receitas"):
+        st.code(nutrition_data['prompts_ia']['encontrar_substituicao'], language="text")
+        
+    with st.expander("2. Prompt: Avaliar Segurança do Alimento"):
+        st.code(nutrition_data['prompts_ia']['avaliar_alimento'], language="text")
 
 # --- ABA 4: HISTÓRICO ---
 with tab_hist:
