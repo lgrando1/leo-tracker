@@ -33,9 +33,63 @@ MEDIDAS_CASEIRAS = {
 }
 
 # --- 3. FUNÇÕES SQL ---
+
+def criar_tabelas():
+    with conn.cursor() as cur:
+        # Tabela de referência (TACO)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS tabela_taco (
+                id SERIAL PRIMARY KEY,
+                alimento TEXT,
+                kcal REAL,
+                proteina REAL,
+                carbo REAL,
+                gordura REAL
+            );
+        """)
+        # Tabela de consumo
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS consumo (
+                id SERIAL PRIMARY KEY, 
+                data DATE, 
+                alimento TEXT, 
+                quantidade REAL, 
+                kcal REAL, 
+                proteina REAL, 
+                carbo REAL, 
+                gordura REAL
+            );
+        """)
+        # Tabela de peso
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS peso (
+                id SERIAL PRIMARY KEY, 
+                data DATE, 
+                peso_kg REAL
+            );
+        """)
+        conn.commit()
+
+def popular_taco_basico():
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM tabela_taco")
+        if cur.fetchone()[0] == 0:
+            dados = [
+                ('Arroz Branco Cozido', 128, 2.5, 28.1, 0.2),
+                ('Feijão Carioca Cozido', 76, 4.8, 13.6, 0.5),
+                ('Peito de Frango Grelhado', 159, 32.0, 0.0, 2.5),
+                ('Patinho Grelhado', 219, 35.9, 0.0, 7.3),
+                ('Ovo Cozido', 146, 13.3, 0.6, 9.5),
+                ('Batata Doce Cozida', 77, 0.6, 18.4, 0.1),
+                ('Mandioca Cozida', 125, 0.6, 30.1, 0.3),
+                ('Banana Prata', 98, 1.3, 26.0, 0.1),
+                ('Whey Protein', 400, 80.0, 5.0, 2.0)
+            ]
+            cur.executemany("INSERT INTO tabela_taco (alimento, kcal, proteina, carbo, gordura) VALUES (%s, %s, %s, %s, %s)", dados)
+            conn.commit()
+
 def buscar_alimento(termo):
     if not termo: return pd.DataFrame()
-    # Busca inteligente no banco
     return pd.read_sql("SELECT * FROM tabela_taco WHERE alimento ILIKE %s LIMIT 15", conn, params=(f'%{termo}%',))
 
 def salvar_consumo(data, alimento, qtd, macros):
@@ -48,11 +102,21 @@ def salvar_consumo(data, alimento, qtd, macros):
         conn.commit()
 
 def ler_dados_periodo(dias=30):
-    data_inicio = datetime.now() - timedelta(days=dias)
-    return pd.read_sql("SELECT * FROM consumo WHERE data >= %s ORDER BY data DESC", conn, params=(data_inicio,))
+    data_inicio = (datetime.now() - timedelta(days=dias)).date()
+    try:
+        return pd.read_sql("SELECT * FROM consumo WHERE data >= %s ORDER BY data DESC", conn, params=(data_inicio,))
+    except:
+        return pd.DataFrame(columns=['id', 'data', 'alimento', 'quantidade', 'kcal', 'proteina', 'carbo', 'gordura'])
 
 def ler_peso():
-    return pd.read_sql("SELECT * FROM peso ORDER BY data ASC", conn)
+    try:
+        return pd.read_sql("SELECT * FROM peso ORDER BY data ASC", conn)
+    except:
+        return pd.DataFrame(columns=['id', 'data', 'peso_kg'])
+
+# --- INICIALIZAÇÃO OBRIGATÓRIA ---
+criar_tabelas()
+popular_taco_basico()
 
 # --- 4. INTERFACE ---
 st.title("🦁 Leo Tracker Pro")
