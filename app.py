@@ -116,14 +116,13 @@ with tabs[2]:
     conn = get_connection()
     
     # --- AJUSTE DE FUSO HORÁRIO (FIX UTC-3) ---
-    # Pegamos tudo do banco e filtramos no Python para garantir precisão
     df_raw = pd.read_sql("SELECT * FROM consumo ORDER BY data_hora DESC LIMIT 100", conn)
     
     if not df_raw.empty:
         # Converte para datetime e subtrai 3 horas
         df_raw['data_hora'] = pd.to_datetime(df_raw['data_hora']) - pd.Timedelta(hours=3)
         
-        # Filtra apenas o que é de HOJE (no horário do Brasil)
+        # Filtra apenas o que é de HOJE
         df_hoje = df_raw[df_raw['data_hora'].dt.date == datetime.now().date()]
         
         if not df_hoje.empty:
@@ -132,12 +131,12 @@ with tabs[2]:
             c1.metric("Energia", f"{int(k)}/{META_KCAL} kcal", f"{int(k-META_KCAL)}")
             c2.metric("Proteína", f"{int(p)}/{META_PROT}g", f"{int(p-META_PROT)}g")
             
-            with st.expander("Ver itens de hoje", expanded=True): # Deixei aberto para vc ver
+            with st.expander("Ver itens de hoje", expanded=True):
                 for _, r in df_hoje.iterrows():
                     col_h1, col_h2, col_h3 = st.columns([1, 4, 1])
-                    # Agora mostra o horário corrigido
                     col_h1.write(r['data_hora'].strftime('%H:%M'))
                     col_h2.write(f"**{r['alimento']}** - {int(r['kcal'])} kcal")
+                    # Este botão estava sendo duplicado lá embaixo, causando o erro
                     if col_h3.button("🗑️", key=f"del_{r['id']}"):
                         with get_cursor() as cur: cur.execute("DELETE FROM consumo WHERE id = %s", (r['id'],))
                         st.rerun()
@@ -148,20 +147,16 @@ with tabs[2]:
 
     st.divider()
     
-    # --- GRÁFICO 30 DIAS (COM CORREÇÃO DE FUSO) ---
+    # --- GRÁFICO 30 DIAS ---
     st.subheader("📅 Histórico de Calorias (30 Dias)")
     try:
-        # Puxamos dados brutos para corrigir o fuso no Python antes de agrupar
         df_hist_raw = pd.read_sql("SELECT data_hora, kcal FROM consumo", conn)
         
         if not df_hist_raw.empty:
-            # 1. Corrige o fuso
             df_hist_raw['data_hora'] = pd.to_datetime(df_hist_raw['data_hora']) - pd.Timedelta(hours=3)
-            # 2. Cria coluna apenas com a DATA correta
             df_hist_raw['data'] = df_hist_raw['data_hora'].dt.date
-            # 3. Agrupa por dia
             df_chart = df_hist_raw.groupby('data')['kcal'].sum().reset_index().sort_values('data', ascending=False).head(30)
-            df_chart = df_chart.sort_values('data') # Reordena para o gráfico ir da esquerda p/ direita
+            df_chart = df_chart.sort_values('data') 
             
             fig_cal = px.bar(df_chart, x='data', y='kcal', title="Consumo Diário vs Meta", text_auto='.0f')
             fig_cal.add_hline(y=META_KCAL, line_dash="dot", annotation_text="Meta (2000)", line_color="red")
@@ -169,50 +164,6 @@ with tabs[2]:
             st.plotly_chart(fig_cal, use_container_width=True)
         else:
             st.caption("Sem dados históricos.")
-    except Exception as e: st.error(f"Erro gráfico: {e}")
-    
-    # --- MÉTRICAS DE HOJE ---
-    df_hoje = pd.read_sql("SELECT * FROM consumo WHERE data_hora::date = CURRENT_DATE", conn)
-    if not df_hoje.empty:
-        c1, c2 = st.columns(2)
-        k, p = df_hoje['kcal'].sum(), df_hoje['proteina'].sum()
-        c1.metric("Energia", f"{int(k)}/{META_KCAL} kcal", f"{int(k-META_KCAL)}")
-        c2.metric("Proteína", f"{int(p)}/{META_PROT}g", f"{int(p-META_PROT)}g")
-        
-        with st.expander("Ver itens de hoje", expanded=False):
-            for _, r in df_hoje.iterrows():
-                col_h1, col_h2, col_h3 = st.columns([1, 4, 1])
-                col_h1.write(pd.to_datetime(r['data_hora']).strftime('%H:%M'))
-                col_h2.write(f"**{r['alimento']}** - {int(r['kcal'])} kcal")
-                if col_h3.button("🗑️", key=f"del_{r['id']}"):
-                    with get_cursor() as cur: cur.execute("DELETE FROM consumo WHERE id = %s", (r['id'],))
-                    st.rerun()
-    else:
-        st.info("Nenhum registro hoje ainda.")
-
-    st.divider()
-    
-    # --- GRÁFICO DE SÉRIE TEMPORAL (NOVIDADE) ---
-    st.subheader("📅 Histórico de Calorias (30 Dias)")
-    try:
-        # Query agrupa por dia e soma as calorias
-        query_hist = """
-            SELECT data_hora::date as data, SUM(kcal) as total_kcal 
-            FROM consumo 
-            GROUP BY data_hora::date 
-            ORDER BY data_hora::date DESC 
-            LIMIT 30
-        """
-        df_hist = pd.read_sql(query_hist, conn)
-        if not df_hist.empty:
-            df_hist = df_hist.sort_values('data') # Ordena para o gráfico
-            fig_cal = px.bar(df_hist, x='data', y='total_kcal', title="Consumo Diário vs Meta", text_auto='.0f')
-            # Adiciona linha de meta
-            fig_cal.add_hline(y=META_KCAL, line_dash="dot", annotation_text="Meta (2000)", line_color="red")
-            fig_cal.update_traces(marker_color='#4CAF50') # Verde Biohacker
-            st.plotly_chart(fig_cal, use_container_width=True)
-        else:
-            st.caption("Sem dados históricos suficientes.")
     except Exception as e: st.error(f"Erro gráfico: {e}")
 
 with tabs[3]:
@@ -229,14 +180,13 @@ with tabs[4]:
         st.success("Peso gravado!")
         st.rerun()
     
-    # --- GRÁFICO DE PESO (NOVIDADE) ---
     st.divider()
     st.subheader("📉 Evolução do Peso")
     try:
         df_peso = pd.read_sql("SELECT * FROM peso ORDER BY data ASC", get_connection())
         if not df_peso.empty:
             fig_peso = px.line(df_peso, x='data', y='peso_kg', markers=True, title="Histórico de Peso")
-            fig_peso.update_traces(line_color='#FF4B4B') # Vermelho Streamlit
+            fig_peso.update_traces(line_color='#FF4B4B')
             st.plotly_chart(fig_peso, use_container_width=True)
         else:
             st.info("Registre seu peso para ver o gráfico.")
