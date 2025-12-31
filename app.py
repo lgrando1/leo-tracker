@@ -7,7 +7,7 @@ import json
 from contextlib import contextmanager
 
 # 1. CONFIGURAÇÃO DA PÁGINA
-st.set_page_config(page_title="Leo Tracker Pro", page_icon="🦁", layout="wide")
+st.set_page_config(page_title="Leo Tracker Pro - Plano Dez/25", page_icon="🦁", layout="wide")
 
 # --- SISTEMA DE LOGIN ---
 def check_password():
@@ -26,7 +26,7 @@ def check_password():
 
 if not check_password(): st.stop()
 
-# 2. GERENCIAMENTO DE CONEXÃO (MODO PRO)
+# 2. GERENCIAMENTO DE CONEXÃO
 @st.cache_resource
 def get_connection_purer():
     return psycopg2.connect(st.secrets["DATABASE_URL"])
@@ -44,21 +44,15 @@ def get_cursor():
     finally:
         cur.close()
 
-# 3. METAS
-META_KCAL = 2000
-META_PROT = 160
+# 3. METAS DO PLANO (Leonardo Grando - Dezembro/25)
+# Ajustado conforme volume de proteínas (Whey, Carnes, Salmão) e carboidratos complexos do PDF
+META_KCAL = 2000 
+META_PROT = 160  
 
-# 4. INICIALIZAÇÃO E MIGRAÇÃO
+# 4. INICIALIZAÇÃO
 def inicializar_banco():
     with get_cursor() as cur:
         cur.execute("SET search_path TO public")
-        # Tabela TACO
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS tabela_taco (
-                id SERIAL PRIMARY KEY, alimento TEXT, kcal REAL, proteina REAL, carbo REAL, gordura REAL
-            );
-        """)
-        # Tabela Consumo
         cur.execute("""
             CREATE TABLE IF NOT EXISTS consumo (
                 id SERIAL PRIMARY KEY, 
@@ -67,15 +61,6 @@ def inicializar_banco():
                 gluten TEXT DEFAULT 'Não informado'
             );
         """)
-        # Migração segura
-        cur.execute("""
-            DO $$ 
-            BEGIN 
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='consumo' AND column_name='data_hora') THEN
-                    ALTER TABLE consumo ADD COLUMN data_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
-                END IF;
-            END $$;
-        """)
         cur.execute("CREATE TABLE IF NOT EXISTS peso (id SERIAL PRIMARY KEY, data DATE UNIQUE, peso_kg REAL);")
 
 def limpar_valor_taco(valor):
@@ -83,20 +68,20 @@ def limpar_valor_taco(valor):
     try: return float(str(valor).replace(',', '.'))
     except: return 0.0
 
-# 5. EXECUÇÃO INICIAL
 try:
     inicializar_banco()
 except Exception as e:
     st.error(f"Erro de Banco: {e}")
     st.stop()
 
-# 6. INTERFACE
-st.title("🦁 Leo Tracker Pro")
-tabs = st.tabs(["🍽️ Registro", "🤖 IA", "📈 Dieta vs Meta", "⚖️ Peso", "⚙️ Admin"])
+# 5. INTERFACE
+st.title("🦁 Leo Tracker: Plano Alimentar Dez/25")
+
+tabs = st.tabs(["🍽️ Registro", "🤖 IA Nutricional", "📈 Progresso", "📋 Dicas do Plano", "⚙️ Admin"])
 
 with tabs[0]:
-    st.subheader("Registro Manual (Busca TACO)")
-    termo = st.text_input("🔍 Pesquisar alimento:")
+    st.subheader("Registro Manual")
+    termo = st.text_input("🔍 Pesquisar na base TACO:")
     if termo:
         conn = get_connection_purer()
         df_res = pd.read_sql("SELECT * FROM public.tabela_taco WHERE alimento ILIKE %s LIMIT 50", conn, params=(f'%{termo}%',))
@@ -114,11 +99,11 @@ with tabs[0]:
                 st.rerun()
 
 with tabs[1]:
-    st.subheader("🤖 Importar via IA")
-    json_in = st.text_area("Cole o JSON da IA aqui:", height=200)
-    if st.button("Processar e Salvar"):
+    st.subheader("🤖 Analista IA (Focado no seu Plano)")
+    st.info("Copie e cole a análise da IA aqui. A IA já conhece suas metas de 2000kcal e 160g de proteína.")
+    json_in = st.text_area("JSON da IA:", height=150, placeholder='[{"alimento": "Salmão", "kcal": 250, "p": 25, "c": 0, "g": 15, "gluten": "Não contém"}]')
+    if st.button("Processar e Salvar no Diário"):
         try:
-            # Limpeza de Markdown
             clean_json = json_in.replace('```json', '').replace('```', '').strip()
             dados = json.loads(clean_json)
             with get_cursor() as cur:
@@ -126,12 +111,12 @@ with tabs[1]:
                     cur.execute("""INSERT INTO consumo (alimento, quantidade, kcal, proteina, carbo, gordura, gluten) 
                                    VALUES (%s,1,%s,%s,%s,%s,%s)""", 
                                 (i['alimento'], i['kcal'], i['p'], i['c'], i['g'], i.get('gluten','Não informado')))
-            st.success("Importado com sucesso!")
+            st.success("Refeição do plano importada!")
             st.rerun()
-        except Exception as e: st.error(f"Erro no processamento: {e}")
+        except Exception as e: st.error(f"Erro no JSON: {e}")
 
 with tabs[2]:
-    st.subheader("📊 Progresso Diário")
+    st.subheader("📊 Metas vs Consumo")
     conn = get_connection_purer()
     df_hoje = pd.read_sql("SELECT * FROM consumo WHERE data_hora::date = CURRENT_DATE", conn)
     
@@ -142,11 +127,13 @@ with tabs[2]:
         c1.metric("Energia", f"{int(cons_kcal)} / {META_KCAL} kcal", f"{int(cons_kcal - META_KCAL)} kcal", delta_color="inverse")
         c2.metric("Proteína", f"{int(cons_prot)}g / {META_PROT}g", f"{int(cons_prot - META_PROT)}g")
         
+        # Gráfico Progressivo
         fig = px.bar(x=['Calorias', 'Proteína'], y=[cons_kcal/META_KCAL, cons_prot/META_PROT], 
-                     range_y=[0, 1.2], title="Aproveitamento da Meta (%)")
+                     range_y=[0, 1.2], title="Aproveitamento Diário do Plano")
         st.plotly_chart(fig, use_container_width=True)
         
         st.divider()
+        st.write("🕒 Itens de Hoje:")
         for _, row in df_hoje.iterrows():
             col_h1, col_h2, col_h3 = st.columns([1, 4, 1])
             col_h1.write(pd.to_datetime(row['data_hora']).strftime('%H:%M'))
@@ -155,27 +142,41 @@ with tabs[2]:
                 with get_cursor() as cur:
                     cur.execute("DELETE FROM consumo WHERE id = %s", (row['id'],))
                 st.rerun()
-    else: st.info("Nada registrado hoje.")
+    else: st.info("Inicie o registro das refeições de hoje.")
 
 with tabs[3]:
-    st.subheader("⚖️ Controle de Peso")
-    p_val = st.number_input("Peso hoje (kg):", 40.0, 250.0, 145.0, step=0.1)
+    st.subheader("📋 Resumo do Plano (Substituições)")
+    col_p1, col_p2 = st.columns(2)
+    with col_p1:
+        st.markdown("""
+        **Café da Manhã (Shake):**
+        * Fruta (Morango 200g ou Maçã 80g)
+        * Sementes (Linhaça ou Chia)
+        * Leite Desnatado + Whey Protein
+        
+        **Almoço:**
+        * Proteína: Salmão (120g) ou Sardinha (100g)
+        * Carbo: Mandioca (100g) ou Quinoa (160g)
+        * Vegetal: Espinafre ou Couve Refogada
+        """)
+    with col_p2:
+        st.markdown("""
+        **Jantar:**
+        * Proteína: Contra-filé ou Patinho (80g)
+        * Carbo: Batata Sauté (200g) ou Inhame (120g)
+        * Vegetal: Brócolis ou Shimeji
+        
+        **Ceia:**
+        * Pipoca sem óleo ou Bolacha de arroz
+        * Iogurte Natural + Mel
+        """)
+
+with tabs[4]:
+    st.subheader("⚖️ Peso e Admin")
+    p_val = st.number_input("Peso (kg):", 40.0, 250.0, 145.0, step=0.1)
     if st.button("Gravar Peso"):
         with get_cursor() as cur:
             cur.execute("""INSERT INTO peso (data, peso_kg) VALUES (%s, %s) 
                            ON CONFLICT (data) DO UPDATE SET peso_kg = EXCLUDED.peso_kg""", 
                         (datetime.now().date(), float(p_val)))
         st.success("Peso atualizado!")
-
-with tabs[4]:
-    st.subheader("⚙️ Admin")
-    if st.button("🚀 Sincronizar alimentos.csv"):
-        try:
-            df_csv = pd.read_csv('alimentos.csv', sep=';', encoding='latin-1')
-            preparada = [(str(r.iloc[2]), limpar_valor_taco(r.iloc[4]), limpar_valor_taco(r.iloc[6]), 
-                          limpar_valor_taco(r.iloc[9]), limpar_valor_taco(r.iloc[7])) for _, r in df_csv.iterrows()]
-            with get_cursor() as cur:
-                cur.execute("TRUNCATE TABLE tabela_taco")
-                cur.executemany("INSERT INTO tabela_taco (alimento, kcal, proteina, carbo, gordura) VALUES (%s,%s,%s,%s,%s)", preparada)
-            st.success(f"{len(preparada)} alimentos sincronizados!")
-        except Exception as e: st.error(f"Erro: {e}")
