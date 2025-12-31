@@ -59,13 +59,14 @@ def limpar_valor_taco(valor):
     if pd.isna(valor) or str(valor).strip().upper() in ['NA', 'TR', '']:
         return 0.0
     try:
+        # Converte padrão brasileiro (vírgula) para americano (ponto)
         return float(str(valor).replace(',', '.'))
     except:
         return 0.0
 
 def carregar_csv_completo():
     try:
-        # Lê o arquivo que você subiu para o GitHub
+        # Lê o arquivo alimentos.csv que deve estar na mesma pasta no GitHub
         df = pd.read_csv('alimentos.csv', encoding='latin-1', sep=';')
         tabela_limpa = []
         for _, row in df.iterrows():
@@ -191,11 +192,10 @@ with tab_peso:
 
 with tab_admin:
     st.subheader("⚙️ Painel de Administração")
-    st.write("Clique no botão abaixo para processar o arquivo 'alimentos.csv' e atualizar sua base de dados TACO no Neon.")
+    st.write("Clique no botão abaixo para processar o arquivo 'alimentos.csv' e atualizar sua base de dados no Neon.")
     
     if st.button("🚀 Sincronizar Alimentos do CSV"):
         with st.spinner("Lendo CSV e atualizando banco de dados..."):
             if carregar_csv_completo():
                 st.success("Tabela TACO atualizada com sucesso!")
-            else:
-                st.error("Falha na atualização. Verifique se o arquivo 'alimentos.csv' está no seu repositório.")
+                st.rerun()
