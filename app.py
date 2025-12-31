@@ -1,8 +1,9 @@
 import streamlit as st
 import pandas as pd
 import psycopg2
-from datetime import datetime
+from datetime import datetime, timedelta
 import plotly.express as px
+import plotly.graph_objects as go
 import json
 from contextlib import contextmanager
 
@@ -84,7 +85,6 @@ with tabs[0]:
     termo = st.text_input("🔍 Pesquisar alimento:")
     if termo:
         conn = get_connection()
-        # Busca sem diferenciar maiúsculas/minúsculas
         df_res = pd.read_sql("SELECT * FROM public.tabela_taco WHERE alimento ILIKE %s LIMIT 50", conn, params=(f'%{termo}%',))
         if not df_res.empty:
             escolha = st.selectbox("Selecione:", df_res["alimento"])
@@ -113,19 +113,51 @@ with tabs[1]:
 
 with tabs[2]:
     st.subheader("📊 Progresso do Dia")
-    df_hoje = pd.read_sql("SELECT * FROM consumo WHERE data_hora::date = CURRENT_DATE", get_connection())
+    conn = get_connection()
+    
+    # --- MÉTRICAS DE HOJE ---
+    df_hoje = pd.read_sql("SELECT * FROM consumo WHERE data_hora::date = CURRENT_DATE", conn)
     if not df_hoje.empty:
         c1, c2 = st.columns(2)
         k, p = df_hoje['kcal'].sum(), df_hoje['proteina'].sum()
         c1.metric("Energia", f"{int(k)}/{META_KCAL} kcal", f"{int(k-META_KCAL)}")
         c2.metric("Proteína", f"{int(p)}/{META_PROT}g", f"{int(p-META_PROT)}g")
-        for _, r in df_hoje.iterrows():
-            col_h1, col_h2, col_h3 = st.columns([1, 4, 1])
-            col_h1.write(pd.to_datetime(r['data_hora']).strftime('%H:%M'))
-            col_h2.write(f"**{r['alimento']}** - {int(r['kcal'])} kcal")
-            if col_h3.button("🗑️", key=f"del_{r['id']}"):
-                with get_cursor() as cur: cur.execute("DELETE FROM consumo WHERE id = %s", (r['id'],))
-                st.rerun()
+        
+        with st.expander("Ver itens de hoje", expanded=False):
+            for _, r in df_hoje.iterrows():
+                col_h1, col_h2, col_h3 = st.columns([1, 4, 1])
+                col_h1.write(pd.to_datetime(r['data_hora']).strftime('%H:%M'))
+                col_h2.write(f"**{r['alimento']}** - {int(r['kcal'])} kcal")
+                if col_h3.button("🗑️", key=f"del_{r['id']}"):
+                    with get_cursor() as cur: cur.execute("DELETE FROM consumo WHERE id = %s", (r['id'],))
+                    st.rerun()
+    else:
+        st.info("Nenhum registro hoje ainda.")
+
+    st.divider()
+    
+    # --- GRÁFICO DE SÉRIE TEMPORAL (NOVIDADE) ---
+    st.subheader("📅 Histórico de Calorias (30 Dias)")
+    try:
+        # Query agrupa por dia e soma as calorias
+        query_hist = """
+            SELECT data_hora::date as data, SUM(kcal) as total_kcal 
+            FROM consumo 
+            GROUP BY data_hora::date 
+            ORDER BY data_hora::date DESC 
+            LIMIT 30
+        """
+        df_hist = pd.read_sql(query_hist, conn)
+        if not df_hist.empty:
+            df_hist = df_hist.sort_values('data') # Ordena para o gráfico
+            fig_cal = px.bar(df_hist, x='data', y='total_kcal', title="Consumo Diário vs Meta", text_auto='.0f')
+            # Adiciona linha de meta
+            fig_cal.add_hline(y=META_KCAL, line_dash="dot", annotation_text="Meta (2000)", line_color="red")
+            fig_cal.update_traces(marker_color='#4CAF50') # Verde Biohacker
+            st.plotly_chart(fig_cal, use_container_width=True)
+        else:
+            st.caption("Sem dados históricos suficientes.")
+    except Exception as e: st.error(f"Erro gráfico: {e}")
 
 with tabs[3]:
     st.subheader("📋 Plano & Sugestões")
@@ -135,20 +167,31 @@ with tabs[3]:
 
 with tabs[4]:
     st.subheader("⚖️ Peso & Admin")
-    p_v = st.number_input("Peso (kg):", 40.0, 250.0, 145.0)
+    p_v = st.number_input("Peso hoje (kg):", 40.0, 250.0, 145.0)
     if st.button("Gravar Peso"):
         with get_cursor() as cur: cur.execute("INSERT INTO peso (data, peso_kg) VALUES (%s,%s) ON CONFLICT (data) DO UPDATE SET peso_kg=EXCLUDED.peso_kg", (datetime.now().date(), float(p_v)))
         st.success("Peso gravado!")
+        st.rerun()
     
+    # --- GRÁFICO DE PESO (NOVIDADE) ---
+    st.divider()
+    st.subheader("📉 Evolução do Peso")
+    try:
+        df_peso = pd.read_sql("SELECT * FROM peso ORDER BY data ASC", get_connection())
+        if not df_peso.empty:
+            fig_peso = px.line(df_peso, x='data', y='peso_kg', markers=True, title="Histórico de Peso")
+            fig_peso.update_traces(line_color='#FF4B4B') # Vermelho Streamlit
+            st.plotly_chart(fig_peso, use_container_width=True)
+        else:
+            st.info("Registre seu peso para ver o gráfico.")
+    except Exception as e: st.error(f"Erro ao carregar peso: {e}")
+
     st.divider()
     if st.button("🚀 Sincronizar TACO (Corrigir Acentos)"):
         try:
-            # FIX: Tenta UTF-8 primeiro (padrão moderno), se falhar, tenta latin-1
-            try:
-                df_csv = pd.read_csv('alimentos.csv', sep=';', encoding='utf-8')
-            except UnicodeDecodeError:
-                df_csv = pd.read_csv('alimentos.csv', sep=';', encoding='latin-1')
-                
+            try: df_csv = pd.read_csv('alimentos.csv', sep=';', encoding='utf-8')
+            except: df_csv = pd.read_csv('alimentos.csv', sep=';', encoding='latin-1')
+            
             preparada = []
             for _, r in df_csv.iterrows():
                 nome_limpo = str(r.iloc[2]).strip()
@@ -157,5 +200,5 @@ with tabs[4]:
             with get_cursor() as cur:
                 cur.execute("TRUNCATE TABLE tabela_taco")
                 cur.executemany("INSERT INTO tabela_taco (alimento, kcal, proteina, carbo, gordura) VALUES (%s,%s,%s,%s,%s)", preparada)
-            st.success("Sucesso! A base TACO foi atualizada com a codificação correta.")
-        except Exception as e: st.error(f"Erro ao ler CSV: {e}")
+            st.success(f"Sucesso! {len(preparada)} alimentos sincronizados.")
+        except Exception as e: st.error(f"Erro CSV: {e}")
