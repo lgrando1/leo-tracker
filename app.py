@@ -25,14 +25,27 @@ def check_password():
 
 if not check_password(): st.stop()
 
-# 2. GERENCIAMENTO DE CONEXÃO
+# 2. GERENCIAMENTO DE CONEXÃO (VERSÃO PRO COM RECONEXÃO)
 @st.cache_resource
-def get_connection_purer():
+def init_connection():
     return psycopg2.connect(st.secrets["DATABASE_URL"])
+
+def get_connection():
+    """Garante que a conexão esteja aberta antes de retornar."""
+    try:
+        conn = init_connection()
+        # Testa se a conexão está viva
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+        return conn
+    except (psycopg2.InterfaceError, psycopg2.OperationalError):
+        # Se fechada, limpa o cache e cria uma nova
+        st.cache_resource.clear()
+        return init_connection()
 
 @contextmanager
 def get_cursor():
-    conn = get_connection_purer()
+    conn = get_connection()
     cur = conn.cursor()
     try:
         yield cur
@@ -42,6 +55,34 @@ def get_cursor():
         raise e
     finally:
         cur.close()
+
+# 4. INICIALIZAÇÃO DO BANCO (CHAMANDO A CONEXÃO SEGURA)
+def inicializar_banco():
+    with get_cursor() as cur:
+        cur.execute("SET search_path TO public")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS tabela_taco (
+                id SERIAL PRIMARY KEY, alimento TEXT, kcal REAL, proteina REAL, carbo REAL, gordura REAL
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS consumo (
+                id SERIAL PRIMARY KEY, 
+                data_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP, 
+                alimento TEXT, quantidade REAL, kcal REAL, proteina REAL, carbo REAL, gordura REAL, 
+                gluten TEXT DEFAULT 'Não informado'
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS peso (
+                id SERIAL PRIMARY KEY, 
+                data DATE UNIQUE, 
+                peso_kg REAL
+            );
+        """)
+
+# No restante do código, onde houver pd.read_sql, use:
+# df = pd.read_sql(query, get_connection(), params=...)
 
 # 3. METAS DO PLANO (Leonardo Grando - Dezembro/25)
 META_KCAL = 2000 
