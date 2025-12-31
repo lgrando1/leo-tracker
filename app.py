@@ -19,71 +19,88 @@ def check_password():
         if password == st.secrets["PASSWORD"]:
             st.session_state["password_correct"] = True
             st.rerun()
-        else: st.error("Senha incorreta!")
+        else: st.error("Incorreta!")
     return False
 
 if not check_password(): st.stop()
 
-# 2. CONEXÃO NEON
-@st.cache_resource
-def init_connection():
-    return psycopg2.connect(st.secrets["DATABASE_URL"])
+# 2. CONEXÃO NEON (Com reconexão automática)
+def get_connection():
+    # Verifica se já existe uma conexão na sessão e se ela está aberta (closed == 0)
+    if 'db_conn' in st.session_state:
+        try:
+            if st.session_state.db_conn.closed == 0:
+                # Testa se a conexão responde
+                with st.session_state.db_conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                return st.session_state.db_conn
+        except:
+            pass # Se der erro, vamos reconectar abaixo
 
-try:
-    conn = init_connection()
-except:
-    st.error("Erro de conexão com o banco de dados.")
-    st.stop()
+    # Se não existir ou estiver fechada, cria uma nova
+    try:
+        conn = psycopg2.connect(st.secrets["DATABASE_URL"])
+        st.session_state.db_conn = conn
+        return conn
+    except Exception as e:
+        st.error(f"Erro crítico ao conectar ao banco: {e}")
+        st.stop()
+
+conn = get_connection()
 
 # 3. METAS
 META_KCAL = 1600
 META_PROTEINA = 150
 
-# 4. FUNÇÕES DE BANCO (COM CORREÇÃO DE ESQUEMA PUBLIC)
+# 4. FUNÇÕES DE BANCO (Garantindo esquema public)
 def inicializar_banco():
-    with conn.cursor() as cur:
+    try:
+        with conn.cursor() as cur:
+            conn.rollback() # Limpa transações anteriores
+            cur.execute("SET search_path TO public")
+            
+            # Tabela TACO
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS public.tabela_taco (
+                    id SERIAL PRIMARY KEY, alimento TEXT, kcal REAL, proteina REAL, carbo REAL, gordura REAL
+                );
+            """)
+            
+            # Tabela Consumo
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS public.consumo (
+                    id SERIAL PRIMARY KEY, 
+                    data DATE, 
+                    alimento TEXT, 
+                    quantidade REAL, 
+                    kcal REAL, 
+                    proteina REAL, 
+                    carbo REAL, 
+                    gordura REAL,
+                    gluten TEXT DEFAULT 'Não informado'
+                );
+            """)
+            
+            # Garante coluna gluten
+            cur.execute("""
+                DO $$ 
+                BEGIN 
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='consumo' AND column_name='gluten') THEN
+                        ALTER TABLE public.consumo ADD COLUMN gluten TEXT DEFAULT 'Não informado';
+                    END IF;
+                END $$;
+            """)
+            
+            # Tabela Peso
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS public.peso (
+                    id SERIAL PRIMARY KEY, data DATE, peso_kg REAL
+                );
+            """)
+            conn.commit()
+    except Exception as e:
         conn.rollback()
-        cur.execute("SET search_path TO public")
-        
-        # Tabela TACO (Alimentos base)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS public.tabela_taco (
-                id SERIAL PRIMARY KEY, alimento TEXT, kcal REAL, proteina REAL, carbo REAL, gordura REAL
-            );
-        """)
-        
-        # Tabela Consumo (Seus registros)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS public.consumo (
-                id SERIAL PRIMARY KEY, 
-                data DATE, 
-                alimento TEXT, 
-                quantidade REAL, 
-                kcal REAL, 
-                proteina REAL, 
-                carbo REAL, 
-                gordura REAL,
-                gluten TEXT DEFAULT 'Não informado'
-            );
-        """)
-        
-        # Garante coluna gluten
-        cur.execute("""
-            DO $$ 
-            BEGIN 
-                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='consumo' AND column_name='gluten') THEN
-                    ALTER TABLE public.consumo ADD COLUMN gluten TEXT DEFAULT 'Não informado';
-                END IF;
-            END $$;
-        """)
-        
-        # Tabela Peso
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS public.peso (
-                id SERIAL PRIMARY KEY, data DATE, peso_kg REAL
-            );
-        """)
-        conn.commit()
+        # Se for erro de conexão, a próxima execução do get_connection resolverá
 
 def limpar_valor_taco(valor):
     if pd.isna(valor) or str(valor).strip().upper() in ['NA', 'TR', '', '-']: return 0.0
@@ -122,11 +139,17 @@ def deletar_registro(tabela, id_registro):
 
 def buscar_alimento(termo):
     if not termo: return pd.DataFrame()
-    return pd.read_sql("SELECT * FROM public.tabela_taco WHERE alimento ILIKE %s ORDER BY alimento ASC LIMIT 50", conn, params=(f'%{termo}%',))
+    try:
+        return pd.read_sql("SELECT * FROM public.tabela_taco WHERE alimento ILIKE %s ORDER BY alimento ASC LIMIT 50", conn, params=(f'%{termo}%',))
+    except:
+        return pd.DataFrame()
 
 def ler_dados_periodo(dias=30):
     data_inicio = (datetime.now() - timedelta(days=dias)).date()
-    return pd.read_sql("SELECT * FROM public.consumo WHERE data >= %s ORDER BY data DESC, id DESC", conn, params=(data_inicio,))
+    try:
+        return pd.read_sql("SELECT * FROM public.consumo WHERE data >= %s ORDER BY data DESC, id DESC", conn, params=(data_inicio,))
+    except:
+        return pd.DataFrame()
 
 # 5. INICIALIZAÇÃO
 inicializar_banco()
@@ -134,7 +157,6 @@ inicializar_banco()
 # 6. INTERFACE
 st.title("🦁 Leo Tracker Pro")
 
-# DEFINIÇÃO DE TODAS AS ABAS
 tab_prato, tab_ia, tab_plano, tab_hist, tab_peso, tab_admin = st.tabs([
     "🍽️ Registro", 
     "🤖 IA/JSON", 
@@ -144,11 +166,10 @@ tab_prato, tab_ia, tab_plano, tab_hist, tab_peso, tab_admin = st.tabs([
     "⚙️ Admin"
 ])
 
-# --- ABA 1: BUSCA MANUAL NA TACO ---
+# --- ABA 1: BUSCA MANUAL ---
 with tab_prato:
     st.subheader("Registo Rápido (Base TACO)")
     
-    # Métricas do Dia
     df_hoje = ler_dados_periodo(0)
     kcal_hoje = float(df_hoje['kcal'].sum()) if not df_hoje.empty else 0.0
     prot_hoje = float(df_hoje['proteina'].sum()) if not df_hoje.empty else 0.0
@@ -159,8 +180,7 @@ with tab_prato:
     st.progress(min(kcal_hoje/META_KCAL, 1.0))
     st.divider()
 
-    # Busca
-    termo = st.text_input("🔍 Pesquisar alimento (ex: banana, arroz, frango):")
+    termo = st.text_input("🔍 Pesquisar alimento (ex: banana, arroz):")
     if termo:
         df_res = buscar_alimento(termo)
         if not df_res.empty:
@@ -195,8 +215,8 @@ with tab_prato:
 
 # --- ABA 2: IMPORTAR DA IA ---
 with tab_ia:
-    st.subheader("Importar JSON da IA (Gemini/GPT)")
-    st.info("Cole o JSON gerado pelo chat aqui.")
+    st.subheader("Importar JSON da IA")
+    st.info("Cole o JSON gerado pelo Gemini aqui.")
     json_input = st.text_area("JSON:", height=150)
     
     if st.button("Processar JSON"):
@@ -219,37 +239,26 @@ with tab_ia:
             except Exception as e:
                 st.error(f"Erro: {e}")
 
-# --- ABA 3: MEU PLANO (RECUPERADA) ---
+# --- ABA 3: MEU PLANO ---
 with tab_plano:
     st.header("📋 Orientações da Dieta")
-    st.info("Foco: Controle glicémico, saciedade e preservação de massa muscular.")
-    
     col_p1, col_p2 = st.columns(2)
     with col_p1:
         st.subheader("⏰ Horários e Refeições")
         with st.expander("🌅 Café da Manhã (07:00 - 08:30)"):
-            st.write("- 3 ovos (mexidos ou cozidos)")
-            st.write("- 1 porção de fruta (preferência mamão ou morango)")
-            st.caption("Foco: Proteína logo ao acordar.")
-            
+            st.write("- 3 ovos (mexidos ou cozidos) + Fruta")
+            st.caption("Foco: Proteína.")
         with st.expander("🍲 Almoço (12:00 - 13:30)"):
-            st.write("- 100g de Arroz integral / Batata Doce")
-            st.write("- 1 concha de Feijão")
-            st.write("- 150g de Proteína magra (Frango ou Patinho)")
-            st.write("- Salada verde à vontade")
-            
+            st.write("- Arroz integral/Batata + Feijão + Carne magra + Salada")
         with st.expander("🍎 Lanche (16:00 - 17:00)"):
-            st.write("- Iogurte natural ou 30g de castanhas")
-
+            st.write("- Iogurte natural ou castanhas")
         with st.expander("🌙 Jantar (19:30 - 20:30)"):
-            st.write("- 150g de Proteína + Vegetais")
-            st.write("- Evitar carboidratos simples à noite")
-
+            st.write("- Proteína + Vegetais (Low Carb)")
     with col_p2:
-        st.subheader("💡 Regras de Ouro")
-        st.warning("1. Beber 3L de água por dia.")
-        st.warning("2. Zero açúcar e farinha branca.")
-        st.warning("3. Priorizar proteínas em todas as refeições.")
+        st.subheader("💡 Regras")
+        st.warning("1. Beber 3L de água.")
+        st.warning("2. Zero açúcar.")
+        st.warning("3. Proteína em todas as refeições.")
 
 # --- ABA 4: HISTÓRICO ---
 with tab_hist:
@@ -286,9 +295,7 @@ with tab_peso:
 # --- ABA 6: ADMIN ---
 with tab_admin:
     st.subheader("⚙️ Configurações")
-    
-    # Cadastro Manual (Para itens que não estão na TACO)
-    with st.expander("➕ Cadastrar Alimento Novo (Manual)"):
+    with st.expander("➕ Cadastrar Alimento Manual"):
         nome_novo = st.text_input("Nome:")
         k_n = st.number_input("Kcal/100g:", 0.0)
         p_n = st.number_input("Prot/100g:", 0.0)
@@ -299,9 +306,8 @@ with tab_admin:
                 cur.execute("INSERT INTO public.tabela_taco (alimento, kcal, proteina, carbo, gordura) VALUES (%s,%s,%s,0,0)", (nome_novo, float(k_n), float(p_n)))
                 conn.commit()
             st.success("Adicionado!")
-
     st.divider()
     if st.button("🚀 Sincronizar TACO (CSV)"):
         if carregar_csv_completo():
-            st.success("Tabela TACO atualizada!")
+            st.success("Sincronizado!")
             st.rerun()
