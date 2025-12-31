@@ -47,7 +47,7 @@ def get_cursor():
 META_KCAL = 2000 
 META_PROT = 160  
 
-# 4. INICIALIZAÇÃO
+# 4. INICIALIZAÇÃO DO BANCO
 def inicializar_banco():
     with get_cursor() as cur:
         cur.execute("SET search_path TO public")
@@ -77,9 +77,9 @@ except Exception as e:
     st.error(f"Erro de Banco: {e}")
     st.stop()
 
-# 5. INTERFACE
+# 5. INTERFACE PRINCIPAL
 st.title("🦁 Leo Tracker Pro")
-tabs = st.tabs(["🍽️ Registro", "🤖 IA Nutricional", "📈 Progresso", "📋 Plano Alimentar", "⚖️ Peso & Admin"])
+tabs = st.tabs(["🍽️ Registro", "🤖 IA Nutricional", "📈 Progresso", "📋 Plano & Sugestões", "⚖️ Peso & Admin"])
 
 with tabs[0]:
     st.subheader("Busca Manual (TACO)")
@@ -102,7 +102,8 @@ with tabs[0]:
 
 with tabs[1]:
     st.subheader("🤖 Importar via IA")
-    json_in = st.text_area("Cole o JSON da IA aqui:")
+    st.markdown("**Copie o JSON gerado pelo Gemini e cole abaixo:**")
+    json_in = st.text_area("Área de colagem:", height=150)
     if st.button("Processar e Salvar"):
         try:
             clean_json = json_in.replace('```json', '').replace('```', '').strip()
@@ -112,20 +113,22 @@ with tabs[1]:
                     cur.execute("""INSERT INTO consumo (alimento, quantidade, kcal, proteina, carbo, gordura, gluten) 
                                    VALUES (%s,1,%s,%s,%s,%s,%s)""", 
                                 (i['alimento'], i['kcal'], i['p'], i['c'], i['g'], i.get('gluten','Não informado')))
-            st.success("Importado!")
+            st.success("Refeição importada com sucesso!")
             st.rerun()
-        except Exception as e: st.error(f"Erro no JSON: {e}")
+        except Exception as e: st.error(f"Erro no formato do JSON: {e}")
 
 with tabs[2]:
-    st.subheader("📊 Progresso Hoje")
+    st.subheader("📊 Progresso do Dia")
     conn = get_connection_purer()
     df_hoje = pd.read_sql("SELECT * FROM consumo WHERE data_hora::date = CURRENT_DATE", conn)
     if not df_hoje.empty:
         c1, c2 = st.columns(2)
         cons_kcal, cons_prot = df_hoje['kcal'].sum(), df_hoje['proteina'].sum()
-        c1.metric("Kcal", f"{int(cons_kcal)} / {META_KCAL}", f"{int(cons_kcal - META_KCAL)} kcal", delta_color="inverse")
+        c1.metric("Energia", f"{int(cons_kcal)} / {META_KCAL} kcal", f"{int(cons_kcal - META_KCAL)} kcal", delta_color="inverse")
         c2.metric("Proteína", f"{int(cons_prot)}g / {META_PROT}g", f"{int(cons_prot - META_PROT)}g")
+        
         st.divider()
+        st.write("🕒 Histórico:")
         for _, row in df_hoje.iterrows():
             col_h1, col_h2, col_h3 = st.columns([1, 4, 1])
             col_h1.write(pd.to_datetime(row['data_hora']).strftime('%H:%M'))
@@ -134,42 +137,50 @@ with tabs[2]:
                 with get_cursor() as cur:
                     cur.execute("DELETE FROM consumo WHERE id = %s", (row['id'],))
                 st.rerun()
+    else: st.info("Nenhum registro para hoje.")
 
 with tabs[3]:
-    st.subheader("📋 Resumo das Opções (PDF)")
-    col_pdf1, col_pdf2 = st.columns(2)
-    with col_pdf1:
-        st.write("**Café da Manhã (Shake)**")
-        st.write("- Fruta: 200g Morango ou 135g Mamão [cite: 7, 8]")
-        st.write("- Semente: 20g Linhaça ou 30g Chia [cite: 11, 12]")
-        st.write("- Proteína: 17g Whey Protein [cite: 18]")
-        st.write("**Almoço**")
-        st.write("- Proteína: 120g Salmão ou 100g Sardinha [cite: 36, 37]")
-        st.write("- Carbo: 100g Mandioca ou 160g Quinoa [cite: 40, 42]")
-    with col_pdf2:
-        st.write("**Jantar**")
-        st.write("- Proteína: 100g Alcatra/Mignon ou 80g Patinho [cite: 63, 64, 65]")
-        st.write("- Carbo: 200g Batata Sauté ou 160g Batata Doce [cite: 66]")
-        st.write("**Ceia**")
-        st.write("- Iogurte Natural (170ml) + Mel (15g) [cite: 75, 79]")
-        st.write("- Pipoca (19g sem óleo) [cite: 71]")
+    st.subheader("📋 Orientações Nutricionais (Dez/25)")
+    col_orig, col_econ = st.columns(2)
+    
+    with col_orig:
+        st.info("🎯 Opções do Plano Original")
+        st.markdown("""
+        * **Café:** Shake com Whey (17g) [cite: 18], Leite Desnatado [cite: 14] e Frutas (Morango/Mamão)[cite: 7, 8].
+        * **Almoço:** Salmão (120g) [cite: 36] ou Sardinha [cite: 37], Mandioca (100g) [cite: 40] ou Quinoa[cite: 42].
+        * **Jantar:** Contra-filé (80g) [cite: 63] ou Patinho [cite: 65], Batata Sauté (200g)[cite: 66].
+        * **Ceia:** Iogurte Natural (170ml) [cite: 75] e Mel (15g)[cite: 79].
+        """)
+        
+    with col_econ:
+        st.success("💰 Sugestões Mais Baratas (Mesmos Macros)")
+        st.markdown("""
+        * **Substituir Whey:** Ovos cozidos ou claras (ótimo custo-benefício).
+        * **Substituir Salmão/Carne:** Peito de Frango, Sobrecoxa sem pele ou Fígado bovino.
+        * **Substituir Quinoa/Mandioca:** Arroz branco com Feijão ou Batata Doce.
+        * **Substituir Sementes Caras:** Farelo de Aveia (fonte barata de fibras).
+        * **Substituir Morango:** Banana prata ou Nanica (sempre mais barata).
+        """)
 
 with tabs[4]:
     st.subheader("⚖️ Controle de Peso")
     p_val = st.number_input("Peso hoje (kg):", 40.0, 250.0, 145.0)
     if st.button("Gravar Peso"):
         with get_cursor() as cur:
-            cur.execute("INSERT INTO peso (data, peso_kg) VALUES (%s, %s) ON CONFLICT (data) DO UPDATE SET peso_kg = EXCLUDED.peso_kg", (datetime.now().date(), float(p_val)))
-        st.success("Peso gravado!")
+            cur.execute("""INSERT INTO peso (data, peso_kg) VALUES (%s, %s) 
+                           ON CONFLICT (data) DO UPDATE SET peso_kg = EXCLUDED.peso_kg""", 
+                        (datetime.now().date(), float(p_val)))
+        st.success("Peso registrado!")
     
     st.divider()
-    st.subheader("⚙️ Sincronização TACO")
-    if st.button("🚀 Sincronizar alimentos.csv"):
+    st.subheader("⚙️ Administração")
+    if st.button("🚀 Sincronizar alimentos.csv (TACO)"):
         try:
             df_csv = pd.read_csv('alimentos.csv', sep=';', encoding='latin-1')
-            preparada = [(str(r.iloc[2]), limpar_valor_taco(r.iloc[4]), limpar_valor_taco(r.iloc[6]), limpar_valor_taco(r.iloc[9]), limpar_valor_taco(r.iloc[7])) for _, r in df_csv.iterrows()]
+            preparada = [(str(r.iloc[2]), limpar_valor_taco(r.iloc[4]), limpar_valor_taco(r.iloc[6]), 
+                          limpar_valor_taco(r.iloc[9]), limpar_valor_taco(r.iloc[7])) for _, r in df_csv.iterrows()]
             with get_cursor() as cur:
                 cur.execute("TRUNCATE TABLE tabela_taco")
                 cur.executemany("INSERT INTO tabela_taco (alimento, kcal, proteina, carbo, gordura) VALUES (%s,%s,%s,%s,%s)", preparada)
-            st.success("Tabela TACO atualizada!")
-        except Exception as e: st.error(f"Erro: {e}")
+            st.success("Base de dados sincronizada!")
+        except Exception as e: st.error(f"Erro ao ler CSV: {e}")
