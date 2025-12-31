@@ -64,23 +64,38 @@ def limpar_valor_taco(valor):
 def carregar_csv_completo():
     try:
         if not os.path.exists('alimentos.csv'):
-            st.error("❌ Arquivo 'alimentos.csv' não encontrado na raiz do GitHub.")
-            st.info(f"Arquivos detectados: {os.listdir('.')}")
+            st.error("❌ Arquivo 'alimentos.csv' não encontrado.")
             return False
 
+        # Lê o CSV
         try:
             df = pd.read_csv('alimentos.csv', encoding='latin-1', sep=';')
         except:
             df = pd.read_csv('alimentos.csv', encoding='utf-8', sep=';')
 
+        # Limpa os nomes das colunas (remove espaços extras no início e fim)
+        df.columns = [c.strip() for c in df.columns]
+
+        # Mapeamento automático das colunas (procura pelo nome aproximado)
+        col_nome = next((c for c in df.columns if 'Descrição' in c or 'Descricao' in c), None)
+        col_kcal = next((c for c in df.columns if 'kcal' in c), None)
+        col_prot = next((c for c in df.columns if 'Proteína' in c or 'Proteina' in c), None)
+        col_carb = next((c for c in df.columns if 'Carboidrato' in c), None)
+        col_gord = next((c for c in df.columns if 'Lipídeos' in c or 'Lipideos' in c or 'Gordura' in c), None)
+
+        if not col_nome:
+            st.error(f"Não encontrei a coluna de descrição. Colunas lidas: {list(df.columns)}")
+            return False
+
         tabela_limpa = []
         for _, row in df.iterrows():
-            nome_alimento = row.get('Descrição dos alimentos', 'Sem Nome')
-            kcal = limpar_valor_taco(row.get('Energia (kcal)', 0))
-            prot = limpar_valor_taco(row.get('Proteína (g)', 0))
-            carb = limpar_valor_taco(row.get('Carboidrato (g)', 0))
-            gord = limpar_valor_taco(row.get('Lipídeos (g)', 0))
-            tabela_limpa.append((str(nome_alimento), kcal, prot, carb, gord))
+            tabela_limpa.append((
+                str(row[col_nome]),
+                limpar_valor_taco(row[col_kcal]) if col_kcal else 0.0,
+                limpar_valor_taco(row[col_prot]) if col_prot else 0.0,
+                limpar_valor_taco(row[col_carb]) if col_carb else 0.0,
+                limpar_valor_taco(row[col_gord]) if col_gord else 0.0
+            ))
 
         with conn.cursor() as cur:
             cur.execute("TRUNCATE TABLE tabela_taco")
