@@ -9,7 +9,7 @@ import os
 # 1. CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="Leo Tracker Pro", page_icon="🦁", layout="wide")
 
-# --- DADOS NUTRICIONAIS (NOVO) ---
+# --- DADOS NUTRICIONAIS ---
 nutrition_data = {
     "contexto_nutricional": {
         "dieta": "Restrição ao Glúten (foco auxiliar no controle da ansiedade).",
@@ -73,38 +73,29 @@ def check_password():
 if not check_password(): st.stop()
 
 # 2. CONEXÃO BLINDADA (Reconecta se cair)
-@st.cache_resource(ttl=600) # Cache dura 10 min, depois força renovar
+@st.cache_resource(ttl=600)
 def get_connection_raw():
     return psycopg2.connect(st.secrets["DATABASE_URL"])
 
 def executar_sql(sql, params=None, is_select=False):
-    """
-    Função central que gerencia transações e reconexões automáticas.
-    """
     conn = None
     try:
         conn = get_connection_raw()
-        # Testa se a conexão está viva
         if conn.closed != 0:
             st.cache_resource.clear()
             conn = get_connection_raw()
             
         with conn.cursor() as cur:
-            # Garante esquema public
             cur.execute("SET search_path TO public")
-            
             if is_select:
-                if params:
-                    return pd.read_sql(sql, conn, params=params)
-                else:
-                    return pd.read_sql(sql, conn)
+                if params: return pd.read_sql(sql, conn, params=params)
+                else: return pd.read_sql(sql, conn)
             else:
                 cur.execute(sql, params)
                 conn.commit()
                 return True
 
     except (InterfaceError, OperationalError) as e:
-        # SE A CONEXÃO CAIU: Limpa cache e tenta de novo (Retry)
         st.cache_resource.clear()
         try:
             conn = get_connection_raw()
@@ -122,7 +113,6 @@ def executar_sql(sql, params=None, is_select=False):
             return pd.DataFrame() if is_select else False
 
     except Exception as e:
-        # Outros erros (SQL errado, dados inválidos)
         if conn: conn.rollback()
         st.error(f"Erro na operação: {e}")
         return pd.DataFrame() if is_select else False
@@ -131,9 +121,8 @@ def executar_sql(sql, params=None, is_select=False):
 META_KCAL = 1600
 META_PROTEINA = 150
 
-# 4. FUNÇÕES DE BANCO (Usando a conexão blindada)
+# 4. FUNÇÕES DE BANCO
 def inicializar_banco():
-    # Criação das tabelas
     executar_sql("""
         CREATE TABLE IF NOT EXISTS public.tabela_taco (
             id SERIAL PRIMARY KEY, alimento TEXT, kcal REAL, proteina REAL, carbo REAL, gordura REAL
@@ -144,7 +133,6 @@ def inicializar_banco():
             id SERIAL PRIMARY KEY, data DATE, alimento TEXT, quantidade REAL, kcal REAL, proteina REAL, carbo REAL, gordura REAL, gluten TEXT DEFAULT 'Não informado'
         );
     """)
-    # Garante coluna gluten
     executar_sql("""
         DO $$ 
         BEGIN 
@@ -163,14 +151,11 @@ def carregar_csv_completo():
     if not os.path.exists('alimentos.csv'): return False
     try:
         df = pd.read_csv('alimentos.csv', sep=';', encoding='latin-1')
-        # Precisamos fazer isso de forma diferente para usar o executar_sql ou conexão direta
-        # Para simplificar a carga massiva, usamos conexão direta aqui
         conn = get_connection_raw()
         cur = conn.cursor()
         cur.execute("TRUNCATE TABLE public.tabela_taco")
         
         for _, row in df.iterrows():
-             # Limpeza básica inline
             val = lambda x: float(str(x).replace(',', '.')) if str(x).strip() not in ['NA', 'TR', '', '-'] else 0.0
             cur.execute(
                 "INSERT INTO public.tabela_taco (alimento, kcal, proteina, carbo, gordura) VALUES (%s, %s, %s, %s, %s)",
@@ -193,7 +178,6 @@ tab_prato, tab_ia, tab_plano, tab_hist, tab_peso, tab_admin = st.tabs(["🍽️ 
 with tab_prato:
     st.subheader("Registo Rápido (Base TACO)")
     
-    # Métricas
     data_hoje = datetime.now().date()
     df_hoje = executar_sql("SELECT * FROM public.consumo WHERE data = %s", (data_hoje,), is_select=True)
     
@@ -236,6 +220,7 @@ with tab_prato:
 # --- ABA 2: IMPORTAR DA IA ---
 with tab_ia:
     st.subheader("Importar JSON da IA")
+    st.info("**Prompt:** Analise minha refeição (2000kcal/160g prot): [O QUE COMEU]. Retorne apenas o JSON: `[{\"alimento\": \"nome\", \"kcal\": 0, \"p\": 0, \"c\": 0, \"g\": 0, \"gluten\": \"...\"}]`")
     json_input = st.text_area("JSON:", height=150)
     
     if st.button("Processar JSON"):
@@ -254,7 +239,7 @@ with tab_ia:
             except Exception as e:
                 st.error(f"Erro no JSON: {e}")
 
-# --- ABA 3: PLANO (ATUALIZADA) ---
+# --- ABA 3: PLANO (ATUALIZADA COM ESTRATÉGIA PREMIUM/ECONÔMICA) ---
 with tab_plano:
     st.header("📋 Plano Alimentar & Estratégia")
     
@@ -281,6 +266,105 @@ with tab_plano:
         for item in nutrition_data['substitutos']['fontes_triptofano_gaba']:
             st.markdown(f"- {item}")
 
+    st.divider()
+
+    # --- NOVA SEÇÃO: ESTRATÉGIA PREMIUM VS ECONÔMICA ---
+    st.subheader("📋 Estratégia Nutricional: Premium vs. Econômica")
+    st.markdown("Use esta aba para adaptar o plano ao seu orçamento sem perder os macros.")
+
+    # --- CAFÉ DA MANHÃ ---
+    with st.expander("☕ Café da Manhã (Shake/Sólido)", expanded=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            st.info("💎 **Original (PDF)**")
+            st.markdown("""
+            * **Prot:** Whey Protein (17g)
+            * **Fruta:** Morango (200g) ou Mamão Papaia (135g)
+            * **Gordura/Fibra:** Chia (30g) ou Linhaça Dourada (20g)
+            * **Líquido:** Leite Desnatado ou Água
+            """)
+        with c2:
+            st.success("💰 **Opção Econômica**")
+            st.markdown("""
+            * **Prot:** 3 Ovos Cozidos/Mexidos (R$ 0,50/unid)
+            * **Fruta:** Banana Prata ou Maçã Nacional (Preço/kg menor)
+            * **Gordura/Fibra:** Farelo de Aveia (Rico em fibra e barato)
+            * **Líquido:** Água ou Chá (Zero custo)
+            """)
+
+    # --- ALMOÇO ---
+    with st.expander("🥗 Almoço (Refeição Principal)"):
+        c1, c2 = st.columns(2)
+        with c1:
+            st.info("💎 **Original (PDF)**")
+            st.markdown("""
+            * **Prot:** Salmão (120g) ou Atum Fresco
+            * **Carbo:** Quinoa (160g) ou Mandioquinha (140g)
+            * **Vegetal:** Espinafre ou Bertalha
+            * **Leguminosa:** Ervilha em vagem ou Lentilha
+            """)
+        with c2:
+            st.success("💰 **Opção Econômica**")
+            st.markdown("""
+            * **Prot:** Sardinha em Lata (lavada) ou Sobrecoxa de Frango (S/ Pele)
+            * **Carbo:** Arroz Branco + Feijão Carioca (O clássico imbatível)
+            * **Vegetal:** Repolho refogado ou Abobrinha (Rende muito)
+            * **Leguminosa:** O próprio feijão do dia a dia já conta!
+            """)
+
+    # --- LANCHE DA TARDE ---
+    with st.expander("🍎 Lanche da Tarde"):
+        c1, c2 = st.columns(2)
+        with c1:
+            st.info("💎 **Original (PDF)**")
+            st.markdown("""
+            * **Fruta:** Pera Willians ou Morango
+            * **Gordura:** Castanha do Pará (4 un) ou Macadâmia
+            """)
+        with c2:
+            st.success("💰 **Opção Econômica**")
+            st.markdown("""
+            * **Fruta:** Melancia ou Laranja (Frutas da estação)
+            * **Gordura:** Amendoim Torrado (Sem sal/açúcar) - Rico em gordura boa e muito barato.
+            """)
+
+    # --- JANTAR ---
+    with st.expander("Moon Jantar (Low Carb/Leve)"):
+        c1, c2 = st.columns(2)
+        with c1:
+            st.info("💎 **Original (PDF)**")
+            st.markdown("""
+            * **Prot:** Filé Mignon ou Alcatra (100g)
+            * **Vegetal:** Shimeji, Shitake ou Brócolis
+            * **Carbo:** Batata Sauté ou Inhame
+            """)
+        with c2:
+            st.success("💰 **Opção Econômica**")
+            st.markdown("""
+            * **Prot:** Patinho Moído, Fígado Bovino (Multivitamínico natural) ou Omelete.
+            * **Vegetal:** Cenoura ralada ou Vagem refogada.
+            * **Carbo:** Batata Doce cozida ou Aipim (Mandioca).
+            """)
+
+    # --- CEIA ---
+    with st.expander("🌙 Ceia (Antes de dormir)"):
+        c1, c2 = st.columns(2)
+        with c1:
+            st.info("💎 **Original (PDF)**")
+            st.markdown("""
+            * **Base:** Iogurte Proteico ou Creme de Ricota
+            * **Extra:** Pipoca sem óleo (19g) ou Bolacha de Arroz
+            """)
+        with c2:
+            st.success("💰 **Opção Econômica**")
+            st.markdown("""
+            * **Base:** Iogurte Natural (faça em casa com leite + 1 potinho) ou Leite morno.
+            * **Extra:** Pipoca de panela (feita com o mínimo de azeite/água).
+            """)
+
+    st.markdown("---")
+    st.caption("🦁 **Dica do Leo:** A consistência bate a perfeição. Se não tiver salmão, vá de sardinha, mas não deixe de bater a meta de proteína!")
+    
     st.divider()
 
     st.subheader("🤖 Prompts para Copiar")
