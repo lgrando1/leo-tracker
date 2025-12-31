@@ -19,41 +19,47 @@ except Exception as e:
     st.error("Erro ao conectar ao Banco de Dados. Verifique os Secrets.")
     st.stop()
 
-# 3. FUNÇÕES DE BANCO DE DADOS (Com esquema explícito)
+# 3. FUNÇÕES DE BANCO DE DADOS
 def inicializar_banco():
-    with conn.cursor() as cur:
-        # Força o uso do esquema public
-        cur.execute("SET search_path TO public")
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS public.tabela_taco (
-                id SERIAL PRIMARY KEY,
-                alimento TEXT,
-                kcal REAL,
-                proteina REAL,
-                carbo REAL,
-                gordura REAL
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS public.consumo (
-                id SERIAL PRIMARY KEY, 
-                data DATE, 
-                alimento TEXT, 
-                quantidade REAL, 
-                kcal REAL, 
-                proteina REAL, 
-                carbo REAL, 
-                gordura REAL
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS public.peso (
-                id SERIAL PRIMARY KEY, 
-                data DATE, 
-                peso_kg REAL
-            );
-        """)
-        conn.commit()
+    try:
+        with conn.cursor() as cur:
+            # Força o rollback de qualquer transação pendente que falhou
+            conn.rollback() 
+            
+            cur.execute("SET search_path TO public")
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS public.tabela_taco (
+                    id SERIAL PRIMARY KEY,
+                    alimento TEXT,
+                    kcal REAL,
+                    proteina REAL,
+                    carbo REAL,
+                    gordura REAL
+                );
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS public.consumo (
+                    id SERIAL PRIMARY KEY, 
+                    data DATE, 
+                    alimento TEXT, 
+                    quantidade REAL, 
+                    kcal REAL, 
+                    proteina REAL, 
+                    carbo REAL, 
+                    gordura REAL
+                );
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS public.peso (
+                    id SERIAL PRIMARY KEY, 
+                    data DATE, 
+                    peso_kg REAL
+                );
+            """)
+            conn.commit()
+    except Exception as e:
+        conn.rollback()
+        st.error(f"Erro ao inicializar banco: {e}")
 
 def limpar_valor_taco(valor):
     if pd.isna(valor) or str(valor).strip().upper() in ['NA', 'TR', '', '-']:
@@ -82,6 +88,7 @@ def carregar_csv_completo():
             ))
 
         with conn.cursor() as cur:
+            conn.rollback()
             cur.execute("SET search_path TO public")
             cur.execute("TRUNCATE TABLE public.tabela_taco")
             cur.executemany(
@@ -91,25 +98,31 @@ def carregar_csv_completo():
             conn.commit()
         return True
     except Exception as e:
+        conn.rollback()
         st.error(f"Erro ao processar: {e}")
         return False
 
 def buscar_alimento(termo):
     if not termo: return pd.DataFrame()
-    # Adicionado public. explicito
-    return pd.read_sql("SELECT * FROM public.tabela_taco WHERE alimento ILIKE %s LIMIT 20", conn, params=(f'%{termo}%',))
+    try:
+        return pd.read_sql("SELECT * FROM public.tabela_taco WHERE alimento ILIKE %s LIMIT 20", conn, params=(f'%{termo}%',))
+    except:
+        conn.rollback()
+        return pd.DataFrame()
 
 def ler_dados_periodo(dias=30):
     data_inicio = (datetime.now() - timedelta(days=dias)).date()
     try:
         return pd.read_sql("SELECT * FROM public.consumo WHERE data >= %s ORDER BY data DESC", conn, params=(data_inicio,))
     except:
+        conn.rollback()
         return pd.DataFrame()
 
 def ler_peso():
     try:
         return pd.read_sql("SELECT * FROM public.peso ORDER BY data ASC", conn)
     except:
+        conn.rollback()
         return pd.DataFrame()
 
 # 4. INICIALIZAÇÃO
@@ -160,6 +173,7 @@ with tab_prato:
                     st.success("Registrado com sucesso!")
                     st.rerun()
                 except Exception as e:
+                    conn.rollback()
                     st.error(f"Erro ao salvar: {e}")
 
 with tab_dash:
@@ -173,11 +187,14 @@ with tab_dash:
 with tab_peso:
     p_in = st.number_input("Peso (kg):", 50.0, 200.0, 145.0)
     if st.button("Gravar Peso"):
-        with conn.cursor() as cur:
-            cur.execute("SET search_path TO public")
-            cur.execute("INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", (datetime.now().date(), p_in))
-            conn.commit()
-        st.success("Peso gravado!")
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SET search_path TO public")
+                cur.execute("INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", (datetime.now().date(), p_in))
+                conn.commit()
+            st.success("Peso gravado!")
+        except:
+            conn.rollback()
 
 with tab_admin:
     st.subheader("⚙️ Admin")
