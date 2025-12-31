@@ -115,6 +115,62 @@ with tabs[2]:
     st.subheader("📊 Progresso do Dia")
     conn = get_connection()
     
+    # --- AJUSTE DE FUSO HORÁRIO (FIX UTC-3) ---
+    # Pegamos tudo do banco e filtramos no Python para garantir precisão
+    df_raw = pd.read_sql("SELECT * FROM consumo ORDER BY data_hora DESC LIMIT 100", conn)
+    
+    if not df_raw.empty:
+        # Converte para datetime e subtrai 3 horas
+        df_raw['data_hora'] = pd.to_datetime(df_raw['data_hora']) - pd.Timedelta(hours=3)
+        
+        # Filtra apenas o que é de HOJE (no horário do Brasil)
+        df_hoje = df_raw[df_raw['data_hora'].dt.date == datetime.now().date()]
+        
+        if not df_hoje.empty:
+            c1, c2 = st.columns(2)
+            k, p = df_hoje['kcal'].sum(), df_hoje['proteina'].sum()
+            c1.metric("Energia", f"{int(k)}/{META_KCAL} kcal", f"{int(k-META_KCAL)}")
+            c2.metric("Proteína", f"{int(p)}/{META_PROT}g", f"{int(p-META_PROT)}g")
+            
+            with st.expander("Ver itens de hoje", expanded=True): # Deixei aberto para vc ver
+                for _, r in df_hoje.iterrows():
+                    col_h1, col_h2, col_h3 = st.columns([1, 4, 1])
+                    # Agora mostra o horário corrigido
+                    col_h1.write(r['data_hora'].strftime('%H:%M'))
+                    col_h2.write(f"**{r['alimento']}** - {int(r['kcal'])} kcal")
+                    if col_h3.button("🗑️", key=f"del_{r['id']}"):
+                        with get_cursor() as cur: cur.execute("DELETE FROM consumo WHERE id = %s", (r['id'],))
+                        st.rerun()
+        else:
+            st.info("Nenhum registro para hoje (considerando horário local).")
+    else:
+        st.info("Banco de dados vazio.")
+
+    st.divider()
+    
+    # --- GRÁFICO 30 DIAS (COM CORREÇÃO DE FUSO) ---
+    st.subheader("📅 Histórico de Calorias (30 Dias)")
+    try:
+        # Puxamos dados brutos para corrigir o fuso no Python antes de agrupar
+        df_hist_raw = pd.read_sql("SELECT data_hora, kcal FROM consumo", conn)
+        
+        if not df_hist_raw.empty:
+            # 1. Corrige o fuso
+            df_hist_raw['data_hora'] = pd.to_datetime(df_hist_raw['data_hora']) - pd.Timedelta(hours=3)
+            # 2. Cria coluna apenas com a DATA correta
+            df_hist_raw['data'] = df_hist_raw['data_hora'].dt.date
+            # 3. Agrupa por dia
+            df_chart = df_hist_raw.groupby('data')['kcal'].sum().reset_index().sort_values('data', ascending=False).head(30)
+            df_chart = df_chart.sort_values('data') # Reordena para o gráfico ir da esquerda p/ direita
+            
+            fig_cal = px.bar(df_chart, x='data', y='kcal', title="Consumo Diário vs Meta", text_auto='.0f')
+            fig_cal.add_hline(y=META_KCAL, line_dash="dot", annotation_text="Meta (2000)", line_color="red")
+            fig_cal.update_traces(marker_color='#4CAF50')
+            st.plotly_chart(fig_cal, use_container_width=True)
+        else:
+            st.caption("Sem dados históricos.")
+    except Exception as e: st.error(f"Erro gráfico: {e}")
+    
     # --- MÉTRICAS DE HOJE ---
     df_hoje = pd.read_sql("SELECT * FROM consumo WHERE data_hora::date = CURRENT_DATE", conn)
     if not df_hoje.empty:
