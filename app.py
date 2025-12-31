@@ -8,7 +8,7 @@ import os
 # 1. CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="Leo Tracker Pro", page_icon="🦁", layout="wide")
 
-# 2. CONEXÃO NEON (Lendo dos Secrets)
+# 2. CONEXÃO NEON
 @st.cache_resource
 def init_connection():
     return psycopg2.connect(st.secrets["DATABASE_URL"])
@@ -19,7 +19,42 @@ except Exception as e:
     st.error("Erro ao conectar ao Banco de Dados. Verifique os Secrets.")
     st.stop()
 
-# 3. FUNÇÕES AUXILIARES
+# 3. FUNÇÕES DE BANCO DE DADOS (Com esquema explícito)
+def inicializar_banco():
+    with conn.cursor() as cur:
+        # Força o uso do esquema public
+        cur.execute("SET search_path TO public")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.tabela_taco (
+                id SERIAL PRIMARY KEY,
+                alimento TEXT,
+                kcal REAL,
+                proteina REAL,
+                carbo REAL,
+                gordura REAL
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.consumo (
+                id SERIAL PRIMARY KEY, 
+                data DATE, 
+                alimento TEXT, 
+                quantidade REAL, 
+                kcal REAL, 
+                proteina REAL, 
+                carbo REAL, 
+                gordura REAL
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.peso (
+                id SERIAL PRIMARY KEY, 
+                data DATE, 
+                peso_kg REAL
+            );
+        """)
+        conn.commit()
+
 def limpar_valor_taco(valor):
     if pd.isna(valor) or str(valor).strip().upper() in ['NA', 'TR', '', '-']:
         return 0.0
@@ -28,43 +63,29 @@ def limpar_valor_taco(valor):
     except:
         return 0.0
 
-# 4. FUNÇÕES DE BANCO DE DADOS
-def inicializar_banco():
-    with conn.cursor() as cur:
-        cur.execute("CREATE TABLE IF NOT EXISTS tabela_taco (id SERIAL PRIMARY KEY, alimento TEXT, kcal REAL, proteina REAL, carbo REAL, gordura REAL);")
-        cur.execute("CREATE TABLE IF NOT EXISTS consumo (id SERIAL PRIMARY KEY, data DATE, alimento TEXT, quantidade REAL, kcal REAL, proteina REAL, carbo REAL, gordura REAL);")
-        cur.execute("CREATE TABLE IF NOT EXISTS peso (id SERIAL PRIMARY KEY, data DATE, peso_kg REAL);")
-        conn.commit()
-
 def carregar_csv_completo():
     try:
         if not os.path.exists('alimentos.csv'):
             st.error("❌ Arquivo 'alimentos.csv' não encontrado.")
             return False
-
-        # Lendo o CSV forçando o delimitador correto
-        df = pd.read_csv('alimentos.csv', sep=';', encoding='utf-8')
-
-        # Se a leitura falhar com utf-8, tenta latin-1
-        if len(df.columns) < 5:
-            df = pd.read_csv('alimentos.csv', sep=';', encoding='latin-1')
-
-        # ESTRATÉGIA POR ÍNDICE (Baseado no seu Log):
-        # 2: Descrição, 4: Energia(kcal), 6: Proteína, 7: Lipídeos, 9: Carboidrato
+        
+        df = pd.read_csv('alimentos.csv', sep=';', encoding='latin-1')
+        
         tabela_preparada = []
         for _, row in df.iterrows():
             tabela_preparada.append((
-                str(row.iloc[2]),               # Coluna 2: Descrição
-                limpar_valor_taco(row.iloc[4]),  # Coluna 4: Kcal
-                limpar_valor_taco(row.iloc[6]),  # Coluna 6: Proteína
-                limpar_valor_taco(row.iloc[9]),  # Coluna 9: Carboidrato
-                limpar_valor_taco(row.iloc[7])   # Coluna 7: Lipídeos (Gordura)
+                str(row.iloc[2]),               
+                limpar_valor_taco(row.iloc[4]),  
+                limpar_valor_taco(row.iloc[6]),  
+                limpar_valor_taco(row.iloc[9]),  
+                limpar_valor_taco(row.iloc[7])   
             ))
 
         with conn.cursor() as cur:
-            cur.execute("TRUNCATE TABLE tabela_taco")
+            cur.execute("SET search_path TO public")
+            cur.execute("TRUNCATE TABLE public.tabela_taco")
             cur.executemany(
-                "INSERT INTO tabela_taco (alimento, kcal, proteina, carbo, gordura) VALUES (%s, %s, %s, %s, %s)", 
+                "INSERT INTO public.tabela_taco (alimento, kcal, proteina, carbo, gordura) VALUES (%s, %s, %s, %s, %s)", 
                 tabela_preparada
             )
             conn.commit()
@@ -75,17 +96,34 @@ def carregar_csv_completo():
 
 def buscar_alimento(termo):
     if not termo: return pd.DataFrame()
-    return pd.read_sql("SELECT * FROM tabela_taco WHERE alimento ILIKE %s LIMIT 20", conn, params=(f'%{termo}%',))
+    # Adicionado public. explicito
+    return pd.read_sql("SELECT * FROM public.tabela_taco WHERE alimento ILIKE %s LIMIT 20", conn, params=(f'%{termo}%',))
 
 def ler_dados_periodo(dias=30):
     data_inicio = (datetime.now() - timedelta(days=dias)).date()
     try:
-        return pd.read_sql("SELECT * FROM consumo WHERE data >= %s ORDER BY data DESC", conn, params=(data_inicio,))
+        return pd.read_sql("SELECT * FROM public.consumo WHERE data >= %s ORDER BY data DESC", conn, params=(data_inicio,))
     except:
         return pd.DataFrame()
 
-# 5. INICIALIZAÇÃO
+def ler_peso():
+    try:
+        return pd.read_sql("SELECT * FROM public.peso ORDER BY data ASC", conn)
+    except:
+        return pd.DataFrame()
+
+# 4. INICIALIZAÇÃO
 inicializar_banco()
+
+# 5. MEDIDAS CASEIRAS
+MEDIDAS_CASEIRAS = {
+    "arroz": {"unidade": "Colher de Sopa Cheia", "g": 25},
+    "feijão": {"unidade": "Concha Média", "g": 86},
+    "frango": {"unidade": "Filé Médio", "g": 100},
+    "carne": {"unidade": "Bife Médio", "g": 100},
+    "ovo": {"unidade": "Unidade", "g": 50},
+    "banana": {"unidade": "Unidade", "g": 60}
+}
 
 # 6. INTERFACE
 st.title("🦁 Leo Tracker Pro")
@@ -111,18 +149,24 @@ with tab_prato:
             st.info(f"🥘 {k} kcal | P: {p}g | C: {c}g | G: {g}g")
             
             if st.button("Salvar Refeição"):
-                with conn.cursor() as cur:
-                    cur.execute("INSERT INTO consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura) VALUES (%s,%s,%s,%s,%s,%s,%s)", 
-                                (datetime.now().date(), escolha, qtd, k, p, c, g))
-                    conn.commit()
-                st.success("Registrado!")
-                st.rerun()
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("SET search_path TO public")
+                        cur.execute("""
+                            INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura) 
+                            VALUES (%s,%s,%s,%s,%s,%s,%s)
+                        """, (datetime.now().date(), escolha, qtd, k, p, c, g))
+                        conn.commit()
+                    st.success("Registrado com sucesso!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro ao salvar: {e}")
 
 with tab_dash:
     df_dados = ler_dados_periodo(30)
     if not df_dados.empty:
         df_dados['data'] = pd.to_datetime(df_dados['data'])
-        fig = px.bar(df_dados.groupby('data')['kcal'].sum().reset_index(), x='data', y='kcal', color='kcal', title="Calorias Diárias")
+        fig = px.bar(df_dados.groupby('data')['kcal'].sum().reset_index(), x='data', y='kcal', title="Calorias Diárias")
         st.plotly_chart(fig, use_container_width=True)
         st.dataframe(df_dados)
 
@@ -130,7 +174,8 @@ with tab_peso:
     p_in = st.number_input("Peso (kg):", 50.0, 200.0, 145.0)
     if st.button("Gravar Peso"):
         with conn.cursor() as cur:
-            cur.execute("INSERT INTO peso (data, peso_kg) VALUES (%s, %s)", (datetime.now().date(), p_in))
+            cur.execute("SET search_path TO public")
+            cur.execute("INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", (datetime.now().date(), p_in))
             conn.commit()
         st.success("Peso gravado!")
 
