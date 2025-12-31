@@ -25,21 +25,19 @@ def check_password():
 
 if not check_password(): st.stop()
 
-# 2. GERENCIAMENTO DE CONEXÃO (VERSÃO PRO COM RECONEXÃO)
+# 2. GERENCIAMENTO DE CONEXÃO (BIOHACKER AUTO-RECONNECT)
 @st.cache_resource
 def init_connection():
     return psycopg2.connect(st.secrets["DATABASE_URL"])
 
 def get_connection():
-    """Garante que a conexão esteja aberta antes de retornar."""
+    """Garante que a conexão com o Neon esteja sempre viva."""
     try:
         conn = init_connection()
-        # Testa se a conexão está viva
         with conn.cursor() as cur:
             cur.execute("SELECT 1")
         return conn
-    except (psycopg2.InterfaceError, psycopg2.OperationalError):
-        # Se fechada, limpa o cache e cria uma nova
+    except:
         st.cache_resource.clear()
         return init_connection()
 
@@ -55,34 +53,6 @@ def get_cursor():
         raise e
     finally:
         cur.close()
-
-# 4. INICIALIZAÇÃO DO BANCO (CHAMANDO A CONEXÃO SEGURA)
-def inicializar_banco():
-    with get_cursor() as cur:
-        cur.execute("SET search_path TO public")
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS tabela_taco (
-                id SERIAL PRIMARY KEY, alimento TEXT, kcal REAL, proteina REAL, carbo REAL, gordura REAL
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS consumo (
-                id SERIAL PRIMARY KEY, 
-                data_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP, 
-                alimento TEXT, quantidade REAL, kcal REAL, proteina REAL, carbo REAL, gordura REAL, 
-                gluten TEXT DEFAULT 'Não informado'
-            );
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS peso (
-                id SERIAL PRIMARY KEY, 
-                data DATE UNIQUE, 
-                peso_kg REAL
-            );
-        """)
-
-# No restante do código, onde houver pd.read_sql, use:
-# df = pd.read_sql(query, get_connection(), params=...)
 
 # 3. METAS DO PLANO (Leonardo Grando - Dezembro/25)
 META_KCAL = 2000 
@@ -115,7 +85,7 @@ def limpar_valor_taco(valor):
 try:
     inicializar_banco()
 except Exception as e:
-    st.error(f"Erro de Banco: {e}")
+    st.error(f"Erro ao despertar o banco de dados: {e}")
     st.stop()
 
 # 5. INTERFACE PRINCIPAL
@@ -126,7 +96,7 @@ with tabs[0]:
     st.subheader("Busca Manual (TACO)")
     termo = st.text_input("🔍 Pesquisar alimento:")
     if termo:
-        conn = get_connection_purer()
+        conn = get_connection() # Usando a função segura aqui
         df_res = pd.read_sql("SELECT * FROM public.tabela_taco WHERE alimento ILIKE %s LIMIT 50", conn, params=(f'%{termo}%',))
         if not df_res.empty:
             escolha = st.selectbox("Selecione:", df_res["alimento"])
@@ -143,8 +113,7 @@ with tabs[0]:
 
 with tabs[1]:
     st.subheader("🤖 Importar via IA")
-    st.markdown("**Copie o JSON gerado pelo Gemini e cole abaixo:**")
-    json_in = st.text_area("Área de colagem:", height=150)
+    json_in = st.text_area("Cole o JSON da IA aqui:", height=150)
     if st.button("Processar e Salvar"):
         try:
             clean_json = json_in.replace('```json', '').replace('```', '').strip()
@@ -154,13 +123,13 @@ with tabs[1]:
                     cur.execute("""INSERT INTO consumo (alimento, quantidade, kcal, proteina, carbo, gordura, gluten) 
                                    VALUES (%s,1,%s,%s,%s,%s,%s)""", 
                                 (i['alimento'], i['kcal'], i['p'], i['c'], i['g'], i.get('gluten','Não informado')))
-            st.success("Refeição importada com sucesso!")
+            st.success("Refeição importada!")
             st.rerun()
-        except Exception as e: st.error(f"Erro no formato do JSON: {e}")
+        except Exception as e: st.error(f"Erro no JSON: {e}")
 
 with tabs[2]:
     st.subheader("📊 Progresso do Dia")
-    conn = get_connection_purer()
+    conn = get_connection() # Usando a função segura aqui
     df_hoje = pd.read_sql("SELECT * FROM consumo WHERE data_hora::date = CURRENT_DATE", conn)
     if not df_hoje.empty:
         c1, c2 = st.columns(2)
@@ -169,7 +138,6 @@ with tabs[2]:
         c2.metric("Proteína", f"{int(cons_prot)}g / {META_PROT}g", f"{int(cons_prot - META_PROT)}g")
         
         st.divider()
-        st.write("🕒 Histórico:")
         for _, row in df_hoje.iterrows():
             col_h1, col_h2, col_h3 = st.columns([1, 4, 1])
             col_h1.write(pd.to_datetime(row['data_hora']).strftime('%H:%M'))
@@ -178,30 +146,17 @@ with tabs[2]:
                 with get_cursor() as cur:
                     cur.execute("DELETE FROM consumo WHERE id = %s", (row['id'],))
                 st.rerun()
-    else: st.info("Nenhum registro para hoje.")
+    else: st.info("Nenhum registro hoje.")
 
 with tabs[3]:
-    st.subheader("📋 Orientações Nutricionais (Dez/25)")
+    st.subheader("📋 Orientações & Sugestões Econômicas")
     col_orig, col_econ = st.columns(2)
-    
     with col_orig:
-        st.info("🎯 Opções do Plano Original")
-        st.markdown("""
-        * **Café:** Shake com Whey (17g) [cite: 18], Leite Desnatado [cite: 14] e Frutas (Morango/Mamão)[cite: 7, 8].
-        * **Almoço:** Salmão (120g) [cite: 36] ou Sardinha [cite: 37], Mandioca (100g) [cite: 40] ou Quinoa[cite: 42].
-        * **Jantar:** Contra-filé (80g) [cite: 63] ou Patinho [cite: 65], Batata Sauté (200g)[cite: 66].
-        * **Ceia:** Iogurte Natural (170ml) [cite: 75] e Mel (15g)[cite: 79].
-        """)
-        
+        st.info("🎯 Plano Original")
+        st.markdown("* **Almoço:** Salmão (120g), Mandioca (100g).\n* **Jantar:** Contra-filé (80g), Batata Sauté (200g).\n* **Ceia:** Iogurte + Mel.")
     with col_econ:
-        st.success("💰 Sugestões Mais Baratas (Mesmos Macros)")
-        st.markdown("""
-        * **Substituir Whey:** Ovos cozidos ou claras (ótimo custo-benefício).
-        * **Substituir Salmão/Carne:** Peito de Frango, Sobrecoxa sem pele ou Fígado bovino.
-        * **Substituir Quinoa/Mandioca:** Arroz branco com Feijão ou Batata Doce.
-        * **Substituir Sementes Caras:** Farelo de Aveia (fonte barata de fibras).
-        * **Substituir Morango:** Banana prata ou Nanica (sempre mais barata).
-        """)
+        st.success("💰 Opções Baratas")
+        st.markdown("* **Proteína:** Ovos, Sobrecoxa de Frango, Fígado.\n* **Carbo:** Arroz e Feijão, Batata Doce.\n* **Fibras:** Farelo de Aveia.")
 
 with tabs[4]:
     st.subheader("⚖️ Controle de Peso")
@@ -214,8 +169,7 @@ with tabs[4]:
         st.success("Peso registrado!")
     
     st.divider()
-    st.subheader("⚙️ Administração")
-    if st.button("🚀 Sincronizar alimentos.csv (TACO)"):
+    if st.button("🚀 Sincronizar alimentos.csv"):
         try:
             df_csv = pd.read_csv('alimentos.csv', sep=';', encoding='latin-1')
             preparada = [(str(r.iloc[2]), limpar_valor_taco(r.iloc[4]), limpar_valor_taco(r.iloc[6]), 
@@ -223,5 +177,5 @@ with tabs[4]:
             with get_cursor() as cur:
                 cur.execute("TRUNCATE TABLE tabela_taco")
                 cur.executemany("INSERT INTO tabela_taco (alimento, kcal, proteina, carbo, gordura) VALUES (%s,%s,%s,%s,%s)", preparada)
-            st.success("Base de dados sincronizada!")
-        except Exception as e: st.error(f"Erro ao ler CSV: {e}")
+            st.success("TACO Sincronizada!")
+        except Exception as e: st.error(f"Erro: {e}")
