@@ -21,12 +21,6 @@ except Exception as e:
     st.stop()
 
 # 3. FUNÇÕES AUXILIARES DE LIMPEZA
-def remover_acentos(texto):
-    if not isinstance(texto, str): return str(texto)
-    # Normaliza para remover acentos e caracteres especiais
-    nfkd_form = unicodedata.normalize('NFKD', texto)
-    return "".join([c for c in nfkd_form if not unicodedata.combining(c)]).lower().strip()
-
 def limpar_valor_taco(valor):
     if pd.isna(valor) or str(valor).strip().upper() in ['NA', 'TR', '', '-']:
         return 0.0
@@ -50,23 +44,38 @@ def carregar_csv_completo():
             st.error("❌ Arquivo 'alimentos.csv' não encontrado no repositório.")
             return False
 
-        # Tenta ler o CSV com encoding Latin-1 (comum em arquivos brasileiros)
-        df = pd.read_csv('alimentos.csv', encoding='latin-1', sep=';')
-        
-        # Cria um mapa: { 'nome_limpo': 'Nome Original Da Coluna No CSV' }
-        mapa_colunas = {remover_acentos(c): c for c in df.columns}
-        colunas_limpas = mapa_colunas.keys()
+        # Tenta ler o CSV com diferentes encodings
+        df = None
+        for enc in ['latin-1', 'utf-8', 'iso-8859-1']:
+            try:
+                df = pd.read_csv('alimentos.csv', encoding=enc, sep=';')
+                if len(df.columns) > 1: break
+            except:
+                continue
 
-        # Procura as colunas necessárias usando termos parciais e sem acentos
-        c_nome = next((mapa_colunas[c] for c in colunas_limpas if 'descricao' in c), None)
-        c_kcal = next((mapa_colunas[c] for c in colunas_limpas if 'kcal' in c), None)
-        c_prot = next((mapa_colunas[c] for c in colunas_limpas if 'proteina' in c), None)
-        c_carb = next((mapa_colunas[c] for c in colunas_limpas if 'carboidrato' in c), None)
-        c_gord = next((mapa_colunas[c] for c in colunas_limpas if 'lipideos' in c or 'gordura' in c), None)
+        if df is None or len(df.columns) <= 1:
+            st.error("❌ Não foi possível ler o arquivo CSV. Verifique o separador (;) e o formato.")
+            return False
+
+        # BUSCA ROBUSTA DE COLUNAS (Ignora acentos, espaços e caracteres especiais)
+        def encontrar_coluna(df_cols, palavras_chave):
+            for col in df_cols:
+                # Normalização extrema: remove tudo que não é letra/número
+                col_normalizada = "".join(filter(str.isalnum, str(col))).lower()
+                for p in palavras_chave:
+                    if p in col_normalizada:
+                        return col
+            return None
+
+        c_nome = encontrar_coluna(df.columns, ['descri', 'alimento'])
+        c_kcal = encontrar_coluna(df.columns, ['kcal', 'energi'])
+        c_prot = encontrar_coluna(df.columns, ['prote'])
+        c_carb = encontrar_coluna(df.columns, ['carbo'])
+        c_gord = encontrar_coluna(df.columns, ['lipid', 'gordur'])
 
         if not all([c_nome, c_kcal, c_prot, c_carb, c_gord]):
-            st.error("❌ Não foi possível identificar as colunas obrigatórias no CSV.")
-            st.write("Colunas detectadas:", list(df.columns))
+            st.error("❌ Não foi possível identificar as colunas obrigatórias.")
+            st.write("Colunas detectadas no arquivo:", list(df.columns))
             return False
 
         tabela_preparada = []
@@ -88,7 +97,7 @@ def carregar_csv_completo():
             conn.commit()
         return True
     except Exception as e:
-        st.error(f"Erro ao processar: {e}")
+        st.error(f"Erro crítico no processamento: {e}")
         return False
 
 def buscar_alimento(termo):
@@ -102,8 +111,29 @@ def ler_dados_periodo(dias=30):
     except:
         return pd.DataFrame()
 
-# 5. INICIALIZAÇÃO
+def ler_peso():
+    try:
+        return pd.read_sql("SELECT * FROM peso ORDER BY data ASC", conn)
+    except:
+        return pd.DataFrame()
+
+# 4. INICIALIZAÇÃO
 inicializar_banco()
+
+# 5. ESTIMADOR DE MEDIDAS
+MEDIDAS_CASEIRAS = {
+    "arroz": {"unidade": "Colher de Sopa Cheia", "g": 25},
+    "feijão": {"unidade": "Concha Média", "g": 86},
+    "frango": {"unidade": "Filé Médio", "g": 100},
+    "carne": {"unidade": "Bife Médio", "g": 100},
+    "batata doce": {"unidade": "Fatia Média/Rodela", "g": 40},
+    "mandioca": {"unidade": "Pedaço Médio", "g": 50},
+    "aveia": {"unidade": "Colher de Sopa", "g": 15},
+    "azeite": {"unidade": "Fio / Colher Sobremesa", "g": 8},
+    "whey": {"unidade": "Dosador (Scoop)", "g": 30},
+    "banana": {"unidade": "Unidade Média", "g": 60},
+    "ovo": {"unidade": "Unidade", "g": 50}
+}
 
 # 6. INTERFACE
 st.title("🦁 Leo Tracker Pro")
@@ -117,37 +147,62 @@ with tab_prato:
         if not df_res.empty:
             escolha = st.selectbox("Selecione:", df_res["alimento"])
             dados = df_res[df_res["alimento"] == escolha].iloc[0]
-            qtd = st.number_input("Peso (g):", 0, 1000, 100)
+            
+            tipo = st.radio("Medir por:", ["Medida Caseira", "Gramas"], horizontal=True)
+            if tipo == "Gramas":
+                qtd = st.number_input("Peso (g):", 0, 1000, 100)
+            else:
+                med = next((v for k, v in MEDIDAS_CASEIRAS.items() if k in escolha.lower()), {"unidade": "Grama", "g": 1})
+                unid = st.number_input(f"Quantas {med['unidade']}?", 0.0, 10.0, 1.0)
+                qtd = unid * med['g']
+            
             fator = qtd / 100
-            k, p, c, g = round(dados['kcal']*fator), round(dados['proteina']*fator,1), round(dados['carbo']*fator,1), round(dados['gordura']*fator,1)
-            st.info(f"🥘 {k} kcal | P: {p}g | C: {c}g | G: {g}g")
-            if st.button("Salvar Refeição"):
+            macros = {
+                'k': round(dados['kcal']*fator), 
+                'p': round(dados['proteina']*fator,1), 
+                'c': round(dados['carbo']*fator,1), 
+                'g': round(dados['gordura']*fator,1)
+            }
+            
+            st.info(f"🥘 **Resumo:** {macros['k']} kcal | P: {macros['p']}g | C: {macros['c']}g")
+            if st.button("Confirmar Refeição"):
                 with conn.cursor() as cur:
-                    cur.execute("INSERT INTO consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura) VALUES (%s,%s,%s,%s,%s,%s,%s)", 
-                                (datetime.now().date(), escolha, qtd, k, p, c, g))
+                    cur.execute(
+                        "INSERT INTO consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura) VALUES (%s,%s,%s,%s,%s,%s,%s)", 
+                        (datetime.now().date(), escolha, qtd, macros['k'], macros['p'], macros['c'], macros['g'])
+                    )
                     conn.commit()
-                st.success("Registrado!")
+                st.success("Salvo!")
+                st.rerun()
 
 with tab_dash:
     df_dados = ler_dados_periodo(30)
     if not df_dados.empty:
         df_dados['data'] = pd.to_datetime(df_dados['data'])
-        fig = px.bar(df_dados.groupby('data')['kcal'].sum().reset_index(), x='data', y='kcal', color='kcal', title="Calorias Diárias")
+        df_dia = df_dados.groupby('data')[['kcal', 'proteina']].sum().reset_index()
+        fig = px.bar(df_dia, x='data', y='kcal', color='kcal', title="Calorias Diárias")
         st.plotly_chart(fig, use_container_width=True)
         st.dataframe(df_dados)
+    else:
+        st.info("Registre a sua primeira refeição para ver o gráfico!")
 
 with tab_peso:
-    p_in = st.number_input("Peso Atual (kg):", 50.0, 200.0, 145.0)
+    p_input = st.number_input("Peso Atual (kg):", 50.0, 200.0, 145.0)
     if st.button("Gravar Peso"):
         with conn.cursor() as cur:
-            cur.execute("INSERT INTO peso (data, peso_kg) VALUES (%s, %s)", (datetime.now().date(), p_in))
+            cur.execute("INSERT INTO peso (data, peso_kg) VALUES (%s, %s)", (datetime.now().date(), p_input))
             conn.commit()
         st.success("Peso gravado!")
+        st.rerun()
+    
+    df_p = ler_peso()
+    if not df_p.empty:
+        st.line_chart(df_p, x='data', y='peso_kg')
 
 with tab_admin:
     st.subheader("⚙️ Administração")
-    if st.button("🚀 Sincronizar Alimentos (alimentos.csv -> Neon)"):
+    if st.button("🚀 Sincronizar Alimentos (CSV -> Banco)"):
         with st.spinner("Processando..."):
             if carregar_csv_completo():
-                st.success("Base de dados TACO sincronizada com sucesso!")
+                st.success("Sincronização concluída com sucesso!")
                 st.rerun()
