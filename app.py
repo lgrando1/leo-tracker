@@ -3,6 +3,7 @@ import pandas as pd
 import psycopg2
 from datetime import datetime, timedelta
 import plotly.express as px
+import os
 
 # 1. CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="Leo Tracker Pro", page_icon="🦁", layout="wide")
@@ -190,10 +191,53 @@ with tab_peso:
     if not df_p.empty:
         st.line_chart(df_p, x='data', y='peso_kg')
 
+def carregar_csv_completo():
+    try:
+        # Verifica se o arquivo existe antes de tentar abrir
+        if not os.path.exists('alimentos.csv'):
+            st.error("❌ Arquivo 'alimentos.csv' não encontrado na raiz do GitHub.")
+            st.info(f"Arquivos detectados na pasta: {os.listdir('.')}")
+            return False
+
+        # Tenta ler com diferentes encodings caso o latin-1 falhe
+        try:
+            df = pd.read_csv('alimentos.csv', encoding='latin-1', sep=';')
+        except:
+            df = pd.read_csv('alimentos.csv', encoding='utf-8', sep=';')
+
+        tabela_limpa = []
+        for _, row in df.iterrows():
+            # Verifica se a coluna existe para evitar erro de nome
+            nome_alimento = row.get('Descrição dos alimentos', 'Sem Nome')
+            kcal = limpar_valor_taco(row.get('Energia (kcal)', 0))
+            prot = limpar_valor_taco(row.get('Proteína (g)', 0))
+            carb = limpar_valor_taco(row.get('Carboidrato (g)', 0))
+            gord = limpar_valor_taco(row.get('Lipídeos (g)', 0))
+            
+            tabela_limpa.append((str(nome_alimento), kcal, prot, carb, gord))
+
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE TABLE tabela_taco")
+            cur.executemany(
+                "INSERT INTO tabela_taco (alimento, kcal, proteina, carbo, gordura) VALUES (%s, %s, %s, %s, %s)", 
+                tabela_limpa
+            )
+            conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"Erro crítico no processamento: {e}")
+        return False
+
+# ... dentro da tab_admin ...
 with tab_admin:
     st.subheader("⚙️ Painel de Administração")
-    st.write("Clique no botão abaixo para processar o arquivo 'alimentos.csv' e atualizar sua base de dados no Neon.")
     
+    # Verificador de integridade
+    if os.path.exists('alimentos.csv'):
+        st.success("✅ Arquivo 'alimentos.csv' detectado e pronto para carga.")
+    else:
+        st.error("⚠️ O arquivo 'alimentos.csv' não foi detectado no repositório.")
+
     if st.button("🚀 Sincronizar Alimentos do CSV"):
         with st.spinner("Lendo CSV e atualizando banco de dados..."):
             if carregar_csv_completo():
