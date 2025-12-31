@@ -22,7 +22,6 @@ except Exception as e:
 # 3. FUNÇÕES DE BANCO DE DADOS E ADMINISTRAÇÃO
 def inicializar_banco():
     with conn.cursor() as cur:
-        # Tabela TACO
         cur.execute("""
             CREATE TABLE IF NOT EXISTS tabela_taco (
                 id SERIAL PRIMARY KEY,
@@ -33,7 +32,6 @@ def inicializar_banco():
                 gordura REAL
             );
         """)
-        # Tabela Consumo
         cur.execute("""
             CREATE TABLE IF NOT EXISTS consumo (
                 id SERIAL PRIMARY KEY, 
@@ -46,7 +44,6 @@ def inicializar_banco():
                 gordura REAL
             );
         """)
-        # Tabela Peso
         cur.execute("""
             CREATE TABLE IF NOT EXISTS peso (
                 id SERIAL PRIMARY KEY, 
@@ -60,24 +57,31 @@ def limpar_valor_taco(valor):
     if pd.isna(valor) or str(valor).strip().upper() in ['NA', 'TR', '']:
         return 0.0
     try:
-        # Converte padrão brasileiro (vírgula) para americano (ponto)
         return float(str(valor).replace(',', '.'))
     except:
         return 0.0
 
 def carregar_csv_completo():
     try:
-        # Lê o arquivo alimentos.csv que deve estar na mesma pasta no GitHub
-        df = pd.read_csv('alimentos.csv', encoding='latin-1', sep=';')
+        if not os.path.exists('alimentos.csv'):
+            st.error("❌ Arquivo 'alimentos.csv' não encontrado na raiz do GitHub.")
+            st.info(f"Arquivos detectados: {os.listdir('.')}")
+            return False
+
+        try:
+            df = pd.read_csv('alimentos.csv', encoding='latin-1', sep=';')
+        except:
+            df = pd.read_csv('alimentos.csv', encoding='utf-8', sep=';')
+
         tabela_limpa = []
         for _, row in df.iterrows():
-            tabela_limpa.append((
-                str(row['Descrição dos alimentos']),
-                limpar_valor_taco(row['Energia (kcal)']),
-                limpar_valor_taco(row['Proteína (g)']),
-                limpar_valor_taco(row['Carboidrato (g)']),
-                limpar_valor_taco(row['Lipídeos (g)'])
-            ))
+            nome_alimento = row.get('Descrição dos alimentos', 'Sem Nome')
+            kcal = limpar_valor_taco(row.get('Energia (kcal)', 0))
+            prot = limpar_valor_taco(row.get('Proteína (g)', 0))
+            carb = limpar_valor_taco(row.get('Carboidrato (g)', 0))
+            gord = limpar_valor_taco(row.get('Lipídeos (g)', 0))
+            tabela_limpa.append((str(nome_alimento), kcal, prot, carb, gord))
+
         with conn.cursor() as cur:
             cur.execute("TRUNCATE TABLE tabela_taco")
             cur.executemany(
@@ -87,10 +91,9 @@ def carregar_csv_completo():
             conn.commit()
         return True
     except Exception as e:
-        st.error(f"Erro ao processar CSV: {e}")
+        st.error(f"Erro crítico no processamento: {e}")
         return False
 
-# Funções de Leitura Segura
 def buscar_alimento(termo):
     if not termo: return pd.DataFrame()
     return pd.read_sql("SELECT * FROM tabela_taco WHERE alimento ILIKE %s LIMIT 15", conn, params=(f'%{termo}%',))
@@ -127,7 +130,7 @@ MEDIDAS_CASEIRAS = {
     "ovo": {"unidade": "Unidade", "g": 50}
 }
 
-# --- INTERFACE ---
+# 6. INTERFACE
 st.title("🦁 Leo Tracker Pro")
 tab_prato, tab_dash, tab_peso, tab_admin = st.tabs(["🍽️ Montar Prato", "📊 Dashboard", "⚖️ Peso", "⚙️ Admin"])
 
@@ -191,55 +194,16 @@ with tab_peso:
     if not df_p.empty:
         st.line_chart(df_p, x='data', y='peso_kg')
 
-def carregar_csv_completo():
-    try:
-        # Verifica se o arquivo existe antes de tentar abrir
-        if not os.path.exists('alimentos.csv'):
-            st.error("❌ Arquivo 'alimentos.csv' não encontrado na raiz do GitHub.")
-            st.info(f"Arquivos detectados na pasta: {os.listdir('.')}")
-            return False
-
-        # Tenta ler com diferentes encodings caso o latin-1 falhe
-        try:
-            df = pd.read_csv('alimentos.csv', encoding='latin-1', sep=';')
-        except:
-            df = pd.read_csv('alimentos.csv', encoding='utf-8', sep=';')
-
-        tabela_limpa = []
-        for _, row in df.iterrows():
-            # Verifica se a coluna existe para evitar erro de nome
-            nome_alimento = row.get('Descrição dos alimentos', 'Sem Nome')
-            kcal = limpar_valor_taco(row.get('Energia (kcal)', 0))
-            prot = limpar_valor_taco(row.get('Proteína (g)', 0))
-            carb = limpar_valor_taco(row.get('Carboidrato (g)', 0))
-            gord = limpar_valor_taco(row.get('Lipídeos (g)', 0))
-            
-            tabela_limpa.append((str(nome_alimento), kcal, prot, carb, gord))
-
-        with conn.cursor() as cur:
-            cur.execute("TRUNCATE TABLE tabela_taco")
-            cur.executemany(
-                "INSERT INTO tabela_taco (alimento, kcal, proteina, carbo, gordura) VALUES (%s, %s, %s, %s, %s)", 
-                tabela_limpa
-            )
-            conn.commit()
-        return True
-    except Exception as e:
-        st.error(f"Erro crítico no processamento: {e}")
-        return False
-
-# ... dentro da tab_admin ...
 with tab_admin:
     st.subheader("⚙️ Painel de Administração")
-    
-    # Verificador de integridade
     if os.path.exists('alimentos.csv'):
         st.success("✅ Arquivo 'alimentos.csv' detectado e pronto para carga.")
     else:
         st.error("⚠️ O arquivo 'alimentos.csv' não foi detectado no repositório.")
+        st.info(f"Arquivos no diretório: {os.listdir('.')}")
 
     if st.button("🚀 Sincronizar Alimentos do CSV"):
-        with st.spinner("Lendo CSV e atualizando banco de dados..."):
+        with st.spinner("Processando CSV..."):
             if carregar_csv_completo():
                 st.success("Tabela TACO atualizada com sucesso!")
                 st.rerun()
