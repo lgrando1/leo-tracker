@@ -96,7 +96,7 @@ with tabs[0]:
     st.subheader("Busca Manual (TACO)")
     termo = st.text_input("🔍 Pesquisar alimento:")
     if termo:
-        conn = get_connection() # Usando a função segura aqui
+        conn = get_connection()
         df_res = pd.read_sql("SELECT * FROM public.tabela_taco WHERE alimento ILIKE %s LIMIT 50", conn, params=(f'%{termo}%',))
         if not df_res.empty:
             escolha = st.selectbox("Selecione:", df_res["alimento"])
@@ -113,6 +113,13 @@ with tabs[0]:
 
 with tabs[1]:
     st.subheader("🤖 Importar via IA")
+    
+    # --- EXEMPLO DE PROMPT PARA O USUÁRIO ---
+    st.info("""**Prompt para usar no Gemini/ChatGPT:** "Analise minha refeição com base no meu plano de 2000kcal e 160g de proteína: [DESCREVA O QUE COMEU]. 
+    Retorne **apenas** o JSON sem texto adicional: 
+    `[{"alimento": "nome", "kcal": 0, "p": 0, "c": 0, "g": 0, "gluten": "Contém/Não contém"}]`"
+    """)
+    
     json_in = st.text_area("Cole o JSON da IA aqui:", height=150)
     if st.button("Processar e Salvar"):
         try:
@@ -129,7 +136,7 @@ with tabs[1]:
 
 with tabs[2]:
     st.subheader("📊 Progresso do Dia")
-    conn = get_connection() # Usando a função segura aqui
+    conn = get_connection()
     df_hoje = pd.read_sql("SELECT * FROM consumo WHERE data_hora::date = CURRENT_DATE", conn)
     if not df_hoje.empty:
         c1, c2 = st.columns(2)
