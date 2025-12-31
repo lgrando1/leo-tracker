@@ -18,7 +18,7 @@ except Exception as e:
     st.error("Erro ao conectar ao Banco de Dados. Verifique os Secrets.")
     st.stop()
 
-# 3. FUNÇÕES DE BANCO DE DADOS (CRIAÇÃO E POPULAÇÃO)
+# 3. FUNÇÕES DE BANCO DE DADOS E ADMINISTRAÇÃO
 def inicializar_banco():
     with conn.cursor() as cur:
         # Tabela TACO
@@ -53,24 +53,40 @@ def inicializar_banco():
                 peso_kg REAL
             );
         """)
-        
-        # Popular TACO se estiver vazia
-        cur.execute("SELECT COUNT(*) FROM tabela_taco")
-        if cur.fetchone()[0] == 0:
-            dados = [
-                ('Arroz Branco Cozido', 128, 2.5, 28.1, 0.2),
-                ('Feijão Carioca Cozido', 76, 4.8, 13.6, 0.5),
-                ('Peito de Frango Grelhado', 159, 32.0, 0.0, 2.5),
-                ('Patinho Grelhado', 219, 35.9, 0.0, 7.3),
-                ('Ovo Cozido', 146, 13.3, 0.6, 9.5),
-                ('Batata Doce Cozida', 77, 0.6, 18.4, 0.1),
-                ('Mandioca Cozida', 125, 0.6, 30.1, 0.3),
-                ('Banana Prata', 98, 1.3, 26.0, 0.1),
-                ('Whey Protein', 400, 80.0, 5.0, 2.0)
-            ]
-            cur.executemany("INSERT INTO tabela_taco (alimento, kcal, proteina, carbo, gordura) VALUES (%s, %s, %s, %s, %s)", dados)
-        
         conn.commit()
+
+def limpar_valor_taco(valor):
+    if pd.isna(valor) or str(valor).strip().upper() in ['NA', 'TR', '']:
+        return 0.0
+    try:
+        return float(str(valor).replace(',', '.'))
+    except:
+        return 0.0
+
+def carregar_csv_completo():
+    try:
+        # Lê o arquivo que você subiu para o GitHub
+        df = pd.read_csv('alimentos.csv', encoding='latin-1', sep=';')
+        tabela_limpa = []
+        for _, row in df.iterrows():
+            tabela_limpa.append((
+                str(row['Descrição dos alimentos']),
+                limpar_valor_taco(row['Energia (kcal)']),
+                limpar_valor_taco(row['Proteína (g)']),
+                limpar_valor_taco(row['Carboidrato (g)']),
+                limpar_valor_taco(row['Lipídeos (g)'])
+            ))
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE TABLE tabela_taco")
+            cur.executemany(
+                "INSERT INTO tabela_taco (alimento, kcal, proteina, carbo, gordura) VALUES (%s, %s, %s, %s, %s)", 
+                tabela_limpa
+            )
+            conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"Erro ao processar CSV: {e}")
+        return False
 
 # Funções de Leitura Segura
 def buscar_alimento(termo):
@@ -111,7 +127,7 @@ MEDIDAS_CASEIRAS = {
 
 # --- INTERFACE ---
 st.title("🦁 Leo Tracker Pro")
-tab_prato, tab_dash, tab_peso = st.tabs(["🍽️ Montar Prato", "📊 Dashboard", "⚖️ Peso"])
+tab_prato, tab_dash, tab_peso, tab_admin = st.tabs(["🍽️ Montar Prato", "📊 Dashboard", "⚖️ Peso", "⚙️ Admin"])
 
 with tab_prato:
     st.subheader("O que comeu hoje?")
@@ -131,13 +147,20 @@ with tab_prato:
                 qtd = unid * med['g']
             
             fator = qtd / 100
-            macros = {'k': round(dados['kcal']*fator), 'p': round(dados['proteina']*fator,1), 'c': round(dados['carbo']*fator,1), 'g': round(dados['gordura']*fator,1)}
+            macros = {
+                'k': round(dados['kcal']*fator), 
+                'p': round(dados['proteina']*fator,1), 
+                'c': round(dados['carbo']*fator,1), 
+                'g': round(dados['gordura']*fator,1)
+            }
             
             st.info(f"🥘 **Resumo:** {macros['k']} kcal | P: {macros['p']}g | C: {macros['c']}g")
             if st.button("Confirmar Refeição"):
                 with conn.cursor() as cur:
-                    cur.execute("INSERT INTO consumo (data, alimento, quantidade, kcal, proteina, carbo, gorduara) VALUES (%s,%s,%s,%s,%s,%s,%s)", 
-                                (datetime.now().date(), escolha, qtd, macros['k'], macros['p'], macros['c'], macros['g']))
+                    cur.execute(
+                        "INSERT INTO consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura) VALUES (%s,%s,%s,%s,%s,%s,%s)", 
+                        (datetime.now().date(), escolha, qtd, macros['k'], macros['p'], macros['c'], macros['g'])
+                    )
                     conn.commit()
                 st.success("Salvo!")
                 st.rerun()
@@ -151,7 +174,7 @@ with tab_dash:
         st.plotly_chart(fig, use_container_width=True)
         st.dataframe(df_dados)
     else:
-        st.info("Registe a sua primeira refeição para ver o gráfico!")
+        st.info("Registre a sua primeira refeição para ver o gráfico!")
 
 with tab_peso:
     p_input = st.number_input("Peso (kg):", 50.0, 200.0, 146.0)
@@ -165,3 +188,14 @@ with tab_peso:
     df_p = ler_peso()
     if not df_p.empty:
         st.line_chart(df_p, x='data', y='peso_kg')
+
+with tab_admin:
+    st.subheader("⚙️ Painel de Administração")
+    st.write("Clique no botão abaixo para processar o arquivo 'alimentos.csv' e atualizar sua base de dados TACO no Neon.")
+    
+    if st.button("🚀 Sincronizar Alimentos do CSV"):
+        with st.spinner("Lendo CSV e atualizando banco de dados..."):
+            if carregar_csv_completo():
+                st.success("Tabela TACO atualizada com sucesso!")
+            else:
+                st.error("Falha na atualização. Verifique se o arquivo 'alimentos.csv' está no seu repositório.")
