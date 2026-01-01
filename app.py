@@ -14,7 +14,7 @@ def get_now_br():
     """Retorna o datetime atual no fuso de Brasília."""
     return datetime.now(pytz.timezone('America/Sao_Paulo'))
 
-# --- DADOS NUTRICIONAIS E PROMPTS (RESTAURADO) ---
+# --- DADOS NUTRICIONAIS E PROMPTS ---
 nutrition_data = {
     "contexto_nutricional": {
         "dieta": "Restrição ao Glúten (foco auxiliar no controle da ansiedade).",
@@ -45,29 +45,29 @@ nutrition_data = {
 # --- DADOS DO PLANO ALIMENTAR (PDF + VERSÃO ECONÔMICA) ---
 PLANO_ALIMENTAR = {
     "Café da Manhã": {
-        [cite_start]"Premium (Nutri)": "Whey Protein (17g) [cite: 18] + [cite_start]Morangos (200g) [cite: 7] + [cite_start]Linhaça/Chia [cite: 11, 12]",
-        [cite_start]"Econômico (Raiz)": "3 Ovos cozidos/mexidos + 1 Banana Prata [cite: 10] + Aveia (Sem Glúten)",
+        "Premium (Nutri)": "Whey Protein (17g) + Morangos (200g) + Linhaça/Chia",
+        "Econômico (Raiz)": "3 Ovos cozidos/mexidos + 1 Banana Prata + Aveia (Sem Glúten)",
         "Dica": "O ovo é a fonte de proteína mais barata e biodisponível para substituir o Whey."
     },
     "Almoço": {
-        [cite_start]"Premium (Nutri)": "Salmão (120g) [cite: 36] + [cite_start]Espinafre [cite: 32] + [cite_start]Quinoa/Mandioquinha [cite: 42, 43]",
-        [cite_start]"Econômico (Raiz)": "Sardinha (lata) [cite: 37] [cite_start]ou Peito de Frango + Couve refogada [cite: 33] + Arroz com Feijão",
+        "Premium (Nutri)": "Salmão (120g) + Espinafre + Quinoa/Mandioquinha",
+        "Econômico (Raiz)": "Sardinha (lata) ou Peito de Frango + Couve refogada + Arroz com Feijão",
         "Dica": "Arroz e Feijão é a combinação perfeita sem glúten. Sardinha em lata substitui o Salmão no Ômega 3."
     },
     "Lanche da Tarde": {
-        [cite_start]"Premium (Nutri)": "Frutas Vermelhas/Pera [cite: 51] + [cite_start]Castanha do Pará [cite: 52]",
-        [cite_start]"Econômico (Raiz)": "1 Maçã ou Banana + Pasta de Amendoim (1 colher) [cite: 54] ou Ovo cozido",
+        "Premium (Nutri)": "Frutas Vermelhas/Pera + Castanha do Pará",
+        "Econômico (Raiz)": "1 Maçã ou Banana + Pasta de Amendoim (1 colher) ou Ovo cozido",
         "Dica": "Pasta de amendoim rende muito mais que castanhas nobres."
     },
     "Jantar": {
-        [cite_start]"Premium (Nutri)": "Filé Mignon/Contra-filé magro [cite: 63, 64] + [cite_start]Brócolis [cite: 59] + [cite_start]Batata Inglesa [cite: 66]",
-        [cite_start]"Econômico (Raiz)": "Patinho Moído ou Fígado + Repolho refogado + Batata Doce [cite: 66]",
-        [cite_start]"Dica": "Patinho moído [cite: 65] é versátil e muito mais barato que cortes nobres."
+        "Premium (Nutri)": "Filé Mignon/Contra-filé magro + Brócolis + Batata Inglesa",
+        "Econômico (Raiz)": "Patinho Moído ou Fígado + Repolho refogado + Batata Doce",
+        "Dica": "Patinho moído é versátil e muito mais barato que cortes nobres."
     },
     "Ceia": {
-        [cite_start]"Premium (Nutri)": "Iogurte Proteico [cite: 76] + [cite_start]Mel [cite: 79] + [cite_start]Torrada sem glúten [cite: 73]",
-        [cite_start]"Econômico (Raiz)": "Pipoca de panela (sem óleo/pouco azeite) [cite: 71] + 1 fatia de Queijo Minas",
-        [cite_start]"Dica": "Pipoca [cite: 71] é um carboidrato complexo barato e excelente para saciedade noturna."
+        "Premium (Nutri)": "Iogurte Proteico + Mel + Torrada sem glúten",
+        "Econômico (Raiz)": "Pipoca de panela (sem óleo/pouco azeite) + 1 fatia de Queijo Minas",
+        "Dica": "Pipoca é um carboidrato complexo barato e excelente para saciedade noturna."
     }
 }
 
@@ -80,6 +80,7 @@ def check_password():
     st.title("🦁 Leo Tracker Pro")
     password = st.text_input("Senha de Acesso:", type="password")
     if st.button("Entrar"):
+        # Em produção, use st.secrets["PASSWORD"]
         if password == st.secrets.get("PASSWORD", "admin"): 
             st.session_state["password_correct"] = True
             st.rerun()
@@ -102,11 +103,10 @@ def executar_sql(sql, params=None, is_select=False):
             conn = get_connection_raw()
             
         with conn.cursor() as cur:
-            # Força o timezone da SESSÃO para BRT antes de qualquer coisa
+            # Força o timezone da SESSÃO para BRT
             cur.execute("SET timezone TO 'America/Sao_Paulo';")
             
             if is_select:
-                # Usamos pandas para ler, pois ele facilita tratamento de datas
                 df = pd.read_sql(sql, conn, params=params)
                 return df
             else:
@@ -197,7 +197,6 @@ with tab_prato:
             
             if col_btn.button("✅ Registrar", use_container_width=True):
                 fator = float(qtd) / 100.0
-                # Aqui garantimos que enviamos a DATA BRASILEIRA
                 executar_sql(
                     """INSERT INTO public.consumo 
                        (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) 
