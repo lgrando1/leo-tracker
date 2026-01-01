@@ -5,9 +5,15 @@ from psycopg2 import OperationalError, InterfaceError
 from datetime import datetime, timedelta
 import json
 import os
+import pytz  # Necessário para corrigir o fuso horário
 
 # 1. CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="Leo Tracker Pro", page_icon="🦁", layout="wide")
+
+# --- FUNÇÃO DE TEMPO (BRASÍLIA) ---
+def get_now_br():
+    """Retorna o datetime atual no fuso de Brasília."""
+    return datetime.now(pytz.timezone('America/Sao_Paulo'))
 
 # --- DADOS NUTRICIONAIS ---
 nutrition_data = {
@@ -25,7 +31,7 @@ nutrition_data = {
         "farinhas_espessantes": [
             "Farinha de Amêndoas ou Castanhas (baixo carboidrato)",
             "Farinha de Arroz (textura neutra)",
-            "Polvilho Doce/Azedo ou Tapioca (para liga e elasticidade)",
+            "Polvilho Docce/Azedo ou Tapioca (para liga e elasticidade)",
             "Farinha de Aveia (certificada Gluten-Free)"
         ],
         "fontes_triptofano_gaba": [
@@ -86,7 +92,10 @@ def executar_sql(sql, params=None, is_select=False):
             conn = get_connection_raw()
             
         with conn.cursor() as cur:
+            # Garante esquema public e fuso horário correto na sessão do banco
             cur.execute("SET search_path TO public")
+            cur.execute("SET timezone TO 'America/Sao_Paulo'")
+            
             if is_select:
                 if params: return pd.read_sql(sql, conn, params=params)
                 else: return pd.read_sql(sql, conn)
@@ -101,6 +110,7 @@ def executar_sql(sql, params=None, is_select=False):
             conn = get_connection_raw()
             with conn.cursor() as cur:
                 cur.execute("SET search_path TO public")
+                cur.execute("SET timezone TO 'America/Sao_Paulo'")
                 if is_select:
                     if params: return pd.read_sql(sql, conn, params=params)
                     else: return pd.read_sql(sql, conn)
@@ -178,7 +188,9 @@ tab_prato, tab_ia, tab_plano, tab_hist, tab_peso, tab_admin = st.tabs(["🍽️ 
 with tab_prato:
     st.subheader("Registo Rápido (Base TACO)")
     
-    data_hoje = datetime.now().date()
+    agora_br = get_now_br()
+    data_hoje = agora_br.date()
+    
     df_hoje = executar_sql("SELECT * FROM public.consumo WHERE data = %s", (data_hoje,), is_select=True)
     
     kcal_hoje = float(df_hoje['kcal'].sum()) if not df_hoje.empty else 0.0
@@ -211,7 +223,7 @@ with tab_prato:
                 sucesso = executar_sql("""
                     INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) 
                     VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-                """, (datetime.now().date(), str(escolha), float(qtd), k, p, c, g, "Não informado"))
+                """, (get_now_br().date(), str(escolha), float(qtd), k, p, c, g, "Não informado"))
                 
                 if sucesso:
                     st.success("Registrado!")
@@ -233,17 +245,16 @@ with tab_ia:
                     executar_sql("""
                         INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) 
                         VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-                    """, (datetime.now().date(), item['alimento'], 1.0, float(item['kcal']), float(item['p']), float(item['c']), float(item['g']), gluten_status))
+                    """, (get_now_br().date(), item['alimento'], 1.0, float(item['kcal']), float(item['p']), float(item['c']), float(item['g']), gluten_status))
                 st.success("Importação concluída!")
                 st.rerun()
             except Exception as e:
                 st.error(f"Erro no JSON: {e}")
 
-# --- ABA 3: PLANO (ATUALIZADA COM ESTRATÉGIA PREMIUM/ECONÔMICA) ---
+# --- ABA 3: PLANO ---
 with tab_plano:
     st.header("📋 Plano Alimentar & Estratégia")
     
-    # Contexto Visual
     c_info, c_warn = st.columns(2)
     with c_info:
         st.info(f"**Foco da Dieta:**\n{nutrition_data['contexto_nutricional']['dieta']}")
@@ -268,125 +279,46 @@ with tab_plano:
 
     st.divider()
 
-    # --- NOVA SEÇÃO: ESTRATÉGIA PREMIUM VS ECONÔMICA ---
     st.subheader("📋 Estratégia Nutricional: Premium vs. Econômica")
-    st.markdown("Use esta aba para adaptar o plano ao seu orçamento sem perder os macros.")
-
-    # --- CAFÉ DA MANHÃ ---
+    
     with st.expander("☕ Café da Manhã (Shake/Sólido)", expanded=True):
         c1, c2 = st.columns(2)
         with c1:
             st.info("💎 **Original (PDF)**")
-            st.markdown("""
-            * **Prot:** Whey Protein (17g)
-            * **Fruta:** Morango (200g) ou Mamão Papaia (135g)
-            * **Gordura/Fibra:** Chia (30g) ou Linhaça Dourada (20g)
-            * **Líquido:** Leite Desnatado ou Água
-            """)
+            st.markdown("* **Prot:** Whey Protein (17g)\n* **Fruta:** Morango (200g)\n* **Gordura:** Chia/Linhaça\n* **Líquido:** Leite/Água")
         with c2:
             st.success("💰 **Opção Econômica**")
-            st.markdown("""
-            * **Prot:** 3 Ovos Cozidos/Mexidos (R$ 0,50/unid)
-            * **Fruta:** Banana Prata ou Maçã Nacional (Preço/kg menor)
-            * **Gordura/Fibra:** Farelo de Aveia (Rico em fibra e barato)
-            * **Líquido:** Água ou Chá (Zero custo)
-            """)
+            st.markdown("* **Prot:** 3 Ovos\n* **Fruta:** Banana/Maçã\n* **Gordura:** Farelo de Aveia\n* **Líquido:** Água/Chá")
 
-    # --- ALMOÇO ---
     with st.expander("🥗 Almoço (Refeição Principal)"):
         c1, c2 = st.columns(2)
         with c1:
             st.info("💎 **Original (PDF)**")
-            st.markdown("""
-            * **Prot:** Salmão (120g) ou Atum Fresco
-            * **Carbo:** Quinoa (160g) ou Mandioquinha (140g)
-            * **Vegetal:** Espinafre ou Bertalha
-            * **Leguminosa:** Ervilha em vagem ou Lentilha
-            """)
+            st.markdown("* **Prot:** Salmão/Atum\n* **Carbo:** Quinoa/Mandioquinha\n* **Vegetal:** Espinafre\n* **Legume:** Lentilha")
         with c2:
             st.success("💰 **Opção Econômica**")
-            st.markdown("""
-            * **Prot:** Sardinha em Lata (lavada) ou Sobrecoxa de Frango (S/ Pele)
-            * **Carbo:** Arroz Branco + Feijão Carioca (O clássico imbatível)
-            * **Vegetal:** Repolho refogado ou Abobrinha (Rende muito)
-            * **Leguminosa:** O próprio feijão do dia a dia já conta!
-            """)
+            st.markdown("* **Prot:** Sardinha/Frango\n* **Carbo:** Arroz e Feijão\n* **Vegetal:** Repolho/Abobrinha\n* **Legume:** Feijão comum")
 
-    # --- LANCHE DA TARDE ---
-    with st.expander("🍎 Lanche da Tarde"):
-        c1, c2 = st.columns(2)
-        with c1:
-            st.info("💎 **Original (PDF)**")
-            st.markdown("""
-            * **Fruta:** Pera Willians ou Morango
-            * **Gordura:** Castanha do Pará (4 un) ou Macadâmia
-            """)
-        with c2:
-            st.success("💰 **Opção Econômica**")
-            st.markdown("""
-            * **Fruta:** Melancia ou Laranja (Frutas da estação)
-            * **Gordura:** Amendoim Torrado (Sem sal/açúcar) - Rico em gordura boa e muito barato.
-            """)
-
-    # --- JANTAR ---
-    with st.expander("Moon Jantar (Low Carb/Leve)"):
-        c1, c2 = st.columns(2)
-        with c1:
-            st.info("💎 **Original (PDF)**")
-            st.markdown("""
-            * **Prot:** Filé Mignon ou Alcatra (100g)
-            * **Vegetal:** Shimeji, Shitake ou Brócolis
-            * **Carbo:** Batata Sauté ou Inhame
-            """)
-        with c2:
-            st.success("💰 **Opção Econômica**")
-            st.markdown("""
-            * **Prot:** Patinho Moído, Fígado Bovino (Multivitamínico natural) ou Omelete.
-            * **Vegetal:** Cenoura ralada ou Vagem refogada.
-            * **Carbo:** Batata Doce cozida ou Aipim (Mandioca).
-            """)
-
-    # --- CEIA ---
-    with st.expander("🌙 Ceia (Antes de dormir)"):
-        c1, c2 = st.columns(2)
-        with c1:
-            st.info("💎 **Original (PDF)**")
-            st.markdown("""
-            * **Base:** Iogurte Proteico ou Creme de Ricota
-            * **Extra:** Pipoca sem óleo (19g) ou Bolacha de Arroz
-            """)
-        with c2:
-            st.success("💰 **Opção Econômica**")
-            st.markdown("""
-            * **Base:** Iogurte Natural (faça em casa com leite + 1 potinho) ou Leite morno.
-            * **Extra:** Pipoca de panela (feita com o mínimo de azeite/água).
-            """)
-
-    st.markdown("---")
-    st.caption("🦁 **Dica do Leo:** A consistência bate a perfeição. Se não tiver salmão, vá de sardinha, mas não deixe de bater a meta de proteína!")
-    
     st.divider()
 
     st.subheader("🤖 Prompts para Copiar")
-    st.markdown("Use estes prompts no ChatGPT/Claude para adaptar receitas ou analisar rótulos.")
-    
-    with st.expander("1. Prompt: Encontrar Substituição em Receitas"):
+    with st.expander("1. Prompt: Encontrar Substituição"):
         st.code(nutrition_data['prompts_ia']['encontrar_substituicao'], language="text")
-        
-    with st.expander("2. Prompt: Avaliar Segurança do Alimento"):
+    with st.expander("2. Prompt: Avaliar Segurança"):
         st.code(nutrition_data['prompts_ia']['avaliar_alimento'], language="text")
 
 # --- ABA 4: HISTÓRICO ---
 with tab_hist:
     st.subheader("Últimos 7 dias")
-    data_limite = (datetime.now() - timedelta(days=7)).date()
+    agora_br = get_now_br()
+    data_limite = (agora_br - timedelta(days=7)).date()
     df_hist = executar_sql("SELECT * FROM public.consumo WHERE data >= %s ORDER BY data DESC, id DESC", (data_limite,), is_select=True)
     
     if not df_hist.empty:
         for i, row in df_hist.iterrows():
             c1, c2, c3 = st.columns([3, 2, 0.5])
-            c1.write(f"**{row['alimento']}**")
             gl_tag = "🚫" if row['gluten'] == "Contém" else ""
+            c1.write(f"**{row['alimento']}**")
             c2.write(f"{int(row['kcal'])} kcal {gl_tag}")
             if c3.button("🗑️", key=f"d_{row['id']}"):
                 executar_sql("DELETE FROM public.consumo WHERE id = %s", (row['id'],))
@@ -398,7 +330,7 @@ with tab_peso:
     with c1:
         p_val = st.number_input("Peso (kg):", 40.0, 200.0, 145.0)
         if st.button("Gravar Peso"):
-            executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", (datetime.now().date(), float(p_val)))
+            executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", (get_now_br().date(), float(p_val)))
             st.rerun()
     with c2:
         df_p = executar_sql("SELECT * FROM public.peso ORDER BY data DESC", is_select=True)
