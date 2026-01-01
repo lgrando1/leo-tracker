@@ -329,18 +329,34 @@ with tab_admin:
             st.success("Feito!")
             st.rerun()
 
-    st.subheader("🛠️ Ferramentas de Dados")
-    if st.button("Corrigir Datas (Fuso Horário)"):
-        # Subtrai 1 dia de registros feitos entre 21h e 23:59h que "pularam" para o dia seguinte
-        sql_fix = """
-            UPDATE public.consumo 
-            SET data = data - INTERVAL '1 day' 
-            WHERE data = CURRENT_DATE AND EXTRACT(HOUR FROM CURRENT_TIMESTAMP) < 3;
-        """
-        if executar_sql(sql_fix):
-            st.success("Registros corrigidos com sucesso!")
+st.subheader("🛠️ Ferramentas de Dados")
+    
+    col1, col2 = st.columns(2)
 
-        if st.button("Corrigir Datas Futuras"):
-        sql_fix = "UPDATE public.consumo SET data = data - 1 WHERE data > CURRENT_DATE"
-        executar_sql(sql_fix)
-        st.success("Histórico corrigido!")
+    with col1:
+        if st.button("Corrigir Lançamentos Noturnos"):
+            # Subtrai 1 dia de registros que caíram no dia seguinte (entre 21h e 00h)
+            # Filtra registros que tenham o ID maior que os anteriores para evitar duplicar correção
+            sql_fix_noite = """
+                UPDATE public.consumo 
+                SET data = data - INTERVAL '1 day' 
+                WHERE data = CURRENT_DATE 
+                AND (SELECT EXTRACT(HOUR FROM (CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo'))) < 3;
+            """
+            if executar_sql(sql_fix_noite):
+                st.success("Registros noturnos ajustados!")
+                st.rerun()
+
+    with col2:
+        if st.button("Limpar Datas Futuras"):
+            # Move qualquer data maior que HOJE para HOJE (ajuste de segurança)
+            sql_fix_futuro = "UPDATE public.consumo SET data = CURRENT_DATE WHERE data > CURRENT_DATE"
+            if executar_sql(sql_fix_futuro):
+                st.success("Histórico futuro corrigido!")
+                st.rerun()
+                
+    if st.button("Corrigir Tabela de Peso"):
+        sql_fix_peso = "UPDATE public.peso SET data = CURRENT_DATE WHERE data > CURRENT_DATE"
+        if executar_sql(sql_fix_peso):
+            st.success("Datas da tabela de peso corrigidas!")
+            st.rerun()
