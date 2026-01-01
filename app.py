@@ -340,7 +340,7 @@ with tab_admin:
         if executar_sql(sql_fix):
             st.success("Registros corrigidos com sucesso!")
 
-    if st.button("Corrigir Datas Futuras"):
-    sql_fix = "UPDATE public.consumo SET data = data - 1 WHERE data > CURRENT_DATE"
-    executar_sql(sql_fix)
-    st.success("Histórico corrigido!")
+        if st.button("Corrigir Datas Futuras"):
+        sql_fix = "UPDATE public.consumo SET data = data - 1 WHERE data > CURRENT_DATE"
+        executar_sql(sql_fix)
+        st.success("Histórico corrigido!")
