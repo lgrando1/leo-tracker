@@ -92,39 +92,23 @@ def executar_sql(sql, params=None, is_select=False):
             conn = get_connection_raw()
             
         with conn.cursor() as cur:
-            # Garante esquema public e fuso horário correto na sessão do banco
             cur.execute("SET search_path TO public")
+            # Garante que a sessão do banco use o fuso de Brasília
             cur.execute("SET timezone TO 'America/Sao_Paulo'")
             
             if is_select:
-                if params: return pd.read_sql(sql, conn, params=params)
-                else: return pd.read_sql(sql, conn)
+                df = pd.read_sql(sql, conn, params=params)
+                # Remove fuso horário de qualquer coluna datetime para evitar conversões do Pandas
+                for col in df.select_dtypes(include=['datetimetz', 'datetime']).columns:
+                    df[col] = df[col].dt.tz_localize(None)
+                return df
             else:
                 cur.execute(sql, params)
                 conn.commit()
                 return True
-
-    except (InterfaceError, OperationalError) as e:
-        st.cache_resource.clear()
-        try:
-            conn = get_connection_raw()
-            with conn.cursor() as cur:
-                cur.execute("SET search_path TO public")
-                cur.execute("SET timezone TO 'America/Sao_Paulo'")
-                if is_select:
-                    if params: return pd.read_sql(sql, conn, params=params)
-                    else: return pd.read_sql(sql, conn)
-                else:
-                    cur.execute(sql, params)
-                    conn.commit()
-                    return True
-        except Exception as e2:
-            st.error(f"Erro fatal de conexão: {e2}")
-            return pd.DataFrame() if is_select else False
-
     except Exception as e:
         if conn: conn.rollback()
-        st.error(f"Erro na operação: {e}")
+        st.error(f"Erro: {e}")
         return pd.DataFrame() if is_select else False
 
 # 3. METAS
@@ -355,3 +339,8 @@ with tab_admin:
         """
         if executar_sql(sql_fix):
             st.success("Registros corrigidos com sucesso!")
+
+    if st.button("Corrigir Datas Futuras"):
+    sql_fix = "UPDATE public.consumo SET data = data - 1 WHERE data > CURRENT_DATE"
+    executar_sql(sql_fix)
+    st.success("Histórico corrigido!")
