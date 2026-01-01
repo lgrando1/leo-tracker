@@ -344,3 +344,14 @@ with tab_admin:
         if carregar_csv_completo():
             st.success("Feito!")
             st.rerun()
+
+    st.subheader("🛠️ Ferramentas de Dados")
+    if st.button("Corrigir Datas (Fuso Horário)"):
+        # Subtrai 1 dia de registros feitos entre 21h e 23:59h que "pularam" para o dia seguinte
+        sql_fix = """
+            UPDATE public.consumo 
+            SET data = data - INTERVAL '1 day' 
+            WHERE data = CURRENT_DATE AND EXTRACT(HOUR FROM CURRENT_TIMESTAMP) < 3;
+        """
+        if executar_sql(sql_fix):
+            st.success("Registros corrigidos com sucesso!")
