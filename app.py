@@ -207,34 +207,37 @@ with tab_peso:
 with tab_admin:
     st.subheader("⚙️ Configurações de Administrador")
     if st.button("Sincronizar CSV de Alimentos"):
-        # Chamada da função de carga (alimentos.csv)
-        st.info("Iniciando sincronização...")
+        if carregar_csv_completo():
+            st.success("Base de dados sincronizada!")
+            st.rerun()
 
     st.divider()
-    st.subheader("🛠️ Ferramentas de Dados & Fuso Horário")
+    st.subheader("🛠️ Ferramentas de Dados (Correção Forçada)")
     
+    # Pegamos a data real de Brasília via Python para mandar ao SQL
+    hoje_br = get_now_br().date()
+    amanha_br = hoje_br + timedelta(days=1)
+
     col1, col2 = st.columns(2)
+    
     with col1:
-        if st.button("Corrigir Lançamentos Noturnos"):
-            sql_fix_noite = """
-                UPDATE public.consumo 
-                SET data = data - INTERVAL '1 day' 
-                WHERE data = CURRENT_DATE 
-                AND (SELECT EXTRACT(HOUR FROM (CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AT TIME ZONE 'America/Sao_Paulo'))) < 3;
-            """
-            if executar_sql(sql_fix_noite):
-                st.success("Registros noturnos ajustados!")
+        if st.button("Forçar: Tudo de Amanhã para Hoje"):
+            # Move registros que estão com data de amanhã para a data de hoje real
+            sql_fix = "UPDATE public.consumo SET data = %s WHERE data = %s"
+            if executar_sql(sql_fix, (hoje_br, amanha_br)):
+                st.success(f"Registros de {amanha_br} movidos para {hoje_br}!")
                 st.rerun()
 
     with col2:
-        if st.button("Limpar Datas Futuras"):
-            sql_fix_futuro = "UPDATE public.consumo SET data = CURRENT_DATE WHERE data > CURRENT_DATE"
-            if executar_sql(sql_fix_futuro):
-                st.success("Histórico futuro corrigido!")
+        if st.button("Corrigir Peso (Amanhã -> Hoje)"):
+            sql_fix_p = "UPDATE public.peso SET data = %s WHERE data = %s"
+            if executar_sql(sql_fix_p, (hoje_br, amanha_br)):
+                st.success("Tabela de peso corrigida!")
                 st.rerun()
                 
-    if st.button("Corrigir Tabela de Peso (Futuro)"):
-        sql_fix_peso = "UPDATE public.peso SET data = CURRENT_DATE WHERE data > CURRENT_DATE"
-        if executar_sql(sql_fix_peso):
-            st.success("Datas da tabela de peso corrigidas!")
-            st.rerun()
+    if st.button("Limpar QUALQUER data futura (Geral)"):
+        # Qualquer data maior que hoje vira hoje
+        executar_sql("UPDATE public.consumo SET data = %s WHERE data > %s", (hoje_br, hoje_br))
+        executar_sql("UPDATE public.peso SET data = %s WHERE data > %s", (hoje_br, hoje_br))
+        st.warning("Todas as datas futuras foram trazidas para hoje.")
+        st.rerun()
