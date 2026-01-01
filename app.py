@@ -14,32 +14,60 @@ def get_now_br():
     """Retorna o datetime atual no fuso de Brasília."""
     return datetime.now(pytz.timezone('America/Sao_Paulo'))
 
+# --- DADOS NUTRICIONAIS E PROMPTS (RESTAURADO) ---
+nutrition_data = {
+    "contexto_nutricional": {
+        "dieta": "Restrição ao Glúten (foco auxiliar no controle da ansiedade).",
+        "suplementacao_ativos": ["L-teanina", "Griffonia simplicifolia (5-HTP)", "L-triptofano", "GABA"],
+        "atencao_farmacologica": "Considerar interação com o uso contínuo de Bupropiona."
+    },
+    "prompts_ia": {
+        "encontrar_substituicao": (
+            "Estou seguindo uma dieta estrita **sem glúten** e focada em alimentos anti-inflamatórios "
+            "para controle de ansiedade. Quero fazer [NOME DA RECEITA/PRATO], mas a receita original leva "
+            "[INGREDIENTE COM GLÚTEN, EX: FARINHA DE TRIGO].\n\n"
+            "Por favor, liste 3 opções de substituição que funcionem quimicamente nessa receita (mantendo a textura) "
+            "e que sejam seguras para minha dieta. Explique como ajustar a quantidade para cada opção."
+        ),
+        "avaliar_alimento": (
+            "Atue como um nutricionista focado em saúde mental e dietas restritivas.\n\n"
+            "**Meu Perfil:** Dieta sem glúten, uso de Bupropiona e suplementação de precursores de "
+            "serotonina/GABA (L-teanina, Triptofano).\n\n"
+            "**O Alimento:** [COLAR LISTA DE INGREDIENTES OU NOME DO PRATO AQUI]\n\n"
+            "**Tarefa:**\n"
+            "1. Este alimento contém glúten ou traços perigosos?\n"
+            "2. Existe algum ingrediente que possa interagir negativamente com minha medicação ou piorar a ansiedade?\n"
+            "3. Dê uma nota de 0 a 10 para o quão seguro este alimento é para meu perfil."
+        )
+    }
+}
+
 # --- DADOS DO PLANO ALIMENTAR (PDF + VERSÃO ECONÔMICA) ---
 PLANO_ALIMENTAR = {
     "Café da Manhã": {
-        "Premium (Nutri)": "Whey Protein (17g) + Morangos (200g) + Linhaça/Chia",
-        "Econômico (Raiz)": "3 Ovos cozidos/mexidos + 1 Banana Prata + Aveia (Sem Glúten)",
+        [cite_start]"Premium (Nutri)": "Whey Protein (17g) [cite: 18] + [cite_start]Morangos (200g) [cite: 7] + [cite_start]Linhaça/Chia [cite: 11, 12]",
+        [cite_start]"Econômico (Raiz)": "3 Ovos cozidos/mexidos + 1 Banana Prata [cite: 10] + Aveia (Sem Glúten)",
         "Dica": "O ovo é a fonte de proteína mais barata e biodisponível para substituir o Whey."
     },
     "Almoço": {
-        "Premium (Nutri)": "Salmão/Atum (120g) + Espinafre + Quinoa/Mandioquinha",
-        "Econômico (Raiz)": "Sardinha (lata) ou Peito de Frango + Couve refogada + Arroz com Feijão",
+        [cite_start]"Premium (Nutri)": "Salmão (120g) [cite: 36] + [cite_start]Espinafre [cite: 32] + [cite_start]Quinoa/Mandioquinha [cite: 42, 43]",
+        [cite_start]"Econômico (Raiz)": "Sardinha (lata) [cite: 37] [cite_start]ou Peito de Frango + Couve refogada [cite: 33] + Arroz com Feijão",
         "Dica": "Arroz e Feijão é a combinação perfeita sem glúten. Sardinha em lata substitui o Salmão no Ômega 3."
     },
     "Lanche da Tarde": {
-        "Premium (Nutri)": "Frutas Vermelhas/Pera + Castanha do Pará/Macadâmia",
-        "Econômico (Raiz)": "1 Maçã ou Banana + Pasta de Amendoim (1 colher) ou Ovo cozido",
+        [cite_start]"Premium (Nutri)": "Frutas Vermelhas/Pera [cite: 51] + [cite_start]Castanha do Pará [cite: 52]",
+        [cite_start]"Econômico (Raiz)": "1 Maçã ou Banana + Pasta de Amendoim (1 colher) [cite: 54] ou Ovo cozido",
         "Dica": "Pasta de amendoim rende muito mais que castanhas nobres."
     },
     "Jantar": {
-        "Premium (Nutri)": "Filé Mignon/Contra-filé magro + Brócolis + Batata Inglesa",
-        "Econômico (Raiz)": "Patinho Moído ou Fígado (rico em ferro) + Repolho refogado + Batata Doce",
-        "Dica": "Patinho moído é versátil e muito mais barato que cortes nobres."
+        [cite_start]"Premium (Nutri)": "Filé Mignon/Contra-filé magro [cite: 63, 64] + [cite_start]Brócolis [cite: 59] + [cite_start]Batata Inglesa [cite: 66]",
+        [cite_start]"Econômico (Raiz)": "Patinho Moído ou Fígado + Repolho refogado + Batata Doce [cite: 66]",
+        [cite_start]"Dica": "Patinho moído [cite: 65] é versátil e muito mais barato que cortes nobres."
     },
     "Ceia": {
-        "Premium (Nutri)": "Iogurte Proteico + Mel + Torrada sem glúten",
-        "Econômico (Raiz)": "Pipoca de panela (feita com água/pouco azeite) + 1 fatia de Queijo Minas",
-        "Dica": "Pipoca é um carboidrato complexo barato e excelente para saciedade noturna."
+        [cite_start]"Premium (Nutri)": "Iogurte Proteico [cite: 76] + [cite_start]Mel [cite: 79] + [cite_start]Torrada sem glúten [cite: 73]",
+        [cite_start]"Econômico (Raiz)": "Pipoca de panela (sem óleo/pouco azeite) [cite: 71] + 1 fatia de Queijo Minas",
+        [cite_start]"Dica": "Pipoca [cite: 71] é um carboidrato complexo barato e excelente para saciedade noturna."
     }
 }
 
@@ -52,8 +80,6 @@ def check_password():
     st.title("🦁 Leo Tracker Pro")
     password = st.text_input("Senha de Acesso:", type="password")
     if st.button("Entrar"):
-        # Em produção, use st.secrets["PASSWORD"]
-        # Para teste local, pode validar direto se não tiver secrets configurado
         if password == st.secrets.get("PASSWORD", "admin"): 
             st.session_state["password_correct"] = True
             st.rerun()
@@ -71,20 +97,17 @@ def executar_sql(sql, params=None, is_select=False):
     conn = None
     try:
         conn = get_connection_raw()
-        # Se a conexão caiu, limpa cache e reconecta
         if conn.closed != 0:
             st.cache_resource.clear()
             conn = get_connection_raw()
             
         with conn.cursor() as cur:
-            # Força o timezone da SESSÃO para garantir que NOW() ou datas automáticas fiquem certas
+            # Força o timezone da SESSÃO para BRT antes de qualquer coisa
             cur.execute("SET timezone TO 'America/Sao_Paulo';")
             
             if is_select:
-                cur.execute(sql, params)
-                colunas = [desc[0] for desc in cur.description]
-                dados = cur.fetchall()
-                df = pd.DataFrame(dados, columns=colunas)
+                # Usamos pandas para ler, pois ele facilita tratamento de datas
+                df = pd.read_sql(sql, conn, params=params)
                 return df
             else:
                 cur.execute(sql, params)
@@ -97,11 +120,10 @@ def executar_sql(sql, params=None, is_select=False):
 
 # 3. CONSTANTES E METAS
 META_KCAL = 1600
-META_PROTEINA = 150 # Ajustado conforme seu código anterior
+META_PROTEINA = 150 
 
 # 4. INICIALIZAÇÃO DAS TABELAS
 def inicializar_banco():
-    # Tabelas essenciais
     executar_sql("""
         CREATE TABLE IF NOT EXISTS public.consumo (
             id SERIAL PRIMARY KEY, 
@@ -122,7 +144,6 @@ def inicializar_banco():
             peso_kg REAL
         );
     """)
-    # Tabela TACO simplificada para exemplo (se não existir)
     executar_sql("""
         CREATE TABLE IF NOT EXISTS public.tabela_taco (
             id SERIAL PRIMARY KEY, 
@@ -140,13 +161,12 @@ inicializar_banco()
 st.title("🦁 Leo Tracker Pro")
 st.markdown(f"**Data Atual (BR):** {get_now_br().strftime('%d/%m/%Y %H:%M')}")
 
-tab_prato, tab_ia, tab_plano, tab_hist, tab_peso = st.tabs(["🍽️ Registrar", "🤖 Importar IA", "📝 Plano Econômico", "📊 Histórico & Gráficos", "⚖️ Peso"])
+tab_prato, tab_ia, tab_plano, tab_hist, tab_peso, tab_prompts = st.tabs(["🍽️ Registrar", "🤖 Importar IA", "📝 Plano", "📊 Histórico", "⚖️ Peso", "💡 Prompts IA"])
 
 # --- ABA 1: REGISTRO MANUAL ---
 with tab_prato:
     st.subheader("Resumo do Dia")
     
-    # Busca dados de HOJE
     data_hoje = get_now_br().date()
     df_hoje = executar_sql("SELECT * FROM public.consumo WHERE data = %s", (data_hoje,), is_select=True)
     
@@ -166,7 +186,6 @@ with tab_prato:
     termo = st.text_input("🔍 Digite o nome do alimento:", placeholder="Ex: Frango, Arroz, Ovo...")
     
     if termo:
-        # Busca no banco (Limitando a 20 para não poluir)
         df_res = executar_sql("SELECT * FROM public.tabela_taco WHERE alimento ILIKE %s LIMIT 20", (f'%{termo}%',), is_select=True)
         
         if not df_res.empty:
@@ -178,12 +197,13 @@ with tab_prato:
             
             if col_btn.button("✅ Registrar", use_container_width=True):
                 fator = float(qtd) / 100.0
+                # Aqui garantimos que enviamos a DATA BRASILEIRA
                 executar_sql(
                     """INSERT INTO public.consumo 
                        (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) 
                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""", 
                     (
-                        data_hoje, # Envia a data calculada pelo Python (fuso correto)
+                        data_hoje, 
                         str(escolha), 
                         float(qtd), 
                         float(round(dados['kcal']*fator)), 
@@ -197,8 +217,7 @@ with tab_prato:
                 st.rerun()
         else:
             st.warning("Nenhum alimento encontrado na base TACO com esse nome.")
-            # Opção de registro manual livre se não achar no banco
-            with st.expander("Registrar Manualmente (Se não achou acima)"):
+            with st.expander("Registrar Manualmente"):
                 nm_man = st.text_input("Nome do Alimento:")
                 kc_man = st.number_input("Kcal:", 0, 2000)
                 pt_man = st.number_input("Proteína (g):", 0, 200)
@@ -209,15 +228,13 @@ with tab_prato:
 
 # --- ABA 2: IMPORTAR JSON (IA) ---
 with tab_ia:
-    st.info("Cole aqui o JSON gerado pelo Gemini na nossa outra conversa de análise de fotos.")
+    st.info("Cole aqui o JSON gerado pelo Gemini na análise de fotos.")
     json_input = st.text_area("JSON de Entrada:", height=150)
     if st.button("Processar JSON da IA"):
         if json_input:
             try:
                 limpo = json_input.replace('```json', '').replace('```', '').strip()
                 lista_alimentos = json.loads(limpo)
-                
-                # Se for um unico objeto, transforma em lista
                 if isinstance(lista_alimentos, dict): lista_alimentos = [lista_alimentos]
                 
                 count = 0
@@ -242,56 +259,48 @@ with tab_ia:
                 st.rerun()
             except Exception as e: st.error(f"Erro ao ler JSON: {e}")
 
-# --- ABA 3: PLANO ALIMENTAR (ECONÔMICO) ---
+# --- ABA 3: PLANO ALIMENTAR ---
 with tab_plano:
-    st.header("📋 Comparativo: Plano Nutri vs. Econômico")
-    st.markdown("Foco: **Sem Glúten** | Controle de Ansiedade | Hipertrofia")
+    st.header("📋 Plano: Nutri vs. Econômico")
+    st.info(f"**Contexto:** {nutrition_data['contexto_nutricional']['dieta']}")
     
     for refeicao, dados in PLANO_ALIMENTAR.items():
         with st.expander(f"{refeicao}", expanded=True):
             col_a, col_b = st.columns(2)
             with col_a:
-                st.markdown(f"💎 **Ideal (Marcela Mello)**\n\n{dados['Premium (Nutri)']}")
+                st.markdown(f"💎 **Ideal**\n\n{dados['Premium (Nutri)']}")
             with col_b:
-                st.markdown(f"💰 **Econômico (Raiz)**\n\n{dados['Econômico (Raiz)']}")
+                st.markdown(f"💰 **Econômico**\n\n{dados['Econômico (Raiz)']}")
             st.caption(f"💡 *{dados['Dica']}*")
 
 # --- ABA 4: HISTÓRICO E GRÁFICOS ---
 with tab_hist:
-    st.subheader("📊 Evolução Calórica (7 dias)")
+    st.subheader("📊 Evolução (Últimos 7 dias)")
     
-    # Query Agrupada por Data para o Gráfico
-    sql_chart = """
-        SELECT data, SUM(kcal) as total_kcal 
-        FROM public.consumo 
-        WHERE data >= %s 
-        GROUP BY data 
-        ORDER BY data ASC
-    """
     dt_inicio = (get_now_br() - timedelta(days=7)).date()
+    
+    # Gráfico
+    sql_chart = "SELECT data, SUM(kcal) as total_kcal FROM public.consumo WHERE data >= %s GROUP BY data ORDER BY data ASC"
     df_chart = executar_sql(sql_chart, (dt_inicio,), is_select=True)
     
     if not df_chart.empty:
-        # Garante que a data seja string para o gráfico não bugar o fuso
+        # Formatação forçada da data para String DD/MM para o gráfico não errar o fuso
         df_chart['data_str'] = pd.to_datetime(df_chart['data']).dt.strftime('%d/%m')
-        st.bar_chart(df_chart, x='data_str', y='total_kcal', color="#4CAF50") # Verde fit
-    else:
-        st.info("Sem dados suficientes para gerar gráfico.")
-
-    st.divider()
-    st.subheader("📜 Diário Detalhado")
+        st.bar_chart(df_chart, x='data_str', y='total_kcal', color="#4CAF50")
     
-    # Query detalhada
+    st.divider()
+    st.subheader("📜 Detalhamento")
     df_detalhe = executar_sql("SELECT * FROM public.consumo WHERE data >= %s ORDER BY data DESC, id DESC", (dt_inicio,), is_select=True)
     
     if not df_detalhe.empty:
         for i, row in df_detalhe.iterrows():
             col_dt, col_nm, col_kc, col_del = st.columns([1.5, 3, 1.5, 1])
             
-            # Formatação manual da data para evitar erro de fuso visual
-            data_formatada = pd.to_datetime(row['data']).strftime('%d/%m')
+            # TRUQUE DO FUSO HORÁRIO:
+            # Como o banco pode retornar datetime com fuso errado, convertemos apenas a DATA
+            data_vis = pd.to_datetime(row['data']).strftime('%d/%m/%Y')
             
-            col_dt.write(f"📅 **{data_formatada}**")
+            col_dt.write(f"📅 **{data_vis}**")
             col_nm.write(f"{row['alimento']}")
             col_kc.write(f"{int(row['kcal'])} kcal")
             
@@ -299,17 +308,25 @@ with tab_hist:
                 executar_sql("DELETE FROM public.consumo WHERE id = %s", (row['id'],))
                 st.rerun()
 
-# --- ABA 5: CONTROLE DE PESO ---
+# --- ABA 5: PESO ---
 with tab_peso:
     st.subheader("Acompanhamento de Peso")
-    p_val = st.number_input("Peso atual (kg):", 40.0, 150.0, step=0.1)
-    
+    p_val = st.number_input("Peso (kg):", 40.0, 150.0, step=0.1)
     if st.button("Gravar Peso"):
         executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", (get_now_br().date(), float(p_val)))
-        st.success("Peso registrado!")
         st.rerun()
-        
     df_p = executar_sql("SELECT * FROM public.peso ORDER BY data ASC", is_select=True)
     if not df_p.empty:
         df_p['data_str'] = pd.to_datetime(df_p['data']).dt.strftime('%d/%m')
         st.line_chart(df_p, x='data_str', y='peso_kg')
+
+# --- ABA 6: PROMPTS IA (NOVA) ---
+with tab_prompts:
+    st.header("💡 Prompts para o Gemini")
+    st.write("Copie estes textos para usar no chat do Gemini quando precisar.")
+    
+    st.subheader("1. Encontrar Substituição (Sem Glúten)")
+    st.code(nutrition_data['prompts_ia']['encontrar_substituicao'], language="markdown")
+    
+    st.subheader("2. Avaliar Risco de Alimento")
+    st.code(nutrition_data['prompts_ia']['avaliar_alimento'], language="markdown")
