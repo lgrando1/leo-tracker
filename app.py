@@ -14,34 +14,6 @@ def get_now_br():
     """Retorna o datetime atual no fuso de Brasília."""
     return datetime.now(pytz.timezone('America/Sao_Paulo'))
 
-# --- DADOS NUTRICIONAIS E PROMPTS ---
-nutrition_data = {
-    "contexto_nutricional": {
-        "dieta": "Restrição ao Glúten (foco auxiliar no controle da ansiedade).",
-        "suplementacao_ativos": ["L-teanina", "Griffonia simplicifolia (5-HTP)", "L-triptofano", "GABA"],
-        "atencao_farmacologica": "Considerar interação com o uso contínuo de Bupropiona."
-    },
-    "prompts_ia": {
-        "encontrar_substituicao": (
-            "Estou seguindo uma dieta estrita **sem glúten** e focada em alimentos anti-inflamatórios "
-            "para controle de ansiedade. Quero fazer [NOME DA RECEITA/PRATO], mas a receita original leva "
-            "[INGREDIENTE COM GLÚTEN, EX: FARINHA DE TRIGO].\n\n"
-            "Por favor, liste 3 opções de substituição que funcionem quimicamente nessa receita (mantendo a textura) "
-            "e que sejam seguras para minha dieta. Explique como ajustar a quantidade para cada opção."
-        ),
-        "avaliar_alimento": (
-            "Atue como um nutricionista focado em saúde mental e dietas restritivas.\n\n"
-            "**Meu Perfil:** Dieta sem glúten, uso de Bupropiona e suplementação de precursores de "
-            "serotonina/GABA (L-teanina, Triptofano).\n\n"
-            "**O Alimento:** [COLAR LISTA DE INGREDIENTES OU NOME DO PRATO AQUI]\n\n"
-            "**Tarefa:**\n"
-            "1. Este alimento contém glúten ou traços perigosos?\n"
-            "2. Existe algum ingrediente que possa interagir negativamente com minha medicação ou piorar a ansiedade?\n"
-            "3. Dê uma nota de 0 a 10 para o quão seguro este alimento é para meu perfil."
-        )
-    }
-}
-
 # --- DADOS DO PLANO ALIMENTAR (PDF + VERSÃO ECONÔMICA) ---
 PLANO_ALIMENTAR = {
     "Café da Manhã": {
@@ -161,7 +133,7 @@ inicializar_banco()
 st.title("🦁 Leo Tracker Pro")
 st.markdown(f"**Data Atual (BR):** {get_now_br().strftime('%d/%m/%Y %H:%M')}")
 
-tab_prato, tab_ia, tab_plano, tab_hist, tab_peso, tab_prompts = st.tabs(["🍽️ Registrar", "🤖 Importar IA", "📝 Plano", "📊 Histórico", "⚖️ Peso", "💡 Prompts IA"])
+tab_prato, tab_ia, tab_plano, tab_hist, tab_peso, tab_admin = st.tabs(["🍽️ Registrar", "🤖 Importar IA", "📝 Plano", "📊 Histórico", "⚖️ Peso", "⚙️ Admin"])
 
 # --- ABA 1: REGISTRO MANUAL ---
 with tab_prato:
@@ -227,8 +199,33 @@ with tab_prato:
 
 # --- ABA 2: IMPORTAR JSON (IA) ---
 with tab_ia:
-    st.info("Cole aqui o JSON gerado pelo Gemini na análise de fotos.")
-    json_input = st.text_area("JSON de Entrada:", height=150)
+    st.header("🤖 Importação Inteligente")
+    st.markdown("""
+    **Passo 1:** Copie o prompt abaixo e envie para o Gemini junto com a foto da sua comida.
+    """)
+    
+    prompt_json = """
+    Analise a imagem e identifique os alimentos.
+    Atue como nutricionista. Calcule as macros estimadas.
+    Gere APENAS um JSON (sem texto antes ou depois) seguindo estritamente este formato de lista:
+    [
+      {
+        "alimento": "Nome do alimento",
+        "quantidade_g": 100,
+        "kcal": 150,
+        "p": 20,
+        "c": 10,
+        "g": 5,
+        "gluten": "Contém" ou "Não contém"
+      }
+    ]
+    """
+    st.code(prompt_json, language="text")
+    
+    st.markdown("**Passo 2:** Cole a resposta do Gemini (o JSON) aqui embaixo:")
+    
+    json_input = st.text_area("Cole o JSON aqui:", height=150)
+    
     if st.button("Processar JSON da IA"):
         if json_input:
             try:
@@ -261,7 +258,6 @@ with tab_ia:
 # --- ABA 3: PLANO ALIMENTAR ---
 with tab_plano:
     st.header("📋 Plano: Nutri vs. Econômico")
-    st.info(f"**Contexto:** {nutrition_data['contexto_nutricional']['dieta']}")
     
     for refeicao, dados in PLANO_ALIMENTAR.items():
         with st.expander(f"{refeicao}", expanded=True):
@@ -319,13 +315,37 @@ with tab_peso:
         df_p['data_str'] = pd.to_datetime(df_p['data']).dt.strftime('%d/%m')
         st.line_chart(df_p, x='data_str', y='peso_kg')
 
-# --- ABA 6: PROMPTS IA (NOVA) ---
-with tab_prompts:
-    st.header("💡 Prompts para o Gemini")
-    st.write("Copie estes textos para usar no chat do Gemini quando precisar.")
+# --- ABA 6: ADMIN (RESTAURADA E MELHORADA) ---
+with tab_admin:
+    st.subheader("⚙️ Configurações de Administrador")
     
-    st.subheader("1. Encontrar Substituição (Sem Glúten)")
-    st.code(nutrition_data['prompts_ia']['encontrar_substituicao'], language="markdown")
+    st.divider()
+    st.write("### 🛠️ Corretor de Fuso Horário")
+    st.info("Use isto se seus registros estiverem caindo no dia seguinte ou anterior.")
+
+    hoje_br = get_now_br().date()
+    amanha_br = hoje_br + timedelta(days=1)
+    ontem_br = hoje_br - timedelta(days=1)
+
+    c1, c2 = st.columns(2)
     
-    st.subheader("2. Avaliar Risco de Alimento")
-    st.code(nutrition_data['prompts_ia']['avaliar_alimento'], language="markdown")
+    with c1:
+        if st.button("⏪ Mover de AMANHÃ para HOJE"):
+            # Move registros que estão com data de amanhã para a data de hoje real
+            sql_fix = "UPDATE public.consumo SET data = %s WHERE data = %s"
+            if executar_sql(sql_fix, (hoje_br, amanha_br)):
+                st.success(f"Registros de {amanha_br} movidos para {hoje_br}!")
+                st.rerun()
+                
+    with c2:
+        if st.button("⏩ Mover de ONTEM para HOJE"):
+            sql_fix = "UPDATE public.consumo SET data = %s WHERE data = %s"
+            if executar_sql(sql_fix, (hoje_br, ontem_br)):
+                st.success(f"Registros de {ontem_br} movidos para {hoje_br}!")
+                st.rerun()
+
+    st.warning("Zona de Perigo")
+    if st.button("🗑️ Limpar TODAS as datas futuras"):
+        executar_sql("UPDATE public.consumo SET data = %s WHERE data > %s", (hoje_br, hoje_br))
+        st.success("Datas futuras trazidas para hoje.")
+        st.rerun()
