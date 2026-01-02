@@ -32,7 +32,6 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- 2. METAS REAIS (Baseadas no PDF Marcela Mello) ---
-# Calculado via análise do cardápio padrão (Opção 1 de cada refeição)
 META_KCAL = 1650
 META_PROTEINA = 110  
 META_CARBO = 200     
@@ -60,7 +59,6 @@ def run_query(query, params=None):
 
 # Carga de Dados
 hoje = get_now_br().date()
-# Token de segurança opcional
 if st.query_params.get("token") != st.secrets.get("DASH_ACCESS_TOKEN", st.query_params.get("token")): pass 
 
 df_hoje = run_query("SELECT * FROM public.consumo WHERE data = %s", (hoje,))
@@ -87,6 +85,33 @@ if not df_hoje.empty:
         tem_gluten = True
         itens_gluten = filtro['alimento'].unique().tolist()
 
+# --- HELPER: FUNÇÃO PARA GERAR GRÁFICOS ---
+def create_macro_chart(df, date_col, val_col, meta_val, title, color):
+    fig = go.Figure()
+    # Barra (Realizado)
+    fig.add_trace(go.Bar(
+        x=df[date_col], 
+        y=df[val_col], 
+        name='Realizado',
+        marker_color=color
+    ))
+    # Linha (Meta)
+    fig.add_trace(go.Scatter(
+        x=df[date_col], 
+        y=[meta_val]*len(df), 
+        mode='lines', 
+        name='Meta', 
+        line=dict(color='gray', width=2, dash='dash')
+    ))
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=14)),
+        height=250, 
+        margin=dict(l=10, r=10, t=40, b=20),
+        showlegend=False,
+        yaxis=dict(showgrid=True, gridcolor='rgba(128,128,128,0.2)')
+    )
+    return fig
+
 # --- 5. INTERFACE DO DASHBOARD ---
 
 # Header
@@ -111,10 +136,7 @@ cols = st.columns(4)
 
 def metric_card(col, label, actual, target, suffix=""):
     delta = actual - target
-    # Cor: Invertida para Kcal/Gordura (quanto menos sobrar melhor, mas não pode estourar)
-    # Proteina/Carbo: Normal
     color = "inverse" if (label in ["🔥 Calorias", "🥑 Gordura"] and delta > 0) else "normal"
-    
     col.metric(label, f"{int(actual)}{suffix}", f"Meta: {target}{suffix}", delta_color="off")
     percent = min(actual / target, 1.0) if target > 0 else 0
     col.progress(percent)
@@ -126,34 +148,16 @@ metric_card(cols[3], "🥑 Gordura", g_act, META_GORDURA, "g")
 
 st.markdown("---")
 
-# --- SEÇÃO 2: GRÁFICOS COM META ---
-
+# --- SEÇÃO 2: PRINCIPAL (Calorias e Distribuição) ---
 g1, g2 = st.columns([2, 1])
 
 with g1:
-    st.subheader("📊 Consumo vs. Meta (30 dias)")
+    st.subheader("📊 Calorias vs Meta (30 dias)")
     if not df_hist.empty:
-        # Gráfico Combinado
         fig = go.Figure()
-        
-        # Barras de Consumo Calórico
-        fig.add_trace(go.Bar(
-            x=df_hist['data'], 
-            y=df_hist['tkcal'], 
-            name='Kcal Consumidas',
-            marker_color='#4CAF50'
-        ))
-        
-        # Linha de Meta Calórica (Destaque)
-        fig.add_trace(go.Scatter(
-            x=df_hist['data'], 
-            y=[META_KCAL]*len(df_hist), 
-            mode='lines',
-            name=f'Meta ({META_KCAL})',
-            line=dict(color='red', width=3, dash='dot')
-        ))
-
-        fig.update_layout(height=350, margin=dict(l=20, r=20, t=20, b=20), legend=dict(orientation="h", y=1.1))
+        fig.add_trace(go.Bar(x=df_hist['data'], y=df_hist['tkcal'], name='Kcal', marker_color='#4CAF50'))
+        fig.add_trace(go.Scatter(x=df_hist['data'], y=[META_KCAL]*len(df_hist), mode='lines', name='Meta', line=dict(color='red', width=3, dash='dot')))
+        fig.update_layout(height=320, margin=dict(l=20, r=20, t=20, b=20), legend=dict(orientation="h", y=1.1))
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Sem dados históricos.")
@@ -162,38 +166,68 @@ with g2:
     st.subheader("🎯 Distribuição Hoje")
     if k_act > 0:
         labels = ['Proteína', 'Carbo', 'Gordura']
-        values = [p_act * 4, c_act * 4, g_act * 9] # Converte para Kcal para ver proporção
+        values = [p_act * 4, c_act * 4, g_act * 9]
         colors = ['#3366CC', '#FF9900', '#DC3912']
-        
         fig_pie = go.Figure(data=[go.Pie(labels=labels, values=values, hole=.5, marker=dict(colors=colors))])
-        fig_pie.update_layout(height=350, margin=dict(l=20, r=20, t=20, b=20), showlegend=True)
+        fig_pie.update_layout(height=320, margin=dict(l=20, r=20, t=20, b=20), showlegend=True)
         st.plotly_chart(fig_pie, use_container_width=True)
-        
-        # Análise rápida
-        st.caption(f"Meta de Proteína: **{META_PROTEINA}g**")
     else:
-        st.info("Registre refeições para ver.")
+        st.info("Registre para ver.")
 
-# --- SEÇÃO 3: PESO ---
-st.subheader("⚖️ Rumo aos 120kg")
-if not df_peso.empty and len(df_peso) > 1:
-    df_peso['data'] = pd.to_datetime(df_peso['data'])
-    p_ini = df_peso.iloc[0]['peso_kg']; d_ini = df_peso.iloc[0]['data']
+# --- SEÇÃO 3: CONTROLE DE MACROS (NOVOS GRÁFICOS) ---
+st.subheader("🔍 Controle Semanal de Macros")
+if not df_hist.empty:
+    m1, m2, m3 = st.columns(3)
     
-    # Projeta até 30 dias a frente do último registro
-    ultimo_dia_reg = df_peso.iloc[-1]['data']
-    dias_totais = (ultimo_dia_reg - d_ini).days + 30
-    
-    dates_proj = [d_ini + timedelta(days=i) for i in range(dias_totais)]
-    vals_proj = [max(META_PESO, p_ini - (i * (PERDA_SEMANAL_KG/7))) for i in range(dias_totais)]
-    
-    fig_p = go.Figure()
-    # Linha Meta Ideal
-    fig_p.add_trace(go.Scatter(x=dates_proj, y=vals_proj, name='Meta Ideal (-0.8kg/sem)', line=dict(color='gray', dash='dot')))
-    # Linha Real
-    fig_p.add_trace(go.Scatter(x=df_peso['data'], y=df_peso['peso_kg'], name='Seu Peso', mode='lines+markers', line=dict(color='blue', width=4)))
-    
-    fig_p.update_layout(height=300, margin=dict(l=20, r=20, t=20, b=20))
-    st.plotly_chart(fig_p, use_container_width=True)
+    with m1:
+        fig_p = create_macro_chart(df_hist, 'data', 'tprot', META_PROTEINA, "🥩 Proteína (Meta: 110g)", "#3366CC")
+        st.plotly_chart(fig_p, use_container_width=True)
+        
+    with m2:
+        fig_c = create_macro_chart(df_hist, 'data', 'tcarb', META_CARBO, "🍞 Carbo (Meta: 200g)", "#FF9900")
+        st.plotly_chart(fig_c, use_container_width=True)
+        
+    with m3:
+        fig_g = create_macro_chart(df_hist, 'data', 'tgord', META_GORDURA, "🥑 Gordura (Meta: 50g)", "#DC3912")
+        st.plotly_chart(fig_g, use_container_width=True)
 else:
-    st.warning("Adicione mais registros de peso para gerar a curva de tendência.")
+    st.info("Sem dados para exibir gráficos de macros.")
+
+st.markdown("---")
+
+# --- SEÇÃO 4: PESO E HOJE ---
+g3, g4 = st.columns([2, 1])
+
+with g3:
+    st.subheader("⚖️ Rumo aos 120kg")
+    if not df_peso.empty and len(df_peso) > 1:
+        df_peso['data'] = pd.to_datetime(df_peso['data'])
+        p_ini = df_peso.iloc[0]['peso_kg']; d_ini = df_peso.iloc[0]['data']
+        ultimo_dia_reg = df_peso.iloc[-1]['data']
+        dias_totais = (ultimo_dia_reg - d_ini).days + 30
+        dates_proj = [d_ini + timedelta(days=i) for i in range(dias_totais)]
+        vals_proj = [max(META_PESO, p_ini - (i * (PERDA_SEMANAL_KG/7))) for i in range(dias_totais)]
+        
+        fig_p = go.Figure()
+        fig_p.add_trace(go.Scatter(x=dates_proj, y=vals_proj, name='Meta Ideal', line=dict(color='gray', dash='dot')))
+        fig_p.add_trace(go.Scatter(x=df_peso['data'], y=df_peso['peso_kg'], name='Real', mode='lines+markers', line=dict(color='blue', width=4)))
+        fig_p.update_layout(height=300, margin=dict(l=20, r=20, t=20, b=20))
+        st.plotly_chart(fig_p, use_container_width=True)
+    else:
+        st.warning("Adicione mais registros de peso.")
+
+with g4:
+    st.subheader("🍽️ Hoje")
+    if not df_hoje.empty:
+        for i, row in df_hoje.iterrows():
+            st.markdown(f"**{row['alimento']}**")
+            c1, c2, c3 = st.columns(3)
+            c1.caption(f"🔥 {int(row['kcal'])}")
+            c2.caption(f"🥩 {int(row['proteina'])}g")
+            # Verifica glúten com lógica segura
+            g_txt = str(row['gluten']).lower()
+            if ('contém' in g_txt or 'sim' in g_txt) and 'não' not in g_txt:
+                c3.error("Glúten!")
+            st.divider()
+    else:
+        st.write("Nada registrado.")
