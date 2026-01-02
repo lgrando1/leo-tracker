@@ -58,14 +58,24 @@ df_hoje = run_query("SELECT * FROM public.consumo WHERE data = %s", (hoje,))
 df_hist = run_query("SELECT data, SUM(kcal) as total_kcal FROM public.consumo WHERE data >= %s GROUP BY data ORDER BY data ASC", (hoje - timedelta(days=30),))
 df_peso = run_query("SELECT * FROM public.peso ORDER BY data ASC")
 
-# --- INDICADOR DE GLÚTEN (NOVO) ---
+# --- INDICADOR DE GLÚTEN (CORRIGIDO) ---
 tem_gluten = False
 itens_gluten = []
 
 if not df_hoje.empty:
-    # Verifica se algum item de hoje contém glúten
-    # Assume que a coluna 'gluten' pode ter valores como "Contém", "Sim", etc.
-    filtro_gluten = df_hoje[df_hoje['gluten'].astype(str).str.contains('Contém', case=False, na=False)]
+    # Normaliza o texto para evitar problemas com maiúsculas/minúsculas
+    coluna_gluten = df_hoje['gluten'].astype(str).str.lower()
+    
+    # Lógica de Filtro:
+    # 1. Deve conter a palavra "contém"
+    # 2. E NÃO deve conter a palavra "não"
+    # 3. OU deve conter "sim"
+    filtro_gluten = df_hoje[
+        (coluna_gluten.str.contains('contém', na=False) & ~coluna_gluten.str.contains('não', na=False)) | 
+        (coluna_gluten == 'sim') |
+        (coluna_gluten == 'contem')
+    ]
+    
     if not filtro_gluten.empty:
         tem_gluten = True
         itens_gluten = filtro_gluten['alimento'].tolist()
