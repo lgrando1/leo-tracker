@@ -5,7 +5,7 @@ from psycopg2 import OperationalError
 from datetime import datetime, timedelta
 import json
 import pytz 
-from groq import Groq # Biblioteca necessária para a IA Rápida
+from groq import Groq 
 
 # 1. CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="Leo Tracker Pro", page_icon="🦁", layout="wide")
@@ -14,26 +14,6 @@ st.set_page_config(page_title="Leo Tracker Pro", page_icon="🦁", layout="wide"
 def get_now_br():
     """Retorna o datetime atual no fuso de Brasília."""
     return datetime.now(pytz.timezone('America/Sao_Paulo'))
-
-# --- DADOS NUTRICIONAIS E PROMPTS ---
-nutrition_data = {
-    "contexto_nutricional": {
-        "dieta": "Restrição ao Glúten (foco auxiliar no controle da ansiedade).",
-        "suplementacao_ativos": ["L-teanina", "Griffonia simplicifolia (5-HTP)", "L-triptofano", "GABA"],
-        "atencao_farmacologica": "Considerar interação com o uso contínuo de Bupropiona."
-    },
-    "prompts_ia": {
-        "encontrar_substituicao": (
-            "Estou seguindo uma dieta estrita **sem glúten**.\n"
-            "Receita original: [NOME DA RECEITA] com [INGREDIENTE COM GLÚTEN].\n\n"
-            "Liste 3 substituições sem glúten que mantenham a textura e sejam baratas."
-        ),
-        "avaliar_alimento": (
-            "Alimento: [NOME/INGREDIENTES]\n\n"
-            "1. Tem glúten?\n2. Interage com Bupropiona?\n3. Nota de segurança (0-10)."
-        )
-    }
-}
 
 # --- DADOS DO PLANO ALIMENTAR ---
 PLANO_ALIMENTAR = {
@@ -112,8 +92,8 @@ def executar_sql(sql, params=None, is_select=False):
         return pd.DataFrame() if is_select else False
 
 # 3. CONSTANTES E METAS
-META_KCAL = 1650 # Ajustado conforme PDF
-META_PROTEINA = 110 # Ajustado conforme PDF
+META_KCAL = 1650 
+META_PROTEINA = 110 
 META_PESO = 120.0
 PERDA_SEMANAL_KG = 0.8
 
@@ -128,36 +108,41 @@ def inicializar_banco():
 
 inicializar_banco()
 
-# --- FUNÇÃO NOVA: TEXTO -> GROQ -> DB ---
+# --- FUNÇÃO NOVA: TEXTO -> GROQ (JSON + ANÁLISE) ---
 def processar_texto_ia(texto_usuario, api_key):
-    """Envia texto para Groq e retorna lista de dados processados."""
+    """Envia texto para Groq e retorna JSON com 'analise' e 'alimentos'."""
     client = Groq(api_key=api_key)
     
     prompt_system = f"""
-    Aja como um nutricionista esportivo de precisão.
+    Aja como um nutricionista focado em:
+    1. Dieta Sem Glúten (Restrição severa).
+    2. Controle de Ansiedade (Alimentos anti-inflamatórios).
+    3. Hipertrofia (Meta proteica).
+    
     Hoje é: {get_now_br().strftime('%Y-%m-%d')}.
     
     Sua tarefa:
-    1. Analisar o texto do usuário sobre o que ele comeu.
-    2. Estimar quantidades (em gramas) se não informadas (use porções médias brasileiras).
-    3. Calcular Kcal, Proteína (p), Carboidrato (c) e Gordura (g).
-    4. Identificar Glúten ("Contém" ou "Não contém").
-    5. Se o usuário mencionar tempo (ex: "ontem"), ajuste a data no JSON. Se não, use a data de hoje.
+    1. Analisar o texto do usuário.
+    2. Gerar uma breve "analise" (máx 3 frases): Destaque pontos positivos ou negativos (ex: alertar sobre glúten ou excesso de gordura/açúcar, elogiar proteína).
+    3. Gerar a lista técnica "alimentos" com macros estimados.
     
-    SAÍDA OBRIGATÓRIA: Apenas um JSON puro contendo uma lista de objetos. Sem markdown.
+    SAÍDA OBRIGATÓRIA: Um JSON com duas chaves ("analise" e "alimentos").
     Exemplo:
-    [
-        {{
-            "data": "AAAA-MM-DD",
-            "alimento": "Arroz Branco Cozido",
-            "quantidade_g": 150,
-            "kcal": 190,
-            "p": 3.5,
-            "c": 40,
-            "g": 0.5,
-            "gluten": "Não contém"
-        }}
-    ]
+    {{
+        "analise": "Cuidado! O pastel é frito e a massa tem glúten, o que pode aumentar a inflamação. Tente evitar.",
+        "alimentos": [
+            {{
+                "data": "AAAA-MM-DD",
+                "alimento": "Pastel de Carne Frito",
+                "quantidade_g": 100,
+                "kcal": 350,
+                "p": 10,
+                "c": 35,
+                "g": 20,
+                "gluten": "Contém"
+            }}
+        ]
+    }}
     """
 
     try:
@@ -167,17 +152,17 @@ def processar_texto_ia(texto_usuario, api_key):
                 {"role": "user", "content": texto_usuario}
             ],
             model="llama-3.3-70b-versatile", 
-            temperature=0.1, 
+            temperature=0.3, # Um pouco de criatividade para a análise
             response_format={"type": "json_object"}
         )
         
         resposta_json = completion.choices[0].message.content
         dados = json.loads(resposta_json)
         
-        if isinstance(dados, dict):
-            if "alimentos" in dados: dados = dados["alimentos"]
-            elif "items" in dados: dados = dados["items"]
-            else: dados = [dados]
+        # Garante estrutura
+        if "alimentos" not in dados:
+             # Fallback caso a IA esqueça a estrutura (raro)
+             return False, "Erro na estrutura do JSON da IA."
             
         return True, dados
     except Exception as e:
@@ -187,8 +172,8 @@ def processar_texto_ia(texto_usuario, api_key):
 st.title("🦁 Leo Tracker Pro")
 st.markdown(f"**Data Atual (BR):** {get_now_br().strftime('%d/%m/%Y %H:%M')}")
 
-# AQUI: Substituímos "Registrar" por "IA Rápida" e mantivemos "JSON (Gemini)"
-tab_groq, tab_json, tab_plano, tab_hist, tab_peso, tab_admin, tab_prompts = st.tabs(["🍽️ IA Rápida", "🤖 JSON (Gemini)", "📝 Plano", "📊 Gráficos & Metas", "⚖️ Peso (120kg)", "⚙️ Admin", "💡 Prompts"])
+# Abas
+tab_groq, tab_json, tab_plano, tab_hist, tab_peso, tab_admin = st.tabs(["🍽️ IA Rápida", "🤖 JSON (Gemini)", "📝 Plano", "📊 Gráficos & Metas", "⚖️ Peso (120kg)", "⚙️ Admin"])
 
 # --- ABA 1: IA RÁPIDA (GROQ) ---
 with tab_groq:
@@ -207,25 +192,43 @@ with tab_groq:
     st.divider()
     
     st.write("#### 💬 O que você comeu?")
-    st.caption("Digite naturalmente. Ex: 'Café da manhã com 3 ovos, mamão e aveia'.")
+    st.caption("A IA vai analisar seus macros e te dar um feedback sobre a dieta.")
     
     texto_input = st.text_area("Descreva aqui:", height=100)
     
-    if st.button("🚀 Processar e Salvar"):
+    if st.button("🚀 Processar"):
         api_key = st.secrets.get("GROQ_API_KEY")
         if not api_key:
-            st.error("⚠️ Configure a GROQ_API_KEY nos secrets do Streamlit!")
+            st.error("⚠️ Configure a GROQ_API_KEY nos secrets!")
         elif not texto_input:
             st.warning("Digite algo primeiro.")
         else:
-            with st.spinner("Analisando com Llama 3.3..."):
+            with st.spinner("Analisando nutricionalmente..."):
                 sucesso, resultado = processar_texto_ia(texto_input, api_key)
                 
                 if sucesso:
-                    st.success("Salvo com sucesso!")
+                    # 1. Exibe a Análise da Nutri IA
+                    analise = resultado.get('analise', 'Sem análise.')
+                    
+                    # Define cor da caixa baseada no texto (simples heurística)
+                    if "cuidado" in analise.lower() or "evit" in analise.lower() or "glúten" in analise.lower():
+                        st.warning(f"👩‍⚕️ **Feedback da IA:**\n\n{analise}")
+                    else:
+                        st.success(f"👩‍⚕️ **Feedback da IA:**\n\n{analise}")
+                    
+                    # 2. Exibe os Itens Técnicos
+                    st.markdown("---")
+                    st.write("**Itens identificados:**")
+                    
                     count = 0
-                    for item in resultado:
-                        st.info(f"✅ **{item['alimento']}** ({item['quantidade_g']}g) | 🔥 {item['kcal']} kcal")
+                    lista_alimentos = resultado.get('alimentos', [])
+                    
+                    for item in lista_alimentos:
+                        col_ico, col_txt = st.columns([0.5, 4])
+                        col_ico.info("🍽️")
+                        col_txt.write(f"**{item['alimento']}** ({item['quantidade_g']}g) | 🔥 {item['kcal']} kcal | 🥩 {item['p']}g prot")
+                        
+                        # Salva no banco
                         executar_sql(
                             """INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) 
                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""", 
@@ -235,9 +238,13 @@ with tab_groq:
                                 float(item.get('c', 0)), float(item.get('g', 0)), item.get('gluten', 'NI')
                             )
                         )
-                    import time
-                    time.sleep(2)
-                    st.rerun()
+                        count += 1
+                    
+                    if count > 0:
+                        st.success("✅ Dados salvos no banco!")
+                        import time
+                        time.sleep(4) # Dá tempo de ler a análise antes de recarregar
+                        st.rerun()
                 else:
                     st.error(f"Erro: {resultado}")
 
@@ -374,10 +381,3 @@ with tab_admin:
     if c2.button("⏩ Mover ONTEM -> HOJE"):
         executar_sql("UPDATE public.consumo SET data = %s WHERE data = %s", (hoje, hoje - timedelta(days=1)))
         st.success("Feito!")
-
-# --- ABA 7: PROMPTS ---
-with tab_prompts:
-    st.subheader("1. Substituição")
-    st.code(nutrition_data['prompts_ia']['encontrar_substituicao'], language="markdown")
-    st.subheader("2. Avaliação")
-    st.code(nutrition_data['prompts_ia']['avaliar_alimento'], language="markdown")
