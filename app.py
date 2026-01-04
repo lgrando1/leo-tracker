@@ -243,7 +243,8 @@ with tab_groq:
                     if count > 0:
                         st.success("✅ Dados salvos no banco!")
                         import time
-                        time.sleep(4) # Dá tempo de ler a análise antes de recarregar
+                        # AUMENTADO PARA 15 SEGUNDOS PARA DAR TEMPO DE LER
+                        time.sleep(15) 
                         st.rerun()
                 else:
                     st.error(f"Erro: {resultado}")
@@ -354,30 +355,4 @@ with tab_peso:
 
     df_p = executar_sql("SELECT * FROM public.peso ORDER BY data ASC", is_select=True)
     if not df_p.empty and len(df_p) > 0:
-        df_p['data'] = pd.to_datetime(df_p['data'])
-        df_p = df_p.sort_values('data')
-        
-        d_ini = df_p['data'].iloc[0]; p_ini = df_p['peso_kg'].iloc[0]
-        u_dia = df_p['data'].iloc[-1]
-        dias_tot = (u_dia - d_ini).days + 30
-        
-        lst_data = [d_ini + timedelta(days=x) for x in range(dias_tot)]
-        lst_peso = [max(META_PESO, p_ini - (x * (PERDA_SEMANAL_KG/7))) for x in range(dias_tot)]
-        
-        df_meta = pd.DataFrame({'data': lst_data, 'Plano Saudável': lst_peso}).set_index('data')
-        df_p.set_index('data', inplace=True)
-        st.line_chart(df_p[['peso_kg']].join(df_meta, how='outer'), color=["#0000FF", "#AAAAAA"])
-    else:
-        st.info("Registre seu peso hoje para ver o gráfico.")
-
-# --- ABA 6: ADMIN ---
-with tab_admin:
-    st.write("### 🛠️ Corretor de Fuso")
-    hoje = get_now_br().date()
-    c1, c2 = st.columns(2)
-    if c1.button("⏪ Mover AMANHÃ -> HOJE"):
-        executar_sql("UPDATE public.consumo SET data = %s WHERE data = %s", (hoje, hoje + timedelta(days=1)))
-        st.success("Feito!")
-    if c2.button("⏩ Mover ONTEM -> HOJE"):
-        executar_sql("UPDATE public.consumo SET data = %s WHERE data = %s", (hoje, hoje - timedelta(days=1)))
-        st.success("Feito!")
+        df_p['data'] = pd.to_datetime(
