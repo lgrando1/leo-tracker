@@ -88,7 +88,7 @@ st.sidebar.info(f"""
 \n🥩 **Proteína:** {sug_prot}g
 \n🍞 **Carbo:** {sug_carb}g
 \n🥑 **Gordura:** {sug_gord}g
-\n<small>Baseado no seu GET de {int(get_total)} kcal</small>
+\nBaseado no seu GET de {int(get_total)} kcal
 """)
 
 # --- FORMULÁRIO DE AJUSTE MANUAL E SALVAMENTO ---
