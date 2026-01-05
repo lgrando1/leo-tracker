@@ -31,13 +31,14 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. METAS REAIS (Baseadas no PDF Marcela Mello) ---
+# --- 2. METAS REAIS ---
 META_KCAL = 1650
 META_PROTEINA = 110  
 META_CARBO = 200     
 META_GORDURA = 50    
 META_PESO = 120.0
 PERDA_SEMANAL_KG = 0.8
+DATA_INICIO_REGIME = pd.to_datetime("2025-12-30").date() # <--- DATA FIXA DO INÍCIO
 
 # --- 3. CONEXÃO E DADOS ---
 @st.cache_resource(ttl=300)
@@ -88,28 +89,9 @@ if not df_hoje.empty:
 # --- HELPER: FUNÇÃO PARA GERAR GRÁFICOS ---
 def create_macro_chart(df, date_col, val_col, meta_val, title, color):
     fig = go.Figure()
-    # Barra (Realizado)
-    fig.add_trace(go.Bar(
-        x=df[date_col], 
-        y=df[val_col], 
-        name='Realizado',
-        marker_color=color
-    ))
-    # Linha (Meta)
-    fig.add_trace(go.Scatter(
-        x=df[date_col], 
-        y=[meta_val]*len(df), 
-        mode='lines', 
-        name='Meta', 
-        line=dict(color='gray', width=2, dash='dash')
-    ))
-    fig.update_layout(
-        title=dict(text=title, font=dict(size=14)),
-        height=250, 
-        margin=dict(l=10, r=10, t=40, b=20),
-        showlegend=False,
-        yaxis=dict(showgrid=True, gridcolor='rgba(128,128,128,0.2)')
-    )
+    fig.add_trace(go.Bar(x=df[date_col], y=df[val_col], name='Realizado', marker_color=color))
+    fig.add_trace(go.Scatter(x=df[date_col], y=[meta_val]*len(df), mode='lines', name='Meta', line=dict(color='gray', width=2, dash='dash')))
+    fig.update_layout(title=dict(text=title, font=dict(size=14)), height=250, margin=dict(l=10, r=10, t=40, b=20), showlegend=False)
     return fig
 
 # --- 5. INTERFACE DO DASHBOARD ---
@@ -138,8 +120,7 @@ def metric_card(col, label, actual, target, suffix=""):
     delta = actual - target
     color = "inverse" if (label in ["🔥 Calorias", "🥑 Gordura"] and delta > 0) else "normal"
     col.metric(label, f"{int(actual)}{suffix}", f"Meta: {target}{suffix}", delta_color="off")
-    percent = min(actual / target, 1.0) if target > 0 else 0
-    col.progress(percent)
+    col.progress(min(actual / target, 1.0) if target > 0 else 0)
 
 metric_card(cols[0], "🔥 Calorias", k_act, META_KCAL)
 metric_card(cols[1], "🥩 Proteína", p_act, META_PROTEINA, "g")
@@ -148,7 +129,7 @@ metric_card(cols[3], "🥑 Gordura", g_act, META_GORDURA, "g")
 
 st.markdown("---")
 
-# --- SEÇÃO 2: PRINCIPAL (Calorias e Distribuição) ---
+# --- SEÇÃO 2: PRINCIPAL ---
 g1, g2 = st.columns([2, 1])
 
 with g1:
@@ -174,45 +155,63 @@ with g2:
     else:
         st.info("Registre para ver.")
 
-# --- SEÇÃO 3: CONTROLE DE MACROS (NOVOS GRÁFICOS) ---
+# --- SEÇÃO 3: CONTROLE DE MACROS ---
 st.subheader("🔍 Controle Semanal de Macros")
 if not df_hist.empty:
     m1, m2, m3 = st.columns(3)
-    
-    with m1:
-        fig_p = create_macro_chart(df_hist, 'data', 'tprot', META_PROTEINA, "🥩 Proteína (Meta: 110g)", "#3366CC")
-        st.plotly_chart(fig_p, use_container_width=True)
-        
-    with m2:
-        fig_c = create_macro_chart(df_hist, 'data', 'tcarb', META_CARBO, "🍞 Carbo (Meta: 200g)", "#FF9900")
-        st.plotly_chart(fig_c, use_container_width=True)
-        
-    with m3:
-        fig_g = create_macro_chart(df_hist, 'data', 'tgord', META_GORDURA, "🥑 Gordura (Meta: 50g)", "#DC3912")
-        st.plotly_chart(fig_g, use_container_width=True)
-else:
-    st.info("Sem dados para exibir gráficos de macros.")
+    with m1: st.plotly_chart(create_macro_chart(df_hist, 'data', 'tprot', META_PROTEINA, "🥩 Proteína", "#3366CC"), use_container_width=True)
+    with m2: st.plotly_chart(create_macro_chart(df_hist, 'data', 'tcarb', META_CARBO, "🍞 Carbo", "#FF9900"), use_container_width=True)
+    with m3: st.plotly_chart(create_macro_chart(df_hist, 'data', 'tgord', META_GORDURA, "🥑 Gordura", "#DC3912"), use_container_width=True)
 
 st.markdown("---")
 
-# --- SEÇÃO 4: PESO E HOJE ---
+# --- SEÇÃO 4: PESO (LÓGICA AJUSTADA 30/12) ---
 g3, g4 = st.columns([2, 1])
 
 with g3:
     st.subheader("⚖️ Rumo aos 120kg")
     if not df_peso.empty and len(df_peso) > 1:
         df_peso['data'] = pd.to_datetime(df_peso['data'])
-        p_ini = df_peso.iloc[0]['peso_kg']; d_ini = df_peso.iloc[0]['data']
-        ultimo_dia_reg = df_peso.iloc[-1]['data']
-        dias_totais = (ultimo_dia_reg - d_ini).days + 30
-        dates_proj = [d_ini + timedelta(days=i) for i in range(dias_totais)]
-        vals_proj = [max(META_PESO, p_ini - (i * (PERDA_SEMANAL_KG/7))) for i in range(dias_totais)]
+        
+        # 1. Encontrar peso de referência em 30/12/2025
+        df_peso['diff_dias'] = abs(df_peso['data'].dt.date - DATA_INICIO_REGIME)
+        idx_inicio = df_peso['diff_dias'].idxmin()
+        
+        peso_start = df_peso.loc[idx_inicio, 'peso_kg']
+        
+        # 2. Criar projeção A PARTIR DE 30/12
+        # Define o fim do gráfico (ex: hoje + 45 dias)
+        ultimo_dia_grafico = max(df_peso['data'].max().date(), hoje) + timedelta(days=45)
+        dias_projecao = (ultimo_dia_grafico - DATA_INICIO_REGIME).days
+        
+        # Gera os pontos da meta
+        dates_proj = [DATA_INICIO_REGIME + timedelta(days=i) for i in range(dias_projecao + 1)]
+        vals_proj = [max(META_PESO, peso_start - (i * (PERDA_SEMANAL_KG/7))) for i in range(dias_projecao + 1)]
         
         fig_p = go.Figure()
-        fig_p.add_trace(go.Scatter(x=dates_proj, y=vals_proj, name='Meta Ideal', line=dict(color='gray', dash='dot')))
-        fig_p.add_trace(go.Scatter(x=df_peso['data'], y=df_peso['peso_kg'], name='Real', mode='lines+markers', line=dict(color='blue', width=4)))
-        fig_p.update_layout(height=300, margin=dict(l=20, r=20, t=20, b=20))
+        
+        # Linha Meta Ideal (Tracejada Cinza) - Começa só em 30/12
+        fig_p.add_trace(go.Scatter(
+            x=dates_proj, 
+            y=vals_proj, 
+            name='Meta Ideal', 
+            mode='lines',
+            line=dict(color='gray', width=2, dash='dot')
+        ))
+        
+        # Linha Real (Sólida Azul) - Mostra todo histórico
+        fig_p.add_trace(go.Scatter(
+            x=df_peso['data'], 
+            y=df_peso['peso_kg'], 
+            name='Peso Real', 
+            mode='lines+markers', 
+            line=dict(color='blue', width=4)
+        ))
+        
+        fig_p.update_layout(height=350, margin=dict(l=20, r=20, t=20, b=20), showlegend=True)
         st.plotly_chart(fig_p, use_container_width=True)
+        
+        st.caption(f"📉 Meta calculada a partir de **{DATA_INICIO_REGIME.strftime('%d/%m/%Y')}** ({peso_start}kg).")
     else:
         st.warning("Adicione mais registros de peso.")
 
