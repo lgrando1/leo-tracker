@@ -342,34 +342,86 @@ with tab_hist:
                 executar_sql("DELETE FROM public.consumo WHERE id = %s", (row['id'],))
                 st.rerun()
 
-# --- ABA 5: PESO ---
+# --- ABA 5: PESO (COM DATA DE INÍCIO FIXA NA META) ---
 with tab_peso:
     st.subheader(f"⚖️ Rumo aos {int(META_PESO)}kg")
-    c_input, c_meta = st.columns([2, 1])
-    p_val = c_input.number_input("Registrar Peso Atual (kg):", 40.0, 200.0, step=0.1)
     
-    if c_input.button("Gravar Peso"):
-        executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", (get_now_br().date(), float(p_val)))
-        st.success("Peso registrado!")
+    # Inputs
+    c_dt, c_val, c_btn = st.columns([1.5, 1.5, 1])
+    dt_lancamento = c_dt.date_input("Data da Pesagem:", value=get_now_br().date())
+    p_val = c_val.number_input("Peso (kg):", 40.0, 200.0, step=0.1)
+    
+    c_btn.write("") 
+    c_btn.write("") 
+    if c_btn.button("Gravar Registro"):
+        executar_sql(
+            "INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", 
+            (dt_lancamento, float(p_val))
+        )
+        st.success(f"Peso de {dt_lancamento.strftime('%d/%m')} registrado!")
         st.rerun()
 
+    st.divider()
+
+    # Recupera histórico completo
     df_p = executar_sql("SELECT * FROM public.peso ORDER BY data ASC", is_select=True)
+    
     if not df_p.empty and len(df_p) > 0:
         df_p['data'] = pd.to_datetime(df_p['data'])
         df_p = df_p.sort_values('data')
         
-        d_ini = df_p['data'].iloc[0]; p_ini = df_p['peso_kg'].iloc[0]
-        u_dia = df_p['data'].iloc[-1]
-        dias_tot = (u_dia - d_ini).days + 30
+        # --- LÓGICA DA META (AJUSTADA PARA 30/12) ---
+        # 1. Define o dia zero do regime
+        DATA_INICIO_REGIME = pd.to_datetime("2025-12-30").date() # <--- SUA DATA AQUI
         
-        lst_data = [d_ini + timedelta(days=x) for x in range(dias_tot)]
-        lst_peso = [max(META_PESO, p_ini - (x * (PERDA_SEMANAL_KG/7))) for x in range(dias_tot)]
+        # 2. Descobre qual era seu peso nesse dia (ou o mais próximo dele)
+        # Calcula a diferença de dias entre cada registro e o dia 30/12
+        df_p['diff_dias'] = abs(df_p['data'].dt.date - DATA_INICIO_REGIME)
+        # Pega o registro com a menor diferença (o mais próximo)
+        idx_inicio = df_p['diff_dias'].idxmin()
         
-        df_meta = pd.DataFrame({'data': lst_data, 'Plano Saudável': lst_peso}).set_index('data')
-        df_p.set_index('data', inplace=True)
-        st.line_chart(df_p[['peso_kg']].join(df_meta, how='outer'), color=["#0000FF", "#AAAAAA"])
+        peso_start = df_p.loc[idx_inicio, 'peso_kg']
+        data_ref_peso = df_p.loc[idx_inicio, 'data'].date()
+        
+        # 3. Gera a projeção SOMENTE a partir do dia 30/12
+        # Define até onde a linha vai (ex: até 60 dias pra frente de hoje)
+        ultimo_dia_grafico = max(df_p['data'].max().date(), get_now_br().date()) + timedelta(days=45)
+        dias_projecao = (ultimo_dia_grafico - DATA_INICIO_REGIME).days
+        
+        if dias_projecao > 0:
+            lst_data = [DATA_INICIO_REGIME + timedelta(days=x) for x in range(dias_projecao + 1)]
+            # Calcula a queda de 0.8kg por semana a partir do peso de referência
+            lst_peso = [max(META_PESO, peso_start - (x * (PERDA_SEMANAL_KG/7))) for x in range(dias_projecao + 1)]
+            
+            df_meta = pd.DataFrame({'data': lst_data, 'Plano Saudável': lst_peso})
+            df_meta['data'] = pd.to_datetime(df_meta['data']) # Garante formato datetime
+            df_meta.set_index('data', inplace=True)
+            
+            # Prepara o dataframe real para o gráfico
+            df_real = df_p[['data', 'peso_kg']].set_index('data')
+            
+            # Plota combinando: Histórico Real (Azul) + Meta a partir de 30/12 (Cinza)
+            st.line_chart(df_real.join(df_meta, how='outer'), color=["#0000FF", "#AAAAAA"])
+            
+            st.info(f"📉 A linha cinza projeta a perda de {PERDA_SEMANAL_KG}kg/semana começando em **30/12** ({peso_start}kg).")
+        else:
+            st.warning("Data de início do regime é futura. Ajuste a data no código.")
+
+        # Tabela de Conferência
+        with st.expander("Ver Histórico de Pesos"):
+            df_show = df_p[['id', 'data', 'peso_kg']].copy()
+            df_show['data'] = df_show['data'].dt.strftime('%d/%m/%Y')
+            df_show = df_show.sort_values('data', ascending=False)
+            
+            for i, row in df_show.iterrows():
+                cc1, cc2, cc3 = st.columns([2, 2, 1])
+                cc1.write(f"📅 {row['data']}")
+                cc2.write(f"⚖️ {row['peso_kg']} kg")
+                if cc3.button("🗑️", key=f"del_{row['id']}"):
+                    executar_sql("DELETE FROM public.peso WHERE id = %s", (row['id'],))
+                    st.rerun()
     else:
-        st.info("Registre seu peso hoje para ver o gráfico.")
+        st.info("Registre seu peso.")
 
 # --- ABA 6: ADMIN ---
 with tab_admin:
