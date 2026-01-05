@@ -34,7 +34,7 @@ def run_query(query, params=None, is_select=True):
                 conn.commit()
                 return True
     except Exception as e:
-        if conn: conn.rollback() # Limpa o erro de transação abortada
+        if conn: conn.rollback() 
         st.error(f"Erro DB: {e}")
         return pd.DataFrame() if is_select else False
 
@@ -59,7 +59,6 @@ run_query("""
 df_perfil = run_query("SELECT * FROM public.perfil WHERE id = 1")
 df_peso_last = run_query("SELECT peso_kg FROM public.peso ORDER BY data DESC, id DESC LIMIT 1")
 
-# Dados do banco ou valores padrão (seus dados iniciais)
 if not df_perfil.empty:
     p = df_perfil.iloc[0]
 else:
@@ -78,7 +77,6 @@ alt = st.sidebar.number_input("Altura (cm):", value=int(p['altura_cm']))
 ativ_ops = {"Sedentário (1.2)": 1.2, "Leve (1.375)": 1.375, "Moderado (1.55)": 1.55}
 ativ_sel = st.sidebar.selectbox("Atividade:", list(ativ_ops.keys()), index=list(ativ_ops.keys()).index(p['atividade']))
 
-# Cálculo Científico GET
 tmb = (10 * PESO_ATUAL) + (6.25 * alt) - (5 * idade) + (5 if gen == "Masculino" else -161)
 get_total = tmb * ativ_ops[ativ_sel]
 st.sidebar.info(f"🧬 **Gasto Total (GET): {int(get_total)} kcal**")
@@ -120,6 +118,27 @@ c4.metric("🥑 Gordura", f"{int(g_act)}g", f"Meta: {mgord}g")
 
 st.divider()
 
+# --- BLOCO DE COMPARATIVO DINÂMICO ---
+st.subheader("📊 Análise de Metas vs. Recomendação Científica")
+
+# Recomendações calculadas dinamicamente com base no peso atual
+rec_prot = round(PESO_ATUAL * 1.0) 
+rec_gord = round(PESO_ATUAL * 0.4) 
+rec_kcal = round(get_total - 750)   
+
+cr1, cr2, cr3 = st.columns(3)
+with cr1:
+    st.metric("Proteína Ideal", f"{rec_prot}g", f"{mprot - rec_prot}g vs sua meta")
+    st.caption("Cálculo: 1g/kg de peso total")
+with cr2:
+    st.metric("Calorias Sugeridas", f"{rec_kcal} kcal", f"{mkcal - rec_kcal} kcal vs sua meta")
+    st.caption(f"Baseado no seu GET de {int(get_total)} kcal")
+with cr3:
+    st.metric("Gordura Ideal", f"{rec_gord}g", f"{mgord - rec_gord}g vs sua meta")
+    st.caption("Cálculo: 0.4g/kg de peso total")
+
+st.divider()
+
 # Gráficos de Macros Semanais
 st.subheader("🔍 Controle Semanal de Macros")
 if not df_hist.empty:
@@ -136,12 +155,12 @@ if not df_hist.empty:
 
 st.divider()
 
-# Gráfico de Peso (Início fixo em 30/12)
+# Gráfico de Peso (Início fixo em 30/12 com 141.9 kg)
 st.subheader("⚖️ Rumo ao Peso Ideal (Início: 30/12)")
 if not df_peso_hist.empty:
     df_p = df_peso_hist.copy()
     df_p['data'] = pd.to_datetime(df_p['data'])
-    peso_inicial_regime = 144.9 # Fixado conforme sua pesagem de início
+    peso_inicial_regime = 144.9 # Fixado em seus dados iniciais
     
     ultimo_dia_proj = hoje + timedelta(days=45)
     dias_total = (ultimo_dia_proj - DATA_INICIO_DIETA).days
