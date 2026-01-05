@@ -417,7 +417,7 @@ with tab_peso:
                 cc1, cc2, cc3 = st.columns([2, 2, 1])
                 cc1.write(f"📅 {row['data']}")
                 cc2.write(f"⚖️ {row['peso_kg']} kg")
-                if cc3.button("🗑️", key=f"del_{row['id']}"):
+                if cc3.button("🗑️", key=f"del_{row['id']}_{idx}"):
                     executar_sql("DELETE FROM public.peso WHERE id = %s", (row['id'],))
                     st.rerun()
     else:
