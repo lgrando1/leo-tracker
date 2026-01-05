@@ -48,35 +48,64 @@ df_peso_last = run_query("SELECT peso_kg FROM public.peso ORDER BY data DESC, id
 if not df_perfil.empty:
     p = df_perfil.iloc[0]
 else:
+    # Valores padrão de fallback
     p = {'genero': 'Masculino', 'idade': 41, 'altura_cm': 185, 'atividade': 'Sedentário (1.2)', 
          'objetivo': 'Perder Peso (Moderado)', 'ritmo_semanal': 0.8, 'meta_kcal': 1650, 
          'meta_proteina': 130, 'meta_carbo': 150, 'meta_gordura': 59, 'meta_peso_alvo': 120.0}
 
 PESO_ATUAL = float(df_peso_last.iloc[0]['peso_kg']) if not df_peso_last.empty else 141.9
 
-# --- 2. BARRA LATERAL (CÁLCULO + FORMULÁRIO) ---
+# --- 2. BARRA LATERAL INTELIGENTE ---
 st.sidebar.header("🧮 Perfil Biométrico")
+
+# Inputs para cálculo em tempo real
 gen = st.sidebar.radio("Gênero:", ["Masculino", "Feminino"], index=0 if p['genero'] == "Masculino" else 1)
 idade = st.sidebar.number_input("Idade:", value=int(p['idade']))
 alt = st.sidebar.number_input("Altura (cm):", value=int(p['altura_cm']))
-peso_ref = st.sidebar.number_input("Peso para Cálculo (kg):", value=PESO_ATUAL)
+peso_ref = st.sidebar.number_input("Peso Atual (kg):", value=PESO_ATUAL)
 
 ativ_ops = {"Sedentário (1.2)": 1.2, "Leve (1.375)": 1.375, "Moderado (1.55)": 1.55}
 ativ_sel = st.sidebar.selectbox("Atividade:", list(ativ_ops.keys()), index=list(ativ_ops.keys()).index(p['atividade']) if p['atividade'] in ativ_ops else 0)
 
+# --- CÁLCULOS CIENTÍFICOS ---
 tmb = (10 * peso_ref) + (6.25 * alt) - (5 * idade) + (5 if gen == "Masculino" else -161)
 get_total = tmb * ativ_ops[ativ_sel]
-st.sidebar.info(f"🧬 **GET: {int(get_total)} kcal**")
 
+# Definição de Déficit Padrão (Moderado)
+deficit_padrao = 750 # Kcal a menos que o GET
+kcal_sugerida = int(get_total - deficit_padrao)
+
+# Distribuição de Macros Sugerida (30% Prot / 35% Carb / 35% Fat) - Foco em perda de peso
+sug_prot = int((kcal_sugerida * 0.30) / 4)
+sug_carb = int((kcal_sugerida * 0.35) / 4)
+sug_gord = int((kcal_sugerida * 0.35) / 9)
+
+# --- EXIBIÇÃO DA RECOMENDAÇÃO ---
+st.sidebar.markdown("---")
+st.sidebar.info(f"""
+🧬 **Sugestão Científica (Déficit):**
+\n🔥 **Calorias:** {kcal_sugerida} kcal
+\n🥩 **Proteína:** {sug_prot}g
+\n🍞 **Carbo:** {sug_carb}g
+\n🥑 **Gordura:** {sug_gord}g
+\n<small>Baseado no seu GET de {int(get_total)} kcal</small>
+""")
+
+# --- FORMULÁRIO DE AJUSTE MANUAL E SALVAMENTO ---
 with st.sidebar.form("perfil_persist"):
+    st.write("### 📝 Suas Metas Reais")
+    st.caption("Ajuste abaixo se quiser algo diferente da sugestão.")
+    
     obj_lista = ["Perder Peso (Agressivo)", "Perder Peso (Moderado)", "Manutenção", "Ganhar Massa"]
     obj_sel = st.selectbox("Objetivo:", obj_lista, index=obj_lista.index(p['objetivo']) if p['objetivo'] in obj_lista else 1)
+    
     mkcal = st.number_input("Meta Kcal:", value=int(p['meta_kcal']))
     mprot = st.number_input("Prot (g):", value=int(p['meta_proteina']))
     mcarb = st.number_input("Carb (g):", value=int(p.get('meta_carbo', 150)))
     mgord = st.number_input("Gord (g):", value=int(p.get('meta_gordura', 59)))
     palvo = st.number_input("Peso Alvo (kg):", value=float(p['meta_peso_alvo']))
     ritmo = st.slider("Ritmo (kg/sem):", 0.1, 2.0, float(p['ritmo_semanal']))
+    
     if st.form_submit_button("💾 SALVAR CONFIGURAÇÕES"):
         run_query("""
             INSERT INTO public.perfil (id, genero, idade, altura_cm, atividade, objetivo, ritmo_semanal, meta_kcal, meta_proteina, meta_carbo, meta_gordura, meta_peso_alvo)
@@ -119,7 +148,7 @@ with g1:
         fig_k.add_trace(go.Scatter(x=df_hist['data'], y=[mkcal]*len(df_hist), mode='lines', name='Meta', line=dict(color='red', dash='dot')))
         fig_k.update_layout(height=320, margin=dict(l=10,r=10,t=10,b=10), legend=dict(orientation="h", y=1.1))
         st.plotly_chart(fig_k, use_container_width=True)
-    else: st.info("Sem dados de consumo nos últimos 30 dias.")
+    else: st.info("Sem dados de consumo.")
 
 with g2:
     st.subheader("🎯 Distribuição Hoje")
@@ -149,7 +178,7 @@ st.subheader("⚖️ Rumo ao Peso Ideal (Início: 30/12)")
 if not df_peso.empty:
     df_p = df_peso.copy()
     df_p['data'] = pd.to_datetime(df_p['data'])
-    p_inicial = 144.9 # Peso fixado em 30/12
+    p_inicial = 144.9
     
     d_total = (hoje + timedelta(days=45) - DATA_INICIO).days
     dates_m = [DATA_INICIO + timedelta(days=i) for i in range(d_total + 1)]
