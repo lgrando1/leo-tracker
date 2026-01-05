@@ -24,17 +24,22 @@ def get_connection():
     return psycopg2.connect(st.secrets["DATABASE_URL"])
 
 def run_query(query, params=None, is_select=True):
+    conn = None
     try:
         conn = get_connection()
         with conn.cursor() as cur:
             cur.execute("SET timezone TO 'America/Sao_Paulo';")
-            if is_select: return pd.read_sql(query, conn, params=params)
+            if is_select:
+                return pd.read_sql(query, conn, params=params)
             else:
                 cur.execute(query, params)
                 conn.commit()
                 return True
     except Exception as e:
-        st.error(f"Erro DB: {e}"); return pd.DataFrame()
+        if conn:
+            conn.rollback() # <--- ISSO RESOLVE O ERRO DE TRANSACTION ABORTED
+        st.error(f"Erro DB: {e}")
+        return pd.DataFrame() if is_select else False
 
 # --- CONTROLE DE ACESSO VIA URL ---
 token_url = st.query_params.get("token")
