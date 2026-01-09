@@ -7,6 +7,7 @@ import pytz
 from groq import Groq 
 import io
 from fpdf import FPDF
+import math # Nova importação para o cálculo de gordura
 
 # 1. CONFIGURAÇÃO E ACESSO
 st.set_page_config(page_title="Leo Tracker Pro", page_icon="🦁", layout="wide")
@@ -44,6 +45,7 @@ def executar_sql(sql, params=None, is_select=False):
             if is_select:
                 df = pd.read_sql(sql, conn, params=params)
                 if 'data' in df.columns: df['data'] = pd.to_datetime(df['data'])
+                if 'log_date' in df.columns: df['log_date'] = pd.to_datetime(df['log_date'])
                 return df
             else:
                 cur.execute(sql, params)
@@ -58,6 +60,19 @@ def executar_sql(sql, params=None, is_select=False):
 def inicializar_banco():
     executar_sql("CREATE TABLE IF NOT EXISTS public.consumo (id SERIAL PRIMARY KEY, data DATE, alimento TEXT, quantidade REAL, kcal REAL, proteina REAL, carbo REAL, gordura REAL, gluten TEXT DEFAULT 'Não informado');")
     executar_sql("CREATE TABLE IF NOT EXISTS public.peso (id SERIAL PRIMARY KEY, data DATE, peso_kg REAL);")
+    # NOVA TABELA DE MEDIDAS
+    executar_sql("""
+        CREATE TABLE IF NOT EXISTS public.body_measurements (
+            id SERIAL PRIMARY KEY,
+            log_date DATE NOT NULL,
+            waist_cm REAL,
+            neck_cm REAL,
+            hip_cm REAL,
+            body_fat_est REAL,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
     executar_sql("""
         CREATE TABLE IF NOT EXISTS public.perfil (
             id SERIAL PRIMARY KEY, 
@@ -78,16 +93,26 @@ def get_metas_do_banco():
                 "carb": int(row.get('meta_carbo', 164)),
                 "gord": int(row.get('meta_gordura', 67)),
                 "peso_alvo": float(row.get('meta_peso_alvo', 120.0)),
-                "ritmo": float(row.get('ritmo_semanal', 0.8))
+                "ritmo": float(row.get('ritmo_semanal', 0.8)),
+                "altura": int(row.get('altura_cm', 178)) # Altura padrão se não tiver
             }
     except: pass
-    return {"kcal": 1683, "prot": 108, "carb": 164, "gord": 67, "peso_alvo": 120.0, "ritmo": 0.8}
+    return {"kcal": 1683, "prot": 108, "carb": 164, "gord": 67, "peso_alvo": 120.0, "ritmo": 0.8, "altura": 178}
 
 inicializar_banco()
 METAS = get_metas_do_banco()
 
-# 4. FUNÇÕES DE RELATÓRIO (NOVO)
-def gerar_excel(df_cons, df_peso, d_inicio, d_fim):
+# CÁLCULO GORDURA (NAVY METHOD)
+def calculate_body_fat(waist, neck, height):
+    if waist <= 0 or neck <= 0 or height <= 0: return 0.0
+    try:
+        # Fórmula para Homens
+        return 495 / (1.0324 - 0.19077 * math.log10(waist - neck) + 0.15456 * math.log10(height)) - 450
+    except:
+        return 0.0
+
+# 4. FUNÇÕES DE RELATÓRIO
+def gerar_excel(df_cons, df_peso, df_medidas, d_inicio, d_fim):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         # Aba 1: Resumo Diário
@@ -106,10 +131,17 @@ def gerar_excel(df_cons, df_peso, d_inicio, d_fim):
             df_p = df_peso[['data', 'peso_kg']].copy()
             df_p['data'] = df_p['data'].dt.strftime('%d/%m/%Y')
             df_p.to_excel(writer, sheet_name='Histórico Peso', index=False)
+
+        # Aba 4: Medidas (NOVO)
+        if not df_medidas.empty:
+            df_m = df_medidas[['log_date', 'waist_cm', 'neck_cm', 'hip_cm', 'body_fat_est']].copy()
+            df_m.columns = ['Data', 'Cintura (cm)', 'Pescoço (cm)', 'Quadril (cm)', '% Gordura Est.']
+            df_m['Data'] = df_m['Data'].dt.strftime('%d/%m/%Y')
+            df_m.to_excel(writer, sheet_name='Medidas Corporais', index=False)
             
     return output.getvalue()
 
-def gerar_pdf(df_cons, df_peso, d_inicio, d_fim):
+def gerar_pdf(df_cons, df_peso, df_medidas, d_inicio, d_fim):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
@@ -139,6 +171,19 @@ def gerar_pdf(df_cons, df_peso, d_inicio, d_fim):
         pdf.cell(0, 5, txt=f"Inicial: {p_ini}kg -> Atual: {p_fim}kg (Variação: {delta:.1f}kg)", ln=True)
         pdf.ln(5)
 
+    # Resumo Medidas (NOVO)
+    if not df_medidas.empty:
+        m_ini = df_medidas.iloc[0]['waist_cm']
+        m_fim = df_medidas.iloc[-1]['waist_cm']
+        fat_atual = df_medidas.iloc[-1]['body_fat_est']
+        
+        pdf.set_font("Arial", 'B', 12)
+        pdf.cell(0, 10, txt="Evolução Corporal (Cintura & Gordura)", ln=True)
+        pdf.set_font("Arial", size=10)
+        pdf.cell(0, 5, txt=f"Cintura Inicial: {m_ini}cm -> Atual: {m_fim}cm", ln=True)
+        pdf.cell(0, 5, txt=f"Estimativa de Gordura Atual: {fat_atual:.1f}% (Método da Marinha)", ln=True)
+        pdf.ln(5)
+
     # Resumo Médio
     if not df_cons.empty:
         media_kcal = df_cons.groupby(df_cons['data'].dt.date)['kcal'].sum().mean()
@@ -149,22 +194,10 @@ def gerar_pdf(df_cons, df_peso, d_inicio, d_fim):
         pdf.cell(0, 5, txt=f"Consumo Médio: {int(media_kcal)} kcal/dia", ln=True)
         pdf.cell(0, 5, txt=f"Proteína Média: {int(media_prot)} g/dia", ln=True)
         pdf.ln(10)
-        
-        # Logs (Simplificado para não quebrar página)
-        pdf.set_font("Arial", 'B', 12)
-        pdf.cell(0, 10, txt="Diário Resumido (Últimos dias)", ln=True)
-        pdf.set_font("Arial", size=8)
-        
-        dias = df_cons['data'].dt.date.unique()
-        for dia in sorted(dias, reverse=True)[:10]: # Top 10 dias recentes
-            soma = df_cons[df_cons['data'].dt.date == dia]['kcal'].sum()
-            # Tratamento básico de caracteres latinos
-            data_str = dia.strftime('%d/%m')
-            pdf.cell(0, 5, txt=f"{data_str}: {int(soma)} kcal", ln=True)
 
-    return pdf.output(dest='S').encode('latin-1', 'ignore') # Encode para bytes
+    return pdf.output(dest='S').encode('latin-1', 'ignore') 
 
-# 5. GROQ IA
+# 5. GROQ IA (Mantida igual)
 def processar_texto_ia(texto_usuario, api_key):
     client = Groq(api_key=api_key)
     prompt_system = f"""
@@ -200,8 +233,8 @@ c4.metric("🥑 Gordura", f"{int(g_hoje)}g", f"Meta: {METAS['gord']}g")
 st.progress(min(k_hoje/METAS['kcal'], 1.0))
 st.divider()
 
-# ABAS
-tab_add, tab_hist, tab_peso, tab_rel, tab_admin = st.tabs(["➕ Inserir", "📜 Diário", "⚖️ Peso", "📄 Relatórios", "⚙️ Metas"])
+# ABAS (Atualizada a aba Peso para incluir Medidas)
+tab_add, tab_hist, tab_medidas, tab_rel, tab_admin = st.tabs(["➕ Inserir", "📜 Diário", "📏 Corpo", "📄 Relatórios", "⚙️ Metas"])
 
 with tab_add:
     st.write("### O que você comeu?")
@@ -215,7 +248,7 @@ with tab_add:
                     st.success(f"🤖 {res.get('analise')}")
                     for item in res.get('alimentos', []):
                         executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-                                    (item.get('data'), item.get('alimento'), item.get('quantidade_g'), item.get('kcal'), item.get('p'), item.get('c'), item.get('g'), item.get('gluten')))
+                                     (item.get('data'), item.get('alimento'), item.get('quantidade_g'), item.get('kcal'), item.get('p'), item.get('c'), item.get('g'), item.get('gluten')))
                     st.rerun()
                 else: st.error(f"Erro IA: {res}")
     with st.expander("Importação JSON Manual"):
@@ -230,7 +263,7 @@ with tab_add:
                 for item in (lista if isinstance(lista, list) else [lista]):
                     dt = item.get('data') if item.get('data') else data_hoje
                     executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-                                (dt, item.get('alimento'), item.get('quantidade_g'), item.get('kcal'), item.get('p'), item.get('c'), item.get('g'), item.get('gluten')))
+                                 (dt, item.get('alimento'), item.get('quantidade_g'), item.get('kcal'), item.get('p'), item.get('c'), item.get('g'), item.get('gluten')))
                     count += 1
                 st.success(f"{count} salvos!"); st.rerun()
             except Exception as e: st.error(f"Erro: {e}")
@@ -249,24 +282,58 @@ with tab_hist:
                 st.markdown("---")
     else: st.info("Nada registrado hoje.")
 
-with tab_peso:
-    st.write(f"### Rumo aos {METAS['peso_alvo']}kg")
-    c_dt, c_val, c_btn = st.columns([1.5, 1.5, 1])
-    dt_lanc = c_dt.date_input("Data:", value=data_hoje)
-    ultimo = executar_sql("SELECT peso_kg FROM public.peso ORDER BY data DESC LIMIT 1", is_select=True)
-    val_padrao = float(ultimo.iloc[0]['peso_kg']) if not ultimo.empty else 125.0
-    p_val = c_val.number_input("Peso (kg):", 40.0, 200.0, step=0.1, value=val_padrao)
-    c_btn.write(""); c_btn.write("")
-    if c_btn.button("💾 Salvar"):
-        executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", (dt_lanc, p_val))
-        st.success("Salvo!"); st.rerun()
-    st.divider()
-    df_p = executar_sql("SELECT * FROM public.peso ORDER BY data ASC", is_select=True)
-    if not df_p.empty:
-        df_p['data'] = pd.to_datetime(df_p['data'])
-        st.line_chart(df_p.set_index('data')['peso_kg'])
+# --- ABA UNIFICADA: CORPO (PESO + MEDIDAS) ---
+with tab_medidas:
+    col_left, col_right = st.columns(2)
+    
+    with col_left:
+        st.write(f"### ⚖️ Balança")
+        c_dt, c_val = st.columns([1, 1])
+        dt_lanc = c_dt.date_input("Data:", value=data_hoje, key="dt_peso")
+        
+        # Pega último peso
+        ultimo = executar_sql("SELECT peso_kg FROM public.peso ORDER BY data DESC LIMIT 1", is_select=True)
+        val_padrao = float(ultimo.iloc[0]['peso_kg']) if not ultimo.empty else 125.0
+        p_val = c_val.number_input("Peso (kg):", 40.0, 200.0, step=0.1, value=val_padrao)
+        
+        if st.button("💾 Salvar Peso", use_container_width=True):
+            executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", (dt_lanc, p_val))
+            st.success("Peso salvo!"); st.rerun()
+            
+        st.markdown("---")
+        df_p = executar_sql("SELECT * FROM public.peso ORDER BY data ASC", is_select=True)
+        if not df_p.empty:
+            df_p['data'] = pd.to_datetime(df_p['data'])
+            st.line_chart(df_p.set_index('data')['peso_kg'])
 
-# --- NOVA ABA DE RELATÓRIOS ---
+    with col_right:
+        st.write(f"### 📏 Medidas & Gordura")
+        st.info("💡 A Cintura é o indicador nº 1 de risco metabólico.")
+        
+        cm1, cm2, cm3 = st.columns(3)
+        waist = cm1.number_input("Cintura (Umbigo):", 60.0, 150.0, step=0.5, key="m_waist")
+        neck = cm2.number_input("Pescoço:", 30.0, 60.0, step=0.5, key="m_neck")
+        hip = cm3.number_input("Quadril:", 80.0, 150.0, step=0.5, key="m_hip")
+        
+        # Cálculo em tempo real
+        fat_est = calculate_body_fat(waist, neck, METAS['altura'])
+        if waist > 0:
+            st.caption(f"📊 Gordura Estimada (Navy Method): **{fat_est:.1f}%**")
+        
+        if st.button("💾 Salvar Medidas", use_container_width=True):
+            executar_sql("""
+                INSERT INTO public.body_measurements (log_date, waist_cm, neck_cm, hip_cm, body_fat_est) 
+                VALUES (%s, %s, %s, %s, %s)
+            """, (dt_lanc, waist, neck, hip, fat_est))
+            st.success("Medidas salvas!"); st.rerun()
+
+        st.markdown("---")
+        # Gráfico de Cintura (O mais importante)
+        df_m = executar_sql("SELECT log_date, waist_cm, body_fat_est FROM public.body_measurements ORDER BY log_date ASC", is_select=True)
+        if not df_m.empty:
+            df_m['log_date'] = pd.to_datetime(df_m['log_date'])
+            st.area_chart(df_m.set_index('log_date')['waist_cm'], color="#FF4B4B") # Vermelho para alerta
+
 with tab_rel:
     st.header("📄 Relatórios para Nutricionista")
     st.write("Selecione o período e baixe os dados para compartilhar.")
@@ -278,10 +345,12 @@ with tab_rel:
     if st.button("🔍 Gerar Arquivos"):
         df_cons_rel = executar_sql("SELECT * FROM public.consumo WHERE data >= %s AND data <= %s ORDER BY data ASC", (d_inicio, d_fim), is_select=True)
         df_peso_rel = executar_sql("SELECT * FROM public.peso WHERE data >= %s AND data <= %s ORDER BY data ASC", (d_inicio, d_fim), is_select=True)
+        # Buscar Medidas
+        df_medidas_rel = executar_sql("SELECT * FROM public.body_measurements WHERE log_date >= %s AND log_date <= %s ORDER BY log_date ASC", (d_inicio, d_fim), is_select=True)
         
         if not df_cons_rel.empty:
-            # Excel
-            excel_data = gerar_excel(df_cons_rel, df_peso_rel, d_inicio, d_fim)
+            # Excel (Passando df_medidas_rel)
+            excel_data = gerar_excel(df_cons_rel, df_peso_rel, df_medidas_rel, d_inicio, d_fim)
             st.download_button(
                 label="📥 Baixar Excel Completo (.xlsx)",
                 data=excel_data,
@@ -289,9 +358,9 @@ with tab_rel:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
             
-            # PDF
+            # PDF (Passando df_medidas_rel)
             try:
-                pdf_data = gerar_pdf(df_cons_rel, df_peso_rel, d_inicio, d_fim)
+                pdf_data = gerar_pdf(df_cons_rel, df_peso_rel, df_medidas_rel, d_inicio, d_fim)
                 st.download_button(
                     label="📥 Baixar Resumo PDF (.pdf)",
                     data=pdf_data,
@@ -299,7 +368,7 @@ with tab_rel:
                     mime="application/pdf"
                 )
             except Exception as e:
-                st.error(f"Erro ao gerar PDF (pode ser problema de fonte no servidor): {e}")
+                st.error(f"Erro ao gerar PDF: {e}")
                 
         else:
             st.warning("Nenhum dado de consumo encontrado neste período.")
@@ -313,8 +382,9 @@ with tab_admin:
         c3, c4 = st.columns(2)
         nc = c3.number_input("Meta Carbo:", value=METAS['carb'], step=5)
         ng = c4.number_input("Meta Gordura:", value=METAS['gord'], step=5)
+        ch = st.number_input("Sua Altura (cm):", value=METAS['altura'], step=1) # Adicionado Altura
         if st.form_submit_button("💾 Atualizar Banco"):
-            executar_sql("UPDATE public.perfil SET meta_kcal=%s, meta_proteina=%s, meta_carbo=%s, meta_gordura=%s WHERE id=1", (nk, np, nc, ng))
+            executar_sql("UPDATE public.perfil SET meta_kcal=%s, meta_proteina=%s, meta_carbo=%s, meta_gordura=%s, altura_cm=%s WHERE id=1", (nk, np, nc, ng, ch))
             st.success("Sincronizado!"); st.rerun()
 
-st.caption(f"Leo Tracker Pro v3.3 | Reports Active")
+st.caption(f"Leo Tracker Pro v3.4 | Body Metrics Added")
