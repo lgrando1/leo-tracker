@@ -56,11 +56,23 @@ def executar_sql(sql, params=None, is_select=False):
         st.error(f"Erro no Banco: {e}")
         return pd.DataFrame() if is_select else False
 
-# 3. SINCRONIZAÇÃO COM O DASHBOARD
+# 3. SINCRONIZAÇÃO COM O DASHBOARD (CORRIGIDO)
 def inicializar_banco():
+    # Tabelas antigas
     executar_sql("CREATE TABLE IF NOT EXISTS public.consumo (id SERIAL PRIMARY KEY, data DATE, alimento TEXT, quantidade REAL, kcal REAL, proteina REAL, carbo REAL, gordura REAL, gluten TEXT DEFAULT 'Não informado');")
     executar_sql("CREATE TABLE IF NOT EXISTS public.peso (id SERIAL PRIMARY KEY, data DATE, peso_kg REAL);")
-    # NOVA TABELA DE MEDIDAS
+    
+    # Tabela de perfil
+    executar_sql("""
+        CREATE TABLE IF NOT EXISTS public.perfil (
+            id SERIAL PRIMARY KEY, 
+            genero TEXT, idade INT, altura_cm INT, atividade TEXT, 
+            objetivo TEXT, ritmo_semanal REAL, 
+            meta_kcal REAL, meta_proteina REAL, meta_carbo REAL, meta_gordura REAL, meta_peso_alvo REAL
+        );
+    """)
+
+    # Tabela de medidas (Cria se não existir)
     executar_sql("""
         CREATE TABLE IF NOT EXISTS public.body_measurements (
             id SERIAL PRIMARY KEY,
@@ -73,14 +85,13 @@ def inicializar_banco():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     """)
-    executar_sql("""
-        CREATE TABLE IF NOT EXISTS public.perfil (
-            id SERIAL PRIMARY KEY, 
-            genero TEXT, idade INT, altura_cm INT, atividade TEXT, 
-            objetivo TEXT, ritmo_semanal REAL, 
-            meta_kcal REAL, meta_proteina REAL, meta_carbo REAL, meta_gordura REAL, meta_peso_alvo REAL
-        );
-    """)
+    
+    # CORREÇÃO: Tenta adicionar a coluna body_fat_est caso a tabela já exista sem ela
+    try:
+        executar_sql("ALTER TABLE public.body_measurements ADD COLUMN IF NOT EXISTS body_fat_est REAL;")
+    except Exception as e:
+        # Se der erro (ex: coluna já existe em algumas versões de SQL), apenas segue
+        print(f"Nota: Tentativa de update de coluna: {e}")
 
 def get_metas_do_banco():
     try:
