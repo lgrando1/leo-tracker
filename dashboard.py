@@ -17,7 +17,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- CONEXÃO ---
+# --- CONEXÃO COM BLINDAGEM DE ERRO (AQUI ESTÁ A CORREÇÃO) ---
 @st.cache_resource(ttl=300)
 def get_connection():
     return psycopg2.connect(st.secrets["DATABASE_URL"])
@@ -30,8 +30,17 @@ def run_query(query, params=None, is_select=True):
             cur.execute("SET timezone TO 'America/Sao_Paulo';")
             if is_select: 
                 df = pd.read_sql(query, conn, params=params)
+                
+                # --- CORREÇÃO DE BUG ---
+                # Tenta converter colunas de tempo. Se falhar (ex: coluna TIME pura), ignora e segue.
                 for col in ['data', 'log_date', 'measurement_time']:
-                    if col in df.columns: df[col] = pd.to_datetime(df[col])
+                    if col in df.columns:
+                        try:
+                            df[col] = pd.to_datetime(df[col])
+                        except Exception:
+                            pass # Ignora erro de conversão (mantém como objeto original)
+                # -----------------------
+                
                 return df
             else:
                 cur.execute(query, params)
@@ -42,6 +51,7 @@ def run_query(query, params=None, is_select=True):
         st.error(f"Erro DB: {e}")
         return pd.DataFrame() if is_select else False
 
+# --- TRAVA DE SEGURANÇA ---
 if st.query_params.get("token") != st.secrets.get("DASH_ACCESS_TOKEN"):
     st.error("🔒 Acesso Negado."); st.stop()
 
@@ -99,34 +109,33 @@ c4.metric("💓 Pulsação", f"{last_pulse} bpm", "Repouso ideal < 80")
 
 st.divider()
 
-# --- NOVO GRÁFICO DE PRESSÃO ---
+# --- GRÁFICO DE PRESSÃO ---
 st.subheader("🫀 Monitor Cardíaco (Pressão Arterial)")
 
 if not df_bp.empty:
     fig_bp = go.Figure()
+    # Linhas de Referência
+    fig_bp.add_hline(y=120, line_dash="dot", line_color="green", annotation_text="Limite Sistólica (120)", annotation_position="bottom right")
+    fig_bp.add_hline(y=80, line_dash="dot", line_color="green", annotation_text="Limite Diastólica (80)", annotation_position="bottom right")
 
-    # Linhas de Referência (Zona Normal 120/80)
-    fig_bp.add_hline(y=120, line_dash="dot", line_color="green", annotation_text="Limite Sistólica Ideal (120)", annotation_position="bottom right")
-    fig_bp.add_hline(y=80, line_dash="dot", line_color="green", annotation_text="Limite Diastólica Ideal (80)", annotation_position="bottom right")
-
-    # Diastólica (Baixa)
+    # Diastólica
     fig_bp.add_trace(go.Scatter(
         x=df_bp['measurement_time'], y=df_bp['diastolic'],
         name="Diastólica (Baixa)", mode='lines+markers',
-        line=dict(color='blue'), fill=None
+        line=dict(color='blue')
     ))
 
-    # Sistólica (Alta) - Com preenchimento entre as linhas
+    # Sistólica
     fig_bp.add_trace(go.Scatter(
         x=df_bp['measurement_time'], y=df_bp['systolic'],
         name="Sistólica (Alta)", mode='lines+markers',
-        line=dict(color='red'), fill='tonexty', # Preenche até a linha anterior (Diastólica)
+        line=dict(color='red'), fill='tonexty', 
         fillcolor='rgba(255, 0, 0, 0.1)' 
     ))
 
     fig_bp.update_layout(
-        title="Histórico de Pressão Arterial (mmHg)",
-        yaxis=dict(title="Pressão (mmHg)", range=[40, 180]),
+        title=dict(text="Histórico de Pressão Arterial (mmHg)"),
+        yaxis=dict(title=dict(text="Pressão (mmHg)"), range=[40, 180]),
         height=350, margin=dict(l=10,r=10,t=40,b=10),
         hovermode="x unified"
     )
