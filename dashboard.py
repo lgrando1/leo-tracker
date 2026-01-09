@@ -154,6 +154,8 @@ if not df_peso.empty:
         line=dict(color='#1f77b4', width=4)
     ))
 
+    # ... (código anterior do fig_combo.add_trace permanece igual) ...
+
     # TRACE 3: Cintura (Linha Vermelha no Eixo da Direita)
     if not df_medidas.empty:
         fig_combo.add_trace(go.Scatter(
@@ -161,21 +163,19 @@ if not df_peso.empty:
             name="Cintura (cm)", 
             mode='lines+markers', 
             line=dict(color='#d62728', width=3),
-            yaxis='y2' # Mágica acontece aqui
+            yaxis='y2' 
         ))
 
-    # Layout Profissional com Eixo Duplo
+    # --- CORREÇÃO AQUI: Layout com sintaxe explícita para evitar erro de versão ---
     fig_combo.update_layout(
-        title="Correlação: Peso (Esq) vs Cintura (Dir) vs Meta",
-        xaxis=dict(title="Data"),
+        title=dict(text="Correlação: Peso (Esq) vs Cintura (Dir) vs Meta"),
+        xaxis=dict(title=dict(text="Data")),
         yaxis=dict(
-            title="Peso (kg)", 
-            titlefont=dict(color="#1f77b4"),
+            title=dict(text="Peso (kg)", font=dict(color="#1f77b4")), # Forma correta e segura
             tickfont=dict(color="#1f77b4")
         ),
         yaxis2=dict(
-            title="Cintura (cm)",
-            titlefont=dict(color="#d62728"),
+            title=dict(text="Cintura (cm)", font=dict(color="#d62728")), # Forma correta e segura
             tickfont=dict(color="#d62728"),
             overlaying='y',
             side='right'
@@ -186,7 +186,7 @@ if not df_peso.empty:
     )
     
     st.plotly_chart(fig_combo, use_container_width=True)
-
+    
     # Métricas de Resumo logo abaixo do gráfico
     c_m1, c_m2, c_m3 = st.columns(3)
     
