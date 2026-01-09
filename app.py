@@ -293,23 +293,26 @@ with tab_hist:
                 st.markdown("---")
     else: st.info("Nada registrado hoje.")
 
-# --- ABA UNIFICADA: CORPO (PESO + MEDIDAS) ---
+# --- ABA UNIFICADA: CORPO (PESO + MEDIDAS + NOTAS) ---
 with tab_medidas:
     col_left, col_right = st.columns(2)
     
+    # Coluna da Esquerda: Peso
     with col_left:
         st.write(f"### ⚖️ Balança")
         c_dt, c_val = st.columns([1, 1])
         dt_lanc = c_dt.date_input("Data:", value=data_hoje, key="dt_peso")
         
-        # Pega último peso
+        # Pega último peso para sugerir
         ultimo = executar_sql("SELECT peso_kg FROM public.peso ORDER BY data DESC LIMIT 1", is_select=True)
         val_padrao = float(ultimo.iloc[0]['peso_kg']) if not ultimo.empty else 125.0
+        
+        # Este é o valor (p_val) que usaremos em ambos os salvamentos
         p_val = c_val.number_input("Peso (kg):", 40.0, 200.0, step=0.1, value=val_padrao)
         
-        if st.button("💾 Salvar Peso", use_container_width=True):
+        if st.button("💾 Salvar Apenas Peso", use_container_width=True):
             executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", (dt_lanc, p_val))
-            st.success("Peso salvo!"); st.rerun()
+            st.success("Peso salvo no histórico simples!"); st.rerun()
             
         st.markdown("---")
         df_p = executar_sql("SELECT * FROM public.peso ORDER BY data ASC", is_select=True)
@@ -317,34 +320,43 @@ with tab_medidas:
             df_p['data'] = pd.to_datetime(df_p['data'])
             st.line_chart(df_p.set_index('data')['peso_kg'])
 
+    # Coluna da Direita: Medidas Completas
     with col_right:
         st.write(f"### 📏 Medidas & Gordura")
-        st.info("💡 A Cintura é o indicador nº 1 de risco metabólico.")
+        st.info("💡 Ao salvar aqui, gravamos o Pacote Completo (Peso + Medidas + Notas).")
         
         cm1, cm2, cm3 = st.columns(3)
         waist = cm1.number_input("Cintura (Umbigo):", 60.0, 150.0, step=0.5, key="m_waist")
         neck = cm2.number_input("Pescoço:", 30.0, 60.0, step=0.5, key="m_neck")
         hip = cm3.number_input("Quadril:", 80.0, 150.0, step=0.5, key="m_hip")
         
+        # Campo de Notas adicionado
+        notes = st.text_input("Notas / Observações:", placeholder="Ex: Jejum, Pós-treino, Início Creatina...")
+        
         # Cálculo em tempo real
         fat_est = calculate_body_fat(waist, neck, METAS['altura'])
         if waist > 0:
             st.caption(f"📊 Gordura Estimada (Navy Method): **{fat_est:.1f}%**")
         
-        if st.button("💾 Salvar Medidas", use_container_width=True):
+        # Botão corrigido: Agora salva TUDO (Peso, Medidas, Notas)
+        if st.button("💾 Salvar Medidas Completas", use_container_width=True):
             executar_sql("""
-                INSERT INTO public.body_measurements (log_date, waist_cm, neck_cm, hip_cm, body_fat_est) 
-                VALUES (%s, %s, %s, %s, %s)
-            """, (dt_lanc, waist, neck, hip, fat_est))
-            st.success("Medidas salvas!"); st.rerun()
+                INSERT INTO public.body_measurements 
+                (log_date, weight_kg, waist_cm, neck_cm, hip_cm, body_fat_est, notes) 
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (dt_lanc, p_val, waist, neck, hip, fat_est, notes))
+            
+            # Opcional: Salvar também na tabela de peso simples para manter sincronia
+            executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", (dt_lanc, p_val))
+            
+            st.success("Registro completo salvo!"); st.rerun()
 
         st.markdown("---")
-        # Gráfico de Cintura (O mais importante)
+        # Gráfico de Cintura
         df_m = executar_sql("SELECT log_date, waist_cm, body_fat_est FROM public.body_measurements ORDER BY log_date ASC", is_select=True)
         if not df_m.empty:
             df_m['log_date'] = pd.to_datetime(df_m['log_date'])
-            st.area_chart(df_m.set_index('log_date')['waist_cm'], color="#FF4B4B") # Vermelho para alerta
-
+            st.area_chart(df_m.set_index('log_date')['waist_cm'], color="#FF4B4B")
 with tab_rel:
     st.header("📄 Relatórios para Nutricionista")
     st.write("Selecione o período e baixe os dados para compartilhar.")
