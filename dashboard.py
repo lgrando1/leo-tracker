@@ -30,10 +30,8 @@ def run_query(query, params=None, is_select=True):
             cur.execute("SET timezone TO 'America/Sao_Paulo';")
             if is_select: 
                 df = pd.read_sql(query, conn, params=params)
-                # Padronizar datas automaticamente para evitar erros de plotagem
                 for col in ['data', 'log_date']:
-                    if col in df.columns:
-                        df[col] = pd.to_datetime(df[col])
+                    if col in df.columns: df[col] = pd.to_datetime(df[col])
                 return df
             else:
                 cur.execute(query, params)
@@ -49,16 +47,13 @@ if st.query_params.get("token") != st.secrets.get("DASH_ACCESS_TOKEN"):
     st.error("🔒 Acesso Negado."); st.stop()
 
 # --- BUSCA DE DADOS ---
-# Perfil e Peso
 df_perfil = run_query("SELECT * FROM public.perfil WHERE id = 1")
 df_peso_last = run_query("SELECT peso_kg FROM public.peso ORDER BY data DESC, id DESC LIMIT 1")
-# NOVAS Medidas
 df_medidas = run_query("SELECT * FROM public.body_measurements ORDER BY log_date ASC")
 
 if not df_perfil.empty:
     p = df_perfil.iloc[0]
 else:
-    # Fallback
     p = {'genero': 'Masculino', 'idade': 41, 'altura_cm': 178, 'atividade': 'Sedentário (1.2)', 
          'objetivo': 'Perder Peso (Moderado)', 'ritmo_semanal': 0.8, 'meta_kcal': 1650, 
          'meta_proteina': 130, 'meta_carbo': 150, 'meta_gordura': 59, 'meta_peso_alvo': 120.0}
@@ -68,8 +63,6 @@ ALTURA_ATUAL = int(p.get('altura_cm', 178))
 
 # --- 2. BARRA LATERAL INTELIGENTE ---
 st.sidebar.header("🧮 Perfil Biométrico")
-
-# Inputs
 gen = st.sidebar.radio("Gênero:", ["Masculino", "Feminino"], index=0 if p['genero'] == "Masculino" else 1)
 idade = st.sidebar.number_input("Idade:", value=int(p['idade']))
 alt = st.sidebar.number_input("Altura (cm):", value=ALTURA_ATUAL)
@@ -78,7 +71,6 @@ peso_ref = st.sidebar.number_input("Peso Atual (kg):", value=PESO_ATUAL)
 ativ_ops = {"Sedentário (1.2)": 1.2, "Leve (1.375)": 1.375, "Moderado (1.55)": 1.55}
 ativ_sel = st.sidebar.selectbox("Atividade:", list(ativ_ops.keys()), index=list(ativ_ops.keys()).index(p['atividade']) if p['atividade'] in ativ_ops else 0)
 
-# Cálculos
 tmb = (10 * peso_ref) + (6.25 * alt) - (5 * idade) + (5 if gen == "Masculino" else -161)
 get_total = tmb * ativ_ops[ativ_sel]
 deficit_padrao = 750 
@@ -89,30 +81,19 @@ sug_carb = int((kcal_sugerida * 0.35) / 4)
 sug_gord = int((kcal_sugerida * 0.35) / 9)
 
 st.sidebar.markdown("---")
-st.sidebar.info(f"""
-🧬 **Sugestão Científica (Déficit):**
-\n🔥 **Calorias:** {kcal_sugerida} kcal
-\n🥩 **Proteína:** {sug_prot}g
-\n🍞 **Carbo:** {sug_carb}g
-\n🥑 **Gordura:** {sug_gord}g
-\nBaseado no seu GET de {int(get_total)} kcal
-""")
+st.sidebar.info(f"🧬 **Sugestão (Déficit):**\n🔥 {kcal_sugerida} kcal | 🥩 {sug_prot}g | 🍞 {sug_carb}g | 🥑 {sug_gord}g")
 
-# Formulário de Ajuste
 with st.sidebar.form("perfil_persist"):
-    st.write("### 📝 Suas Metas Reais")
-    
+    st.write("### 📝 Suas Metas")
     obj_lista = ["Perder Peso (Agressivo)", "Perder Peso (Moderado)", "Manutenção", "Ganhar Massa"]
     obj_sel = st.selectbox("Objetivo:", obj_lista, index=obj_lista.index(p['objetivo']) if p['objetivo'] in obj_lista else 1)
-    
     mkcal = st.number_input("Meta Kcal:", value=int(p['meta_kcal']))
     mprot = st.number_input("Prot (g):", value=int(p['meta_proteina']))
     mcarb = st.number_input("Carb (g):", value=int(p.get('meta_carbo', 150)))
     mgord = st.number_input("Gord (g):", value=int(p.get('meta_gordura', 59)))
     palvo = st.number_input("Peso Alvo (kg):", value=float(p['meta_peso_alvo']))
     ritmo = st.slider("Ritmo (kg/sem):", 0.1, 2.0, float(p['ritmo_semanal']))
-    
-    if st.form_submit_button("💾 SALVAR CONFIGURAÇÕES"):
+    if st.form_submit_button("💾 SALVAR"):
         run_query("""
             INSERT INTO public.perfil (id, genero, idade, altura_cm, atividade, objetivo, ritmo_semanal, meta_kcal, meta_proteina, meta_carbo, meta_gordura, meta_peso_alvo)
             VALUES (1, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -134,7 +115,7 @@ df_peso = run_query("SELECT * FROM public.peso ORDER BY data ASC")
 
 st.markdown(f"# 🦁 Leo's Performance | {hoje.strftime('%d/%m')}")
 
-# KPI: Macros Hoje (Original)
+# KPI: Macros Hoje
 k_act, p_act, c_act, g_act = (df_hoje['kcal'].sum(), df_hoje['proteina'].sum(), df_hoje['carbo'].sum(), df_hoje['gordura'].sum()) if not df_hoje.empty else (0,0,0,0)
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("🔥 Calorias", f"{int(k_act)}", f"Meta: {mkcal}")
@@ -144,96 +125,104 @@ c4.metric("🥑 Gordura", f"{int(g_act)}g", f"Meta: {mgord}g")
 
 st.divider()
 
-# --- NOVO BLOCO: COMPOSIÇÃO CORPORAL ---
-st.subheader("📏 Composição Corporal & Risco Metabólico")
+# --- GRÁFICO MESTRE UNIFICADO ---
+st.subheader("📉 Evolução Corporal Unificada (O Gráfico da Verdade)")
 
-cintura_atual = 0
-gordura_atual = 0
-if not df_medidas.empty:
-    last_m = df_medidas.iloc[-1]
-    cintura_atual = last_m['waist_cm']
-    # Lógica de fallback para cálculo
-    if last_m.get('body_fat_est') and last_m['body_fat_est'] > 0:
-        gordura_atual = last_m['body_fat_est']
-    else:
-        try:
-            gordura_atual = 495 / (1.0324 - 0.19077 * math.log10(last_m['waist_cm'] - last_m['neck_cm']) + 0.15456 * math.log10(ALTURA_ATUAL)) - 450
-        except: gordura_atual = 0
-
-col_corp1, col_corp2, col_corp3 = st.columns(3)
-col_corp1.metric("⚖️ Peso Atual", f"{PESO_ATUAL} kg", delta=f"{PESO_ATUAL - float(p['meta_peso_alvo']):.1f} kg para a meta", delta_color="inverse")
-col_corp2.metric("📏 Cintura (Umbigo)", f"{cintura_atual} cm", "Meta: < 94 cm (Saúde)", delta_color="inverse")
-col_corp3.metric("📊 Gordura Estimada", f"{gordura_atual:.1f}%", "Navy Method", delta_color="inverse")
-
-# Gráfico Novo: Peso vs Cintura
-if not df_medidas.empty:
-    fig_body = go.Figure()
-    # Eixo Y1: Peso
-    fig_body.add_trace(go.Scatter(x=df_peso['data'], y=df_peso['peso_kg'], name="Peso (kg)", line=dict(color='blue', width=3)))
-    # Eixo Y2: Cintura
-    fig_body.add_trace(go.Scatter(x=df_medidas['log_date'], y=df_medidas['waist_cm'], name="Cintura (cm)", line=dict(color='red', dash='dot'), yaxis='y2'))
+if not df_peso.empty:
+    # 1. Preparar Dados de Meta (Projection)
+    p_inicial = 144.9 # Ponto de partida
+    d_total = (hoje + timedelta(days=60) - DATA_INICIO).days
+    dates_m = [DATA_INICIO + timedelta(days=i) for i in range(d_total + 1)]
+    vals_m = [max(float(p['meta_peso_alvo']), p_inicial - (i * (float(p['ritmo_semanal'])/7))) for i in range(len(dates_m))]
     
-    fig_body.update_layout(
-        title="Correlação: Peso vs Cintura",
-        yaxis=dict(title="Peso (kg)"),
-        yaxis2=dict(title="Cintura (cm)", overlaying='y', side='right'),
-        height=350, margin=dict(l=10,r=10,t=40,b=10),
-        legend=dict(orientation="h", y=1.1)
+    # 2. Criar Gráfico Combinado
+    fig_combo = go.Figure()
+
+    # TRACE 1: Meta de Peso (Linha Pontilhada Cinza)
+    fig_combo.add_trace(go.Scatter(
+        x=dates_m, y=vals_m, 
+        name="Meta Planejada", 
+        mode='lines', 
+        line=dict(color='gray', dash='dot', width=2)
+    ))
+
+    # TRACE 2: Peso Real (Linha Azul Forte)
+    fig_combo.add_trace(go.Scatter(
+        x=df_peso['data'], y=df_peso['peso_kg'], 
+        name="Peso Real (kg)", 
+        mode='lines+markers', 
+        line=dict(color='#1f77b4', width=4)
+    ))
+
+    # TRACE 3: Cintura (Linha Vermelha no Eixo da Direita)
+    if not df_medidas.empty:
+        fig_combo.add_trace(go.Scatter(
+            x=df_medidas['log_date'], y=df_medidas['waist_cm'], 
+            name="Cintura (cm)", 
+            mode='lines+markers', 
+            line=dict(color='#d62728', width=3),
+            yaxis='y2' # Mágica acontece aqui
+        ))
+
+    # Layout Profissional com Eixo Duplo
+    fig_combo.update_layout(
+        title="Correlação: Peso (Esq) vs Cintura (Dir) vs Meta",
+        xaxis=dict(title="Data"),
+        yaxis=dict(
+            title="Peso (kg)", 
+            titlefont=dict(color="#1f77b4"),
+            tickfont=dict(color="#1f77b4")
+        ),
+        yaxis2=dict(
+            title="Cintura (cm)",
+            titlefont=dict(color="#d62728"),
+            tickfont=dict(color="#d62728"),
+            overlaying='y',
+            side='right'
+        ),
+        legend=dict(x=0.01, y=0.99, bgcolor='rgba(255,255,255,0.8)'),
+        height=500,
+        hovermode="x unified"
     )
-    st.plotly_chart(fig_body, use_container_width=True)
+    
+    st.plotly_chart(fig_combo, use_container_width=True)
+
+    # Métricas de Resumo logo abaixo do gráfico
+    c_m1, c_m2, c_m3 = st.columns(3)
+    
+    # Calcular gordura atual
+    cintura_atual = df_medidas.iloc[-1]['waist_cm'] if not df_medidas.empty else 0
+    gordura_atual = 0
+    if cintura_atual > 0:
+        neck_atual = df_medidas.iloc[-1]['neck_cm'] if 'neck_cm' in df_medidas.columns else 40
+        try:
+            gordura_atual = 495 / (1.0324 - 0.19077 * math.log10(cintura_atual - neck_atual) + 0.15456 * math.log10(ALTURA_ATUAL)) - 450
+        except: pass
+    
+    c_m1.metric("⚖️ Peso Hoje", f"{PESO_ATUAL} kg", f"Meta: {p['meta_peso_alvo']} kg")
+    c_m2.metric("📏 Cintura", f"{cintura_atual} cm", "Risco < 94cm", delta_color="inverse")
+    c_m3.metric("📊 Gordura (Navy)", f"{gordura_atual:.1f}%", "Estimada", delta_color="inverse")
+
 else:
-    st.info("Adicione suas medidas no Tracker para ver o gráfico de composição corporal.")
+    st.info("Adicione dados de peso para visualizar o gráfico unificado.")
 
 st.divider()
 
-# --- GRÁFICOS DIETA (Originais) ---
+# --- GRÁFICOS DIETA ---
+st.subheader("🍽️ Controle Nutricional")
 g1, g2 = st.columns([2, 1])
 with g1:
-    st.subheader("📊 Calorias vs Meta (30 dias)")
     if not df_hist.empty:
         fig_k = go.Figure()
-        fig_k.add_trace(go.Bar(x=df_hist['data'], y=df_hist['tkcal'], name='Real', marker_color='#4CAF50'))
+        fig_k.add_trace(go.Bar(x=df_hist['data'], y=df_hist['tkcal'], name='Kcal', marker_color='#4CAF50'))
         fig_k.add_trace(go.Scatter(x=df_hist['data'], y=[mkcal]*len(df_hist), mode='lines', name='Meta', line=dict(color='red', dash='dot')))
-        fig_k.update_layout(height=320, margin=dict(l=10,r=10,t=10,b=10), legend=dict(orientation="h", y=1.1))
+        fig_k.update_layout(height=300, margin=dict(l=10,r=10,t=10,b=10), title="Calorias vs Meta")
         st.plotly_chart(fig_k, use_container_width=True)
-    else: st.info("Sem dados de consumo.")
+    else: st.info("Sem dados.")
 
 with g2:
-    st.subheader("🎯 Distribuição Hoje")
     if k_act > 0:
         fig_p = go.Figure(data=[go.Pie(labels=['P','C','G'], values=[p_act*4, c_act*4, g_act*9], hole=.5, marker=dict(colors=['#3366CC','#FF9900','#DC3912']))])
-        fig_p.update_layout(height=320, margin=dict(l=10,r=10,t=10,b=10))
+        fig_p.update_layout(height=300, margin=dict(l=10,r=10,t=10,b=10), title="Macros Hoje")
         st.plotly_chart(fig_p, use_container_width=True)
-    else: st.info("Registre alimentos hoje.")
-
-st.subheader("🔍 Controle Semanal de Macros")
-if not df_hist.empty:
-    m1, m2, m3 = st.columns(3)
-    def make_chart(df, col, meta, title, color):
-        f = go.Figure()
-        f.add_trace(go.Bar(x=df['data'], y=df[col], marker_color=color))
-        f.add_trace(go.Scatter(x=df['data'], y=[meta]*len(df), mode='lines', line=dict(color='gray', dash='dash')))
-        f.update_layout(title=title, height=220, margin=dict(l=5,r=5,t=30,b=5), showlegend=False)
-        return f
-    m1.plotly_chart(make_chart(df_hist, 'tprot', mprot, "Proteína (g)", "#3366CC"), use_container_width=True)
-    m2.plotly_chart(make_chart(df_hist, 'tcarb', mcarb, "Carbo (g)", "#FF9900"), use_container_width=True)
-    m3.plotly_chart(make_chart(df_hist, 'tgord', mgord, "Gordura (g)", "#DC3912"), use_container_width=True)
-
-st.divider()
-
-# --- GRÁFICO FINAL (Restaurado) ---
-st.subheader("⚖️ Rumo ao Peso Ideal (Início: 30/12)")
-if not df_peso.empty:
-    df_p = df_peso.copy()
-    df_p['data'] = pd.to_datetime(df_p['data'])
-    p_inicial = 144.9 # Fixo do seu histórico
-    
-    d_total = (hoje + timedelta(days=45) - DATA_INICIO).days
-    dates_m = [DATA_INICIO + timedelta(days=i) for i in range(d_total + 1)]
-    vals_m = [max(palvo, p_inicial - (i * (ritmo/7))) for i in range(len(dates_m))]
-    
-    fig_w = go.Figure()
-    fig_w.add_trace(go.Scatter(x=dates_m, y=vals_m, name='Plano', mode='lines', line=dict(color='gray', dash='dot')))
-    fig_w.add_trace(go.Scatter(x=df_p['data'], y=df_p['peso_kg'], name='Real', mode='lines+markers', line=dict(color='blue', width=4)))
-    fig_w.update_layout(height=400, margin=dict(l=10,r=10,t=10,b=10))
-    st.plotly_chart(fig_w, use_container_width=True)
+    else: st.info("Registre hoje.")
