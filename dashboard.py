@@ -4,6 +4,7 @@ import psycopg2
 from datetime import datetime, timedelta
 import pytz
 import plotly.graph_objects as go
+import math
 
 # 1. CONFIGURAÇÃO VISUAL
 st.set_page_config(page_title="Leo's Nutrition Dash", page_icon="🦁", layout="wide", initial_sidebar_state="expanded")
@@ -27,7 +28,13 @@ def run_query(query, params=None, is_select=True):
         conn = get_connection()
         with conn.cursor() as cur:
             cur.execute("SET timezone TO 'America/Sao_Paulo';")
-            if is_select: return pd.read_sql(query, conn, params=params)
+            if is_select: 
+                df = pd.read_sql(query, conn, params=params)
+                # Padronizar datas automaticamente para evitar erros de plotagem
+                for col in ['data', 'log_date']:
+                    if col in df.columns:
+                        df[col] = pd.to_datetime(df[col])
+                return df
             else:
                 cur.execute(query, params)
                 conn.commit()
@@ -42,45 +49,45 @@ if st.query_params.get("token") != st.secrets.get("DASH_ACCESS_TOKEN"):
     st.error("🔒 Acesso Negado."); st.stop()
 
 # --- BUSCA DE DADOS ---
+# Perfil e Peso
 df_perfil = run_query("SELECT * FROM public.perfil WHERE id = 1")
 df_peso_last = run_query("SELECT peso_kg FROM public.peso ORDER BY data DESC, id DESC LIMIT 1")
+# NOVAS Medidas
+df_medidas = run_query("SELECT * FROM public.body_measurements ORDER BY log_date ASC")
 
 if not df_perfil.empty:
     p = df_perfil.iloc[0]
 else:
-    # Valores padrão de fallback
-    p = {'genero': 'Masculino', 'idade': 41, 'altura_cm': 185, 'atividade': 'Sedentário (1.2)', 
+    # Fallback
+    p = {'genero': 'Masculino', 'idade': 41, 'altura_cm': 178, 'atividade': 'Sedentário (1.2)', 
          'objetivo': 'Perder Peso (Moderado)', 'ritmo_semanal': 0.8, 'meta_kcal': 1650, 
          'meta_proteina': 130, 'meta_carbo': 150, 'meta_gordura': 59, 'meta_peso_alvo': 120.0}
 
 PESO_ATUAL = float(df_peso_last.iloc[0]['peso_kg']) if not df_peso_last.empty else 141.9
+ALTURA_ATUAL = int(p.get('altura_cm', 178))
 
 # --- 2. BARRA LATERAL INTELIGENTE ---
 st.sidebar.header("🧮 Perfil Biométrico")
 
-# Inputs para cálculo em tempo real
+# Inputs
 gen = st.sidebar.radio("Gênero:", ["Masculino", "Feminino"], index=0 if p['genero'] == "Masculino" else 1)
 idade = st.sidebar.number_input("Idade:", value=int(p['idade']))
-alt = st.sidebar.number_input("Altura (cm):", value=int(p['altura_cm']))
+alt = st.sidebar.number_input("Altura (cm):", value=ALTURA_ATUAL)
 peso_ref = st.sidebar.number_input("Peso Atual (kg):", value=PESO_ATUAL)
 
 ativ_ops = {"Sedentário (1.2)": 1.2, "Leve (1.375)": 1.375, "Moderado (1.55)": 1.55}
 ativ_sel = st.sidebar.selectbox("Atividade:", list(ativ_ops.keys()), index=list(ativ_ops.keys()).index(p['atividade']) if p['atividade'] in ativ_ops else 0)
 
-# --- CÁLCULOS CIENTÍFICOS ---
+# Cálculos
 tmb = (10 * peso_ref) + (6.25 * alt) - (5 * idade) + (5 if gen == "Masculino" else -161)
 get_total = tmb * ativ_ops[ativ_sel]
-
-# Definição de Déficit Padrão (Moderado)
-deficit_padrao = 750 # Kcal a menos que o GET
+deficit_padrao = 750 
 kcal_sugerida = int(get_total - deficit_padrao)
 
-# Distribuição de Macros Sugerida (30% Prot / 35% Carb / 35% Fat) - Foco em perda de peso
 sug_prot = int((kcal_sugerida * 0.30) / 4)
 sug_carb = int((kcal_sugerida * 0.35) / 4)
 sug_gord = int((kcal_sugerida * 0.35) / 9)
 
-# --- EXIBIÇÃO DA RECOMENDAÇÃO ---
 st.sidebar.markdown("---")
 st.sidebar.info(f"""
 🧬 **Sugestão Científica (Déficit):**
@@ -91,10 +98,9 @@ st.sidebar.info(f"""
 \nBaseado no seu GET de {int(get_total)} kcal
 """)
 
-# --- FORMULÁRIO DE AJUSTE MANUAL E SALVAMENTO ---
+# Formulário de Ajuste
 with st.sidebar.form("perfil_persist"):
     st.write("### 📝 Suas Metas Reais")
-    st.caption("Ajuste abaixo se quiser algo diferente da sugestão.")
     
     obj_lista = ["Perder Peso (Agressivo)", "Perder Peso (Moderado)", "Manutenção", "Ganhar Massa"]
     obj_sel = st.selectbox("Objetivo:", obj_lista, index=obj_lista.index(p['objetivo']) if p['objetivo'] in obj_lista else 1)
@@ -128,7 +134,7 @@ df_peso = run_query("SELECT * FROM public.peso ORDER BY data ASC")
 
 st.markdown(f"# 🦁 Leo's Performance | {hoje.strftime('%d/%m')}")
 
-# KPIs
+# KPI: Macros Hoje (Original)
 k_act, p_act, c_act, g_act = (df_hoje['kcal'].sum(), df_hoje['proteina'].sum(), df_hoje['carbo'].sum(), df_hoje['gordura'].sum()) if not df_hoje.empty else (0,0,0,0)
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("🔥 Calorias", f"{int(k_act)}", f"Meta: {mkcal}")
@@ -138,7 +144,49 @@ c4.metric("🥑 Gordura", f"{int(g_act)}g", f"Meta: {mgord}g")
 
 st.divider()
 
-# --- GRÁFICOS SEMANAIS ---
+# --- NOVO BLOCO: COMPOSIÇÃO CORPORAL ---
+st.subheader("📏 Composição Corporal & Risco Metabólico")
+
+cintura_atual = 0
+gordura_atual = 0
+if not df_medidas.empty:
+    last_m = df_medidas.iloc[-1]
+    cintura_atual = last_m['waist_cm']
+    # Lógica de fallback para cálculo
+    if last_m.get('body_fat_est') and last_m['body_fat_est'] > 0:
+        gordura_atual = last_m['body_fat_est']
+    else:
+        try:
+            gordura_atual = 495 / (1.0324 - 0.19077 * math.log10(last_m['waist_cm'] - last_m['neck_cm']) + 0.15456 * math.log10(ALTURA_ATUAL)) - 450
+        except: gordura_atual = 0
+
+col_corp1, col_corp2, col_corp3 = st.columns(3)
+col_corp1.metric("⚖️ Peso Atual", f"{PESO_ATUAL} kg", delta=f"{PESO_ATUAL - float(p['meta_peso_alvo']):.1f} kg para a meta", delta_color="inverse")
+col_corp2.metric("📏 Cintura (Umbigo)", f"{cintura_atual} cm", "Meta: < 94 cm (Saúde)", delta_color="inverse")
+col_corp3.metric("📊 Gordura Estimada", f"{gordura_atual:.1f}%", "Navy Method", delta_color="inverse")
+
+# Gráfico Novo: Peso vs Cintura
+if not df_medidas.empty:
+    fig_body = go.Figure()
+    # Eixo Y1: Peso
+    fig_body.add_trace(go.Scatter(x=df_peso['data'], y=df_peso['peso_kg'], name="Peso (kg)", line=dict(color='blue', width=3)))
+    # Eixo Y2: Cintura
+    fig_body.add_trace(go.Scatter(x=df_medidas['log_date'], y=df_medidas['waist_cm'], name="Cintura (cm)", line=dict(color='red', dash='dot'), yaxis='y2'))
+    
+    fig_body.update_layout(
+        title="Correlação: Peso vs Cintura",
+        yaxis=dict(title="Peso (kg)"),
+        yaxis2=dict(title="Cintura (cm)", overlaying='y', side='right'),
+        height=350, margin=dict(l=10,r=10,t=40,b=10),
+        legend=dict(orientation="h", y=1.1)
+    )
+    st.plotly_chart(fig_body, use_container_width=True)
+else:
+    st.info("Adicione suas medidas no Tracker para ver o gráfico de composição corporal.")
+
+st.divider()
+
+# --- GRÁFICOS DIETA (Originais) ---
 g1, g2 = st.columns([2, 1])
 with g1:
     st.subheader("📊 Calorias vs Meta (30 dias)")
@@ -173,12 +221,12 @@ if not df_hist.empty:
 
 st.divider()
 
-# --- GRÁFICO DE PESO ---
+# --- GRÁFICO FINAL (Restaurado) ---
 st.subheader("⚖️ Rumo ao Peso Ideal (Início: 30/12)")
 if not df_peso.empty:
     df_p = df_peso.copy()
     df_p['data'] = pd.to_datetime(df_p['data'])
-    p_inicial = 144.9
+    p_inicial = 144.9 # Fixo do seu histórico
     
     d_total = (hoje + timedelta(days=45) - DATA_INICIO).days
     dates_m = [DATA_INICIO + timedelta(days=i) for i in range(d_total + 1)]
