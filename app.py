@@ -44,9 +44,11 @@ def executar_sql(sql, params=None, is_select=False):
             cur.execute("SET timezone TO 'America/Sao_Paulo';")
             if is_select:
                 df = pd.read_sql(sql, conn, params=params)
-                if 'data' in df.columns: df['data'] = pd.to_datetime(df['data'])
-                if 'log_date' in df.columns: df['log_date'] = pd.to_datetime(df['log_date'])
-                if 'measurement_time' in df.columns: df['measurement_time'] = pd.to_datetime(df['measurement_time'])
+                # Padroniza conversão de datas
+                for col in ['data', 'log_date', 'measurement_time']:
+                    if col in df.columns:
+                        try: df[col] = pd.to_datetime(df[col])
+                        except: pass
                 return df
             else:
                 cur.execute(sql, params)
@@ -57,7 +59,7 @@ def executar_sql(sql, params=None, is_select=False):
         st.error(f"Erro no Banco: {e}")
         return pd.DataFrame() if is_select else False
 
-# 3. SINCRONIZAÇÃO COM O DASHBOARD
+# 3. SINCRONIZAÇÃO DO BANCO
 def inicializar_banco():
     # Tabelas Básicas
     executar_sql("CREATE TABLE IF NOT EXISTS public.consumo (id SERIAL PRIMARY KEY, data DATE, alimento TEXT, quantidade REAL, kcal REAL, proteina REAL, carbo REAL, gordura REAL, gluten TEXT DEFAULT 'Não informado');")
@@ -81,15 +83,12 @@ def inicializar_banco():
     try: executar_sql("ALTER TABLE public.body_measurements ADD COLUMN IF NOT EXISTS body_fat_est REAL;")
     except: pass
 
-    # NOVA TABELA: PRESSÃO ARTERIAL
+    # Pressão Arterial
     executar_sql("""
         CREATE TABLE IF NOT EXISTS public.blood_pressure (
             id SERIAL PRIMARY KEY,
             measurement_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            systolic INT, -- Pressão Alta (Ex: 120)
-            diastolic INT, -- Pressão Baixa (Ex: 80)
-            pulse INT, -- Batimentos
-            notes TEXT
+            systolic INT, diastolic INT, pulse INT, notes TEXT
         );
     """)
 
@@ -116,11 +115,101 @@ def calculate_body_fat(waist, neck, height):
     try: return 495 / (1.0324 - 0.19077 * math.log10(waist - neck) + 0.15456 * math.log10(height)) - 450
     except: return 0.0
 
-# 4. FUNÇÕES DE RELATÓRIO
-# ... (Mantidas iguais, apenas atualizando se quiser incluir pressão no futuro) ...
-# Para simplificar, vou manter as funções de relatório existentes que focam em dieta/peso por enquanto.
+# 4. FUNÇÕES DE RELATÓRIO (RESTAURADAS E ATUALIZADAS)
+def gerar_excel(df_cons, df_peso, df_medidas, df_bp, d_inicio, d_fim):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        # Aba 1: Resumo Diário
+        if not df_cons.empty:
+            df_resumo = df_cons.groupby(df_cons['data'].dt.date)[['kcal', 'proteina', 'carbo', 'gordura']].sum().reset_index()
+            df_resumo.columns = ['Data', 'Total Kcal', 'Total Prot (g)', 'Total Carbo (g)', 'Total Gord (g)']
+            df_resumo.to_excel(writer, sheet_name='Resumo Diário', index=False)
+            
+            # Aba 2: Detalhado
+            df_detalhe = df_cons[['data', 'alimento', 'quantidade', 'kcal', 'proteina', 'carbo', 'gordura', 'gluten']].copy()
+            df_detalhe['data'] = df_detalhe['data'].dt.strftime('%d/%m/%Y')
+            df_detalhe.to_excel(writer, sheet_name='Diário Detalhado', index=False)
+        
+        # Aba 3: Peso
+        if not df_peso.empty:
+            df_p = df_peso[['data', 'peso_kg']].copy()
+            df_p['data'] = df_p['data'].dt.strftime('%d/%m/%Y')
+            df_p.to_excel(writer, sheet_name='Histórico Peso', index=False)
 
-# 5. GROQ IA (Mantida igual)
+        # Aba 4: Medidas
+        if not df_medidas.empty:
+            df_m = df_medidas[['log_date', 'waist_cm', 'neck_cm', 'hip_cm', 'body_fat_est']].copy()
+            df_m.columns = ['Data', 'Cintura (cm)', 'Pescoço (cm)', 'Quadril (cm)', '% Gordura Est.']
+            df_m['Data'] = df_m['Data'].dt.strftime('%d/%m/%Y')
+            df_m.to_excel(writer, sheet_name='Medidas Corporais', index=False)
+
+        # Aba 5: Pressão (NOVO)
+        if not df_bp.empty:
+            df_b = df_bp[['measurement_time', 'systolic', 'diastolic', 'pulse']].copy()
+            df_b.columns = ['Data/Hora', 'Sistólica', 'Diastólica', 'Pulso']
+            df_b['Data/Hora'] = df_b['Data/Hora'].dt.strftime('%d/%m/%Y %H:%M')
+            df_b.to_excel(writer, sheet_name='Pressão Arterial', index=False)
+            
+    return output.getvalue()
+
+def gerar_pdf(df_cons, df_peso, df_medidas, d_inicio, d_fim):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    
+    # Cabeçalho
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(200, 10, txt="Relatório Nutricional - Leonardo Grando", ln=True, align='C')
+    pdf.set_font("Arial", size=10)
+    pdf.cell(200, 10, txt=f"Período: {d_inicio.strftime('%d/%m/%Y')} a {d_fim.strftime('%d/%m/%Y')}", ln=True, align='C')
+    pdf.ln(10)
+    
+    # Metas
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(200, 10, txt="Metas Atuais:", ln=True)
+    pdf.set_font("Arial", size=10)
+    pdf.cell(0, 5, txt=f"Kcal: {METAS['kcal']} | Prot: {METAS['prot']}g | Carb: {METAS['carb']}g | Gord: {METAS['gord']}g", ln=True)
+    pdf.ln(5)
+    
+    # Resumo Peso
+    if not df_peso.empty:
+        p_ini = df_peso.iloc[0]['peso_kg']
+        p_fim = df_peso.iloc[-1]['peso_kg']
+        delta = p_fim - p_ini
+        pdf.set_font("Arial", 'B', 12)
+        pdf.cell(0, 10, txt=f"Evolução de Peso ({len(df_peso)} registros)", ln=True)
+        pdf.set_font("Arial", size=10)
+        pdf.cell(0, 5, txt=f"Inicial: {p_ini}kg -> Atual: {p_fim}kg (Variação: {delta:.1f}kg)", ln=True)
+        pdf.ln(5)
+
+    # Resumo Medidas
+    if not df_medidas.empty:
+        m_ini = df_medidas.iloc[0]['waist_cm']
+        m_fim = df_medidas.iloc[-1]['waist_cm']
+        fat_atual = df_medidas.iloc[-1]['body_fat_est']
+        
+        pdf.set_font("Arial", 'B', 12)
+        pdf.cell(0, 10, txt="Evolução Corporal", ln=True)
+        pdf.set_font("Arial", size=10)
+        pdf.cell(0, 5, txt=f"Cintura Inicial: {m_ini}cm -> Atual: {m_fim}cm", ln=True)
+        if fat_atual:
+            pdf.cell(0, 5, txt=f"Estimativa de Gordura Atual: {fat_atual:.1f}%", ln=True)
+        pdf.ln(5)
+
+    # Resumo Médio Dieta
+    if not df_cons.empty:
+        media_kcal = df_cons.groupby(df_cons['data'].dt.date)['kcal'].sum().mean()
+        media_prot = df_cons.groupby(df_cons['data'].dt.date)['proteina'].sum().mean()
+        pdf.set_font("Arial", 'B', 12)
+        pdf.cell(0, 10, txt="Média Diária no Período", ln=True)
+        pdf.set_font("Arial", size=10)
+        pdf.cell(0, 5, txt=f"Consumo Médio: {int(media_kcal)} kcal/dia", ln=True)
+        pdf.cell(0, 5, txt=f"Proteína Média: {int(media_prot)} g/dia", ln=True)
+        pdf.ln(10)
+
+    return pdf.output(dest='S').encode('latin-1', 'ignore') 
+
+# 5. GROQ IA
 def processar_texto_ia(texto_usuario, api_key):
     client = Groq(api_key=api_key)
     prompt_system = f"""
@@ -156,8 +245,8 @@ c4.metric("🥑 Gordura", f"{int(g_hoje)}g", f"Meta: {METAS['gord']}g")
 st.progress(min(k_hoje/METAS['kcal'], 1.0))
 st.divider()
 
-# ABAS
-tab_add, tab_hist, tab_medidas, tab_admin = st.tabs(["➕ Inserir", "📜 Diário", "❤️ Saúde & Corpo", "⚙️ Configurações"])
+# ABAS COMPLETAS
+tab_add, tab_hist, tab_medidas, tab_rel, tab_admin = st.tabs(["➕ Inserir", "📜 Diário", "❤️ Saúde & Corpo", "📄 Relatórios", "⚙️ Configurações"])
 
 with tab_add:
     st.write("### O que você comeu?")
@@ -205,7 +294,6 @@ with tab_hist:
                 st.markdown("---")
     else: st.info("Nada registrado hoje.")
 
-# --- ABA UNIFICADA: SAÚDE & CORPO ---
 with tab_medidas:
     # SEÇÃO 1: Cardio (Pressão)
     st.subheader("🫀 Monitor Cardíaco (Pressão)")
@@ -214,12 +302,10 @@ with tab_medidas:
     dia_in = cp2.number_input("Diastólica (Baixa)", 50, 130, 76)
     pulse_in = cp3.number_input("Pulsação (BPM)", 40, 200, 75)
     
-    # Botão de salvar pressão
     if cp4.button("❤️ Gravar PA"):
         executar_sql("INSERT INTO public.blood_pressure (systolic, diastolic, pulse, notes) VALUES (%s, %s, %s, 'Registro Manual')", (sys_in, dia_in, pulse_in))
         st.success("Pressão registrada!"); st.rerun()
     
-    # Histórico Rápido de Pressão
     df_bp = executar_sql("SELECT measurement_time, systolic, diastolic, pulse FROM public.blood_pressure ORDER BY measurement_time DESC LIMIT 3", is_select=True)
     if not df_bp.empty:
         st.caption("Últimas leituras:")
@@ -266,7 +352,43 @@ with tab_medidas:
             executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", (dt_lanc, p_val))
             st.success("Registro completo salvo!"); st.rerun()
 
-# --- ABA DE CONFIGURAÇÕES (Igual à anterior) ---
+# --- ABA DE RELATÓRIOS (RESTAURADA) ---
+with tab_rel:
+    st.header("📄 Relatórios para Nutricionista")
+    st.write("Selecione o período e baixe os dados consolidados.")
+    
+    col_d1, col_d2 = st.columns(2)
+    d_inicio = col_d1.date_input("Data Início:", value=data_hoje - timedelta(days=30))
+    d_fim = col_d2.date_input("Data Fim:", value=data_hoje)
+    
+    if st.button("🔍 Gerar Arquivos"):
+        df_cons_rel = executar_sql("SELECT * FROM public.consumo WHERE data >= %s AND data <= %s ORDER BY data ASC", (d_inicio, d_fim), is_select=True)
+        df_peso_rel = executar_sql("SELECT * FROM public.peso WHERE data >= %s AND data <= %s ORDER BY data ASC", (d_inicio, d_fim), is_select=True)
+        df_medidas_rel = executar_sql("SELECT * FROM public.body_measurements WHERE log_date >= %s AND log_date <= %s ORDER BY log_date ASC", (d_inicio, d_fim), is_select=True)
+        df_bp_rel = executar_sql("SELECT * FROM public.blood_pressure WHERE measurement_time >= %s AND measurement_time <= %s ORDER BY measurement_time ASC", (d_inicio, d_fim), is_select=True)
+        
+        if not df_cons_rel.empty:
+            # Excel
+            excel_data = gerar_excel(df_cons_rel, df_peso_rel, df_medidas_rel, df_bp_rel, d_inicio, d_fim)
+            st.download_button(
+                label="📥 Baixar Excel Completo (.xlsx)",
+                data=excel_data,
+                file_name=f"Relatorio_Leo_Tracker_{d_inicio}_{d_fim}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            # PDF
+            try:
+                pdf_data = gerar_pdf(df_cons_rel, df_peso_rel, df_medidas_rel, d_inicio, d_fim)
+                st.download_button(
+                    label="📥 Baixar Resumo PDF (.pdf)",
+                    data=pdf_data,
+                    file_name=f"Resumo_Leo_{d_inicio}_{d_fim}.pdf",
+                    mime="application/pdf"
+                )
+            except Exception as e: st.error(f"Erro PDF: {e}")
+        else:
+            st.warning("Nenhum dado de consumo encontrado neste período.")
+
 with tab_admin:
     st.header("⚙️ Configuração de Perfil & Metas")
     df_perfil = executar_sql("SELECT * FROM public.perfil WHERE id = 1", is_select=True)
@@ -320,4 +442,4 @@ with tab_admin:
             executar_sql(sql, (genero, idade, altura, atividade, n_ritmo, n_kcal, n_prot, n_carb, n_gord, n_peso))
             st.success("Perfil atualizado!"); st.rerun()
 
-st.caption(f"Leo Tracker Pro v3.5 | Added: Blood Pressure")
+st.caption(f"Leo Tracker Pro v3.6 | All Features Active")
