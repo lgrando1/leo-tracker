@@ -126,77 +126,42 @@ c4.metric("🥑 Gordura", f"{int(g_act)}g", f"Meta: {mgord}g")
 st.divider()
 
 # --- GRÁFICO MESTRE UNIFICADO ---
-st.subheader("📉 Evolução Corporal Unificada (O Gráfico da Verdade)")
+st.subheader("📉 Evolução Corporal Unificada")
 
 if not df_peso.empty:
-    # 1. Preparar Dados de Meta (Projection)
-    p_inicial = 144.9 # Ponto de partida
+    p_inicial = 144.9
     d_total = (hoje + timedelta(days=60) - DATA_INICIO).days
     dates_m = [DATA_INICIO + timedelta(days=i) for i in range(d_total + 1)]
     vals_m = [max(float(p['meta_peso_alvo']), p_inicial - (i * (float(p['ritmo_semanal'])/7))) for i in range(len(dates_m))]
     
-    # 2. Criar Gráfico Combinado
     fig_combo = go.Figure()
-
-    # TRACE 1: Meta de Peso (Linha Pontilhada Cinza)
-    fig_combo.add_trace(go.Scatter(
-        x=dates_m, y=vals_m, 
-        name="Meta Planejada", 
-        mode='lines', 
-        line=dict(color='gray', dash='dot', width=2)
-    ))
-
-    # TRACE 2: Peso Real (Linha Azul Forte)
-    fig_combo.add_trace(go.Scatter(
-        x=df_peso['data'], y=df_peso['peso_kg'], 
-        name="Peso Real (kg)", 
-        mode='lines+markers', 
-        line=dict(color='#1f77b4', width=4)
-    ))
-
-    # ... (código anterior do fig_combo.add_trace permanece igual) ...
-
-    # TRACE 3: Cintura (Linha Vermelha no Eixo da Direita)
+    fig_combo.add_trace(go.Scatter(x=dates_m, y=vals_m, name="Meta Planejada", mode='lines', line=dict(color='gray', dash='dot', width=2)))
+    fig_combo.add_trace(go.Scatter(x=df_peso['data'], y=df_peso['peso_kg'], name="Peso Real (kg)", mode='lines+markers', line=dict(color='#1f77b4', width=4)))
+    
     if not df_medidas.empty:
         fig_combo.add_trace(go.Scatter(
             x=df_medidas['log_date'], y=df_medidas['waist_cm'], 
-            name="Cintura (cm)", 
-            mode='lines+markers', 
-            line=dict(color='#d62728', width=3),
-            yaxis='y2' 
+            name="Cintura (cm)", mode='lines+markers', 
+            line=dict(color='#d62728', width=3), yaxis='y2'
         ))
 
-    # --- CORREÇÃO AQUI: Layout com sintaxe explícita para evitar erro de versão ---
+    # Layout Blindado
     fig_combo.update_layout(
         title=dict(text="Correlação: Peso (Esq) vs Cintura (Dir) vs Meta"),
         xaxis=dict(title=dict(text="Data")),
-        yaxis=dict(
-            title=dict(text="Peso (kg)", font=dict(color="#1f77b4")), # Forma correta e segura
-            tickfont=dict(color="#1f77b4")
-        ),
-        yaxis2=dict(
-            title=dict(text="Cintura (cm)", font=dict(color="#d62728")), # Forma correta e segura
-            tickfont=dict(color="#d62728"),
-            overlaying='y',
-            side='right'
-        ),
+        yaxis=dict(title=dict(text="Peso (kg)", font=dict(color="#1f77b4")), tickfont=dict(color="#1f77b4")),
+        yaxis2=dict(title=dict(text="Cintura (cm)", font=dict(color="#d62728")), tickfont=dict(color="#d62728"), overlaying='y', side='right'),
         legend=dict(x=0.01, y=0.99, bgcolor='rgba(255,255,255,0.8)'),
-        height=500,
-        hovermode="x unified"
+        height=500, hovermode="x unified"
     )
-    
     st.plotly_chart(fig_combo, use_container_width=True)
-    
-    # Métricas de Resumo logo abaixo do gráfico
+
     c_m1, c_m2, c_m3 = st.columns(3)
-    
-    # Calcular gordura atual
     cintura_atual = df_medidas.iloc[-1]['waist_cm'] if not df_medidas.empty else 0
     gordura_atual = 0
     if cintura_atual > 0:
         neck_atual = df_medidas.iloc[-1]['neck_cm'] if 'neck_cm' in df_medidas.columns else 40
-        try:
-            gordura_atual = 495 / (1.0324 - 0.19077 * math.log10(cintura_atual - neck_atual) + 0.15456 * math.log10(ALTURA_ATUAL)) - 450
+        try: gordura_atual = 495 / (1.0324 - 0.19077 * math.log10(cintura_atual - neck_atual) + 0.15456 * math.log10(ALTURA_ATUAL)) - 450
         except: pass
     
     c_m1.metric("⚖️ Peso Hoje", f"{PESO_ATUAL} kg", f"Meta: {p['meta_peso_alvo']} kg")
@@ -208,21 +173,58 @@ else:
 
 st.divider()
 
-# --- GRÁFICOS DIETA ---
-st.subheader("🍽️ Controle Nutricional")
+# --- NOVO BLOCO: HISTÓRICO DE MACROS (SOLICITADO) ---
+st.subheader("🗓️ Histórico de Macros (30 dias)")
+
+if not df_hist.empty:
+    m1, m2, m3 = st.columns(3)
+    
+    # Função auxiliar para criar gráficos consistentes
+    def plot_macro(df, col_real, val_meta, nome, cor):
+        fig = go.Figure()
+        fig.add_trace(go.Bar(x=df['data'], y=df[col_real], name="Real", marker_color=cor))
+        fig.add_trace(go.Scatter(x=df['data'], y=[val_meta]*len(df), name="Meta", mode='lines', line=dict(color='gray', dash='dot')))
+        fig.update_layout(
+            title=dict(text=nome),
+            height=250, 
+            margin=dict(l=10,r=10,t=40,b=10),
+            showlegend=False
+        )
+        return fig
+
+    with m1:
+        st.plotly_chart(plot_macro(df_hist, 'tprot', mprot, "🥩 Proteína (Meta: {}g)".format(mprot), "#3366CC"), use_container_width=True)
+    with m2:
+        st.plotly_chart(plot_macro(df_hist, 'tcarb', mcarb, "🍞 Carbo (Meta: {}g)".format(mcarb), "#FF9900"), use_container_width=True)
+    with m3:
+        st.plotly_chart(plot_macro(df_hist, 'tgord', mgord, "🥑 Gordura (Meta: {}g)".format(mgord), "#DC3912"), use_container_width=True)
+
+else:
+    st.info("Ainda não há dados suficientes para gerar histórico de macros.")
+
+st.divider()
+
+# --- GRÁFICOS GERAIS (Calorias e Pizza) ---
+st.subheader("🍽️ Visão Geral da Dieta")
 g1, g2 = st.columns([2, 1])
 with g1:
     if not df_hist.empty:
         fig_k = go.Figure()
         fig_k.add_trace(go.Bar(x=df_hist['data'], y=df_hist['tkcal'], name='Kcal', marker_color='#4CAF50'))
         fig_k.add_trace(go.Scatter(x=df_hist['data'], y=[mkcal]*len(df_hist), mode='lines', name='Meta', line=dict(color='red', dash='dot')))
-        fig_k.update_layout(height=300, margin=dict(l=10,r=10,t=10,b=10), title="Calorias vs Meta")
+        fig_k.update_layout(
+            title=dict(text="Calorias vs Meta"),
+            height=300, margin=dict(l=10,r=10,t=40,b=10)
+        )
         st.plotly_chart(fig_k, use_container_width=True)
     else: st.info("Sem dados.")
 
 with g2:
     if k_act > 0:
-        fig_p = go.Figure(data=[go.Pie(labels=['P','C','G'], values=[p_act*4, c_act*4, g_act*9], hole=.5, marker=dict(colors=['#3366CC','#FF9900','#DC3912']))])
-        fig_p.update_layout(height=300, margin=dict(l=10,r=10,t=10,b=10), title="Macros Hoje")
+        fig_p = go.Figure(data=[go.Pie(labels=['Prot','Carb','Gord'], values=[p_act*4, c_act*4, g_act*9], hole=.5, marker=dict(colors=['#3366CC','#FF9900','#DC3912']))])
+        fig_p.update_layout(
+            title=dict(text="Distribuição Hoje"),
+            height=300, margin=dict(l=10,r=10,t=40,b=10)
+        )
         st.plotly_chart(fig_p, use_container_width=True)
     else: st.info("Registre hoje.")
