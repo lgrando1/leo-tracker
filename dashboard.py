@@ -151,7 +151,7 @@ with col_b:
 st.divider()
 
 # ==========================================
-# SEÇÃO 2: SAÚDE & CORPO (RESTAURADA)
+# SEÇÃO 2: SAÚDE & CORPO
 # ==========================================
 st.subheader("🧬 Saúde & Composição Corporal")
 
@@ -188,7 +188,11 @@ with col_press:
     st.markdown("**🫀 Pressão Arterial**")
     if not df_bp.empty:
         fig_bp = go.Figure()
-        fig_bp.add_hline(y=120, line_dash="dot", line_color="green")
+        # LINHA 120 (Sistólica Ideal)
+        fig_bp.add_hline(y=120, line_dash="dot", line_color="green", annotation_text="120")
+        # LINHA 80 (Diastólica Ideal) - ADICIONADO!
+        fig_bp.add_hline(y=80, line_dash="dot", line_color="green", annotation_text="80")
+        
         fig_bp.add_trace(go.Scatter(x=df_bp['measurement_time'], y=df_bp['systolic'], name="Alta", line=dict(color='red')))
         fig_bp.add_trace(go.Scatter(x=df_bp['measurement_time'], y=df_bp['diastolic'], name="Baixa", line=dict(color='blue')))
         fig_bp.update_layout(height=250, margin=dict(l=10,r=10,t=20,b=10))
@@ -203,14 +207,11 @@ st.subheader("🍽️ Inteligência Nutricional")
 
 if not df_hist.empty:
     # Preparar dados percentuais
-    # 1g Prot = 4kcal, 1g Carb = 4kcal, 1g Gord = 9kcal
     df_macros = df_hist.copy()
     df_macros['kcal_p'] = df_macros['tprot'] * 4
     df_macros['kcal_c'] = df_macros['tcarb'] * 4
     df_macros['kcal_g'] = df_macros['tgord'] * 9
     df_macros['kcal_total_calc'] = df_macros['kcal_p'] + df_macros['kcal_c'] + df_macros['kcal_g']
-    
-    # Evitar divisão por zero
     df_macros = df_macros[df_macros['kcal_total_calc'] > 0]
     
     df_macros['pct_p'] = (df_macros['kcal_p'] / df_macros['kcal_total_calc']) * 100
@@ -246,7 +247,7 @@ if not df_hist.empty:
         else:
             st.info("Registre sua alimentação hoje para ver a distribuição.")
 
-    # Gráfico de Volume vs Kcal (mantido abaixo pois é útil)
+    # Gráfico de Volume vs Kcal
     st.markdown("#### 📏 Volume vs Calorias")
     fig_dens = make_subplots(specs=[[{"secondary_y": True}]])
     fig_dens.add_trace(go.Bar(x=df_hist['data'], y=df_hist['tqtd'], name="Volume (g)", marker_color='rgba(52, 152, 219, 0.3)'), secondary_y=False)
