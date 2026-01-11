@@ -207,12 +207,20 @@ def gerar_pdf(df_cons, df_peso, df_medidas, d_inicio, d_fim):
 
     return pdf.output(dest='S').encode('latin-1', 'ignore') 
 
-# 5. GROQ IA
+# 5. GROQ IA (COM PROMPT REFORÇADO PARA GLÚTEN)
 def processar_texto_ia(texto_usuario, api_key):
     client = Groq(api_key=api_key)
     prompt_system = f"""
     Aja como nutricionista. Dieta Sem Glúten. Hoje é {get_now_br().strftime('%Y-%m-%d')}.
-    Gerar JSON estrito: {{ "analise": "...", "alimentos": [ {{ "data": "AAAA-MM-DD", "alimento": "Nome", "quantidade_g": 0, "kcal": 0, "p": 0, "c": 0, "g": 0, "gluten": "Contém/Não contém" }} ] }}
+    
+    Regras estritas para o campo 'gluten':
+    - Se tiver glúten (trigo, cevada, malte, centeio), use: "Contém"
+    - Se não tiver, use: "Não contém"
+    - Se for incerto, use: "Pode conter traços"
+    - NUNCA use "false", "0", "não" ou "sim".
+    
+    Gerar JSON estrito: 
+    {{ "analise": "...", "alimentos": [ {{ "data": "AAAA-MM-DD", "alimento": "Nome", "quantidade_g": 0, "kcal": 0, "p": 0, "c": 0, "g": 0, "gluten": "Não contém" }} ] }}
     """
     try:
         completion = client.chat.completions.create(
