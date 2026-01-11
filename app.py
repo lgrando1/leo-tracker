@@ -59,7 +59,7 @@ def executar_sql(sql, params=None, is_select=False):
         st.error(f"Erro no Banco: {e}")
         return pd.DataFrame() if is_select else False
 
-# 3. SINCRONIZAÇÃO DO BANCO (ATUALIZADO PARA SALVAR MEDIDAS NO PERFIL)
+# 3. SINCRONIZAÇÃO DO BANCO
 def inicializar_banco():
     # Tabelas Básicas
     executar_sql("CREATE TABLE IF NOT EXISTS public.consumo (id SERIAL PRIMARY KEY, data DATE, alimento TEXT, quantidade REAL, kcal REAL, proteina REAL, carbo REAL, gordura REAL, gluten TEXT DEFAULT 'Não informado');")
@@ -114,13 +114,11 @@ def get_metas_do_banco():
                 "carb": int(row.get('meta_carbo', 164)), "gord": int(row.get('meta_gordura', 67)),
                 "peso_alvo": float(row.get('meta_peso_alvo', 120.0)), "ritmo": float(row.get('ritmo_semanal', 0.8)),
                 "altura": int(row.get('altura_cm', 178)),
-                # NOVOS PADRÕES (Se não tiver no banco, usa os seus valores: 133, 53, 122)
                 "last_waist": float(row.get('ultima_cintura') or 133.0),
                 "last_neck": float(row.get('ultimo_pescoco') or 53.0),
                 "last_hip": float(row.get('ultimo_quadril') or 122.0)
             }
     except: pass
-    # Fallback total
     return {"kcal": 1683, "prot": 108, "carb": 164, "gord": 67, "peso_alvo": 120.0, "ritmo": 0.8, "altura": 178, "last_waist": 133.0, "last_neck": 53.0, "last_hip": 122.0}
 
 inicializar_banco()
@@ -207,17 +205,15 @@ def gerar_pdf(df_cons, df_peso, df_medidas, d_inicio, d_fim):
 
     return pdf.output(dest='S').encode('latin-1', 'ignore') 
 
-# 5. GROQ IA (COM PROMPT REFORÇADO PARA GLÚTEN)
+# 5. GROQ IA
 def processar_texto_ia(texto_usuario, api_key):
     client = Groq(api_key=api_key)
     prompt_system = f"""
     Aja como nutricionista. Dieta Sem Glúten. Hoje é {get_now_br().strftime('%Y-%m-%d')}.
-    
     Regras estritas para o campo 'gluten':
     - Se tiver glúten (trigo, cevada, malte, centeio), use: "Contém"
     - Se não tiver, use: "Não contém"
     - Se for incerto, use: "Pode conter traços"
-    - NUNCA use "false", "0", "não" ou "sim".
     
     Gerar JSON estrito: 
     {{ "analise": "...", "alimentos": [ {{ "data": "AAAA-MM-DD", "alimento": "Nome", "quantidade_g": 0, "kcal": 0, "p": 0, "c": 0, "g": 0, "gluten": "Não contém" }} ] }}
@@ -257,7 +253,8 @@ tab_add, tab_hist, tab_medidas, tab_rel, tab_admin = st.tabs(["➕ Inserir", "�
 with tab_add:
     st.write("### O que você comeu?")
     texto_input = st.text_area("", height=100, placeholder="Ex: 2 ovos mexidos e café preto.")
-    if st.button("🚀 Processar com IA", type="primary"):
+    
+    if st.button("🚀 Processar com IA (Groq)", type="primary"):
         api_key = st.secrets.get("GROQ_API_KEY")
         if texto_input and api_key:
             with st.spinner("Analisando..."):
@@ -269,8 +266,36 @@ with tab_add:
                                      (item.get('data'), item.get('alimento'), item.get('quantidade_g'), item.get('kcal'), item.get('p'), item.get('c'), item.get('g'), item.get('gluten')))
                     st.rerun()
                 else: st.error(f"Erro IA: {res}")
-    with st.expander("Importação JSON Manual"):
-        json_manual = st.text_area("Cole JSON do Gemini:")
+    
+    # --- ÁREA COM O PROMPT PARA COPIAR ---
+    with st.expander("Importação JSON Manual (Gemini/GPT)"):
+        st.info("Copie o prompt abaixo e envie junto com sua foto no Gemini:")
+        
+        prompt_helper = f"""Aja como um nutricionista especializado. Analise a imagem (ou texto) fornecida e identifique todos os alimentos e bebidas.
+Sua tarefa é estimar as quantidades e macronutrientes e retornar APENAS um JSON cru (sem markdown).
+
+REGRAS:
+1. Data: Use o formato AAAA-MM-DD (considere hoje: {data_hoje.strftime('%Y-%m-%d')}).
+2. Glúten: Responda EXATAMENTE "Contém" ou "Não contém".
+3. Quantidade: Estime em gramas (quantidade_g).
+
+O JSON deve seguir estritamente este padrão (lista):
+[
+  {{
+    "data": "{data_hoje.strftime('%Y-%m-%d')}",
+    "alimento": "Nome",
+    "quantidade_g": 0,
+    "kcal": 0,
+    "p": 0,
+    "c": 0,
+    "g": 0,
+    "gluten": "Não contém"
+  }}
+]"""
+        st.code(prompt_helper, language="text")
+        
+        st.divider()
+        json_manual = st.text_area("Cole a resposta (JSON) aqui:")
         if st.button("Salvar JSON"):
             try:
                 cleaned = json_manual.replace('```json', '').replace('```', '')
@@ -300,10 +325,10 @@ with tab_hist:
                 st.markdown("---")
     else: st.info("Nada registrado hoje.")
 
-# --- ABA DE SAÚDE OTIMIZADA (SEPARADO) ---
+# --- ABA DE SAÚDE OTIMIZADA ---
 with tab_medidas:
     
-    # 1. PRESSÃO (MANTEVE IGUAL)
+    # 1. PRESSÃO
     st.subheader("🫀 Monitor Cardíaco (Pressão)")
     with st.form("form_pressao"):
         cp1, cp2, cp3 = st.columns(3)
@@ -317,21 +342,18 @@ with tab_medidas:
             st.rerun()
     st.divider()
 
-    # 2. CORPO: DIVIDIDO EM DUAS COLUNAS
+    # 2. CORPO: DIVIDIDO
     st.subheader("📏 Controle Corporal")
     
-    col_daily, col_weekly = st.columns([1, 1.2]) # Coluna da direita um pouco maior
+    col_daily, col_weekly = st.columns([1, 1.2]) 
     
-    # --- COLUNA ESQUERDA: PESO DIÁRIO ---
+    # --- PESO DIÁRIO ---
     with col_daily:
         st.markdown("##### 📅 Peso Diário")
         with st.form("form_peso_rapido"):
             d_peso = st.date_input("Data", value=data_hoje)
-            
-            # Pega último peso
             ultimo = executar_sql("SELECT peso_kg FROM public.peso ORDER BY data DESC LIMIT 1", is_select=True)
             val_padrao = float(ultimo.iloc[0]['peso_kg']) if not ultimo.empty else 125.0
-            
             p_val = st.number_input("Peso (kg)", 40.0, 200.0, step=0.1, value=val_padrao)
             
             if st.form_submit_button("💾 Salvar Apenas Peso", use_container_width=True):
@@ -339,47 +361,25 @@ with tab_medidas:
                 st.success("Peso salvo!")
                 st.rerun()
                 
-    # --- COLUNA DIREITA: MEDIDAS SEMANAIS ---
+    # --- MEDIDAS SEMANAIS ---
     with col_weekly:
         st.markdown("##### 📏 Medidas Semanais")
         with st.form("form_medidas_completo"):
             d_med = st.date_input("Data Medição", value=data_hoje)
             
-            # Inputs já puxam o último valor salvo no perfil (ou seus padrões)
             cm1, cm2, cm3 = st.columns(3)
-            # Barriga/Cintura
             waist = cm1.number_input("Cintura (Umbigo)", 60.0, 150.0, step=0.5, value=METAS['last_waist'])
-            # Pescoço
             neck = cm2.number_input("Pescoço", 30.0, 60.0, step=0.5, value=METAS['last_neck'])
-            # Quadril/Cintura Alta
             hip = cm3.number_input("Quadril", 80.0, 150.0, step=0.5, value=METAS['last_hip'])
             
             notes = st.text_input("Obs:", placeholder="Ex: Jejum...")
-            
-            # Só pede peso aqui se quiser atualizar junto, mas puxa o padrão
             p_med = st.number_input("Peso na Medição (kg)", 40.0, 200.0, step=0.1, value=val_padrao)
 
             if st.form_submit_button("💾 Salvar Medidas Completas", use_container_width=True):
-                # Calcula gordura
                 fat_est = calculate_body_fat(waist, neck, METAS['altura'])
-                
-                # 1. Salva no histórico de medidas
-                executar_sql("""
-                    INSERT INTO public.body_measurements 
-                    (log_date, weight_kg, waist_cm, neck_cm, hip_cm, body_fat_est, notes) 
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """, (d_med, p_med, waist, neck, hip, fat_est, notes))
-                
-                # 2. Salva no histórico de peso também (sincroniza)
+                executar_sql("INSERT INTO public.body_measurements (log_date, weight_kg, waist_cm, neck_cm, hip_cm, body_fat_est, notes) VALUES (%s, %s, %s, %s, %s, %s, %s)", (d_med, p_med, waist, neck, hip, fat_est, notes))
                 executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", (d_med, p_med))
-                
-                # 3. ATUALIZA O PERFIL PARA LEMBRAR NA PRÓXIMA
-                executar_sql("""
-                    UPDATE public.perfil 
-                    SET ultima_cintura=%s, ultimo_pescoco=%s, ultimo_quadril=%s 
-                    WHERE id=1
-                """, (waist, neck, hip))
-                
+                executar_sql("UPDATE public.perfil SET ultima_cintura=%s, ultimo_pescoco=%s, ultimo_quadril=%s WHERE id=1", (waist, neck, hip))
                 st.success(f"Medidas salvas! BF Est: {fat_est:.1f}%")
                 st.rerun()
 
@@ -415,7 +415,6 @@ with tab_admin:
     df_perfil = executar_sql("SELECT * FROM public.perfil WHERE id = 1", is_select=True)
     if not df_perfil.empty:
         p = df_perfil.iloc[0]
-        # Helpers para pegar valor seguro
         def gv(k, d): return p[k] if k in p and pd.notnull(p[k]) else d
         c_gen, c_age, c_h, c_act = gv('genero','Masculino'), int(gv('idade',41)), int(gv('altura_cm',178)), gv('atividade','Sedentário (1.2)')
         c_mk, c_mp, c_mc, c_mg = int(gv('meta_kcal',1650)), int(gv('meta_proteina',130)), int(gv('meta_carbo',150)), int(gv('meta_gordura',59))
@@ -428,18 +427,15 @@ with tab_admin:
         genero = c1.selectbox("Gênero", ["Masculino", "Feminino"], index=0 if c_gen == 'Masculino' else 1)
         idade = c2.number_input("Idade", value=c_age)
         altura = c3.number_input("Altura (cm)", value=c_h)
-        
         c4, c5 = st.columns(2)
         mapa = {"Sedentário (1.2)": 1.2, "Leve (1.375)": 1.375, "Moderado (1.55)": 1.55, "Intenso (1.725)": 1.725}
         idx = list(mapa.keys()).index(c_act) if c_act in mapa else 0
         atividade = c4.selectbox("Atividade", list(mapa.keys()), index=idx)
-        
         st.divider()
         c_m1, c_m2, c_m3 = st.columns(3)
         n_kcal = c_m1.number_input("Meta Kcal", value=c_mk)
         n_prot = c_m2.number_input("Meta Prot", value=c_mp)
         n_peso = c_m3.number_input("Peso Alvo", value=c_pa)
-        
         c_m4, c_m5, c_m6 = st.columns(3)
         n_carb = c_m4.number_input("Meta Carb", value=c_mc)
         n_gord = c_m5.number_input("Meta Gord", value=c_mg)
@@ -459,4 +455,4 @@ with tab_admin:
             st.success("Perfil Salvo!")
             st.rerun()
 
-st.caption("Leo Tracker Pro v4.1 | Split Forms & Auto-Fill")
+st.caption("Leo Tracker Pro v4.2 | Prompt Copier Added")
