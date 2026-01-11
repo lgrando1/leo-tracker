@@ -59,7 +59,7 @@ def executar_sql(sql, params=None, is_select=False):
         st.error(f"Erro no Banco: {e}")
         return pd.DataFrame() if is_select else False
 
-# 3. SINCRONIZAÇÃO DO BANCO (COMPLETO)
+# 3. SINCRONIZAÇÃO DO BANCO (ATUALIZADO PARA SALVAR MEDIDAS NO PERFIL)
 def inicializar_banco():
     # Tabelas Básicas
     executar_sql("CREATE TABLE IF NOT EXISTS public.consumo (id SERIAL PRIMARY KEY, data DATE, alimento TEXT, quantidade REAL, kcal REAL, proteina REAL, carbo REAL, gordura REAL, gluten TEXT DEFAULT 'Não informado');")
@@ -72,6 +72,15 @@ def inicializar_banco():
             meta_kcal REAL, meta_proteina REAL, meta_carbo REAL, meta_gordura REAL, meta_peso_alvo REAL
         );
     """)
+    
+    # ATUALIZAÇÃO: Colunas para lembrar as últimas medidas
+    try: executar_sql("ALTER TABLE public.perfil ADD COLUMN IF NOT EXISTS ultimo_pescoco REAL;")
+    except: pass
+    try: executar_sql("ALTER TABLE public.perfil ADD COLUMN IF NOT EXISTS ultima_cintura REAL;")
+    except: pass
+    try: executar_sql("ALTER TABLE public.perfil ADD COLUMN IF NOT EXISTS ultimo_quadril REAL;")
+    except: pass
+
     # Medidas Corporais
     executar_sql("""
         CREATE TABLE IF NOT EXISTS public.body_measurements (
@@ -80,7 +89,7 @@ def inicializar_banco():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     """)
-    # Adiciona colunas se faltarem (migração)
+    # Colunas extras se faltarem
     try: executar_sql("ALTER TABLE public.body_measurements ADD COLUMN IF NOT EXISTS body_fat_est REAL;")
     except: pass
     try: executar_sql("ALTER TABLE public.body_measurements ADD COLUMN IF NOT EXISTS weight_kg REAL;")
@@ -104,10 +113,15 @@ def get_metas_do_banco():
                 "kcal": int(row['meta_kcal']), "prot": int(row['meta_proteina']),
                 "carb": int(row.get('meta_carbo', 164)), "gord": int(row.get('meta_gordura', 67)),
                 "peso_alvo": float(row.get('meta_peso_alvo', 120.0)), "ritmo": float(row.get('ritmo_semanal', 0.8)),
-                "altura": int(row.get('altura_cm', 178))
+                "altura": int(row.get('altura_cm', 178)),
+                # NOVOS PADRÕES (Se não tiver no banco, usa os seus valores: 133, 53, 122)
+                "last_waist": float(row.get('ultima_cintura') or 133.0),
+                "last_neck": float(row.get('ultimo_pescoco') or 53.0),
+                "last_hip": float(row.get('ultimo_quadril') or 122.0)
             }
     except: pass
-    return {"kcal": 1683, "prot": 108, "carb": 164, "gord": 67, "peso_alvo": 120.0, "ritmo": 0.8, "altura": 178}
+    # Fallback total
+    return {"kcal": 1683, "prot": 108, "carb": 164, "gord": 67, "peso_alvo": 120.0, "ritmo": 0.8, "altura": 178, "last_waist": 133.0, "last_neck": 53.0, "last_hip": 122.0}
 
 inicializar_banco()
 METAS = get_metas_do_banco()
@@ -118,7 +132,7 @@ def calculate_body_fat(waist, neck, height):
     try: return 495 / (1.0324 - 0.19077 * math.log10(waist - neck) + 0.15456 * math.log10(height)) - 450
     except: return 0.0
 
-# 4. FUNÇÕES DE RELATÓRIO (COMPLETO)
+# 4. FUNÇÕES DE RELATÓRIO
 def gerar_excel(df_cons, df_peso, df_medidas, df_bp, d_inicio, d_fim):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -229,7 +243,7 @@ c4.metric("🥑 Gordura", f"{int(g_hoje)}g", f"Meta: {METAS['gord']}g")
 st.progress(min(k_hoje/METAS['kcal'], 1.0))
 st.divider()
 
-# ABAS (Usando os nomes do seu código original)
+# ABAS
 tab_add, tab_hist, tab_medidas, tab_rel, tab_admin = st.tabs(["➕ Inserir", "📜 Diário", "❤️ Saúde & Corpo", "📄 Relatórios", "⚙️ Configurações"])
 
 with tab_add:
@@ -278,10 +292,10 @@ with tab_hist:
                 st.markdown("---")
     else: st.info("Nada registrado hoje.")
 
-# --- ABA DE SAÚDE OTIMIZADA (COM ST.FORM) ---
+# --- ABA DE SAÚDE OTIMIZADA (SEPARADO) ---
 with tab_medidas:
     
-    # 1. FORMULÁRIO DE PRESSÃO (Sem refresh ao digitar)
+    # 1. PRESSÃO (MANTEVE IGUAL)
     st.subheader("🫀 Monitor Cardíaco (Pressão)")
     with st.form("form_pressao"):
         cp1, cp2, cp3 = st.columns(3)
@@ -289,58 +303,80 @@ with tab_medidas:
         dia_in = cp2.number_input("Diastólica (Baixa)", 50, 130, 76)
         pulse_in = cp3.number_input("Pulsação (BPM)", 40, 200, 75)
         
-        # Botão dentro do form só envia quando clica
         if st.form_submit_button("❤️ Gravar Pressão"):
             executar_sql("INSERT INTO public.blood_pressure (systolic, diastolic, pulse, notes) VALUES (%s, %s, %s, 'Registro Manual')", (sys_in, dia_in, pulse_in))
             st.success("Registrado!")
             st.rerun()
-
-    # Mostra histórico (fora do form)
-    df_bp = executar_sql("SELECT measurement_time, systolic, diastolic, pulse FROM public.blood_pressure ORDER BY measurement_time DESC LIMIT 3", is_select=True)
-    if not df_bp.empty:
-        st.caption("Últimas leituras:")
-        for idx, row in df_bp.iterrows():
-            st.caption(f"📅 {row['measurement_time'].strftime('%d/%m %H:%M')} | **{row['systolic']}x{row['diastolic']}** mmHg | ❤️ {row['pulse']} bpm")
-    
     st.divider()
 
-    # 2. FORMULÁRIO DE MEDIDAS E PESO (Sem refresh ao digitar)
-    st.subheader("📏 Medidas & Gordura")
-    st.info("Preencha e clique em Salvar. A % de Gordura será calculada ao salvar.")
+    # 2. CORPO: DIVIDIDO EM DUAS COLUNAS
+    st.subheader("📏 Controle Corporal")
     
-    with st.form("form_medidas"):
-        c_dt, c_peso = st.columns([1, 1])
-        dt_lanc = c_dt.date_input("Data:", value=data_hoje)
-        
-        # Busca último peso para facilitar
-        ultimo = executar_sql("SELECT peso_kg FROM public.peso ORDER BY data DESC LIMIT 1", is_select=True)
-        val_padrao = float(ultimo.iloc[0]['peso_kg']) if not ultimo.empty else 125.0
-        p_val = c_peso.number_input("Peso (kg):", 40.0, 200.0, step=0.1, value=val_padrao)
-        
-        cm1, cm2, cm3 = st.columns(3)
-        waist = cm1.number_input("Cintura (Umbigo):", 60.0, 150.0, step=0.5)
-        neck = cm2.number_input("Pescoço:", 30.0, 60.0, step=0.5)
-        hip = cm3.number_input("Quadril:", 80.0, 150.0, step=0.5)
-        notes = st.text_input("Notas:", placeholder="Ex: Jejum...")
-        
-        if st.form_submit_button("💾 Salvar Peso e Medidas"):
-            # Calcula gordura aqui, na hora do clique
-            fat_est = calculate_body_fat(waist, neck, METAS['altura'])
+    col_daily, col_weekly = st.columns([1, 1.2]) # Coluna da direita um pouco maior
+    
+    # --- COLUNA ESQUERDA: PESO DIÁRIO ---
+    with col_daily:
+        st.markdown("##### 📅 Peso Diário")
+        with st.form("form_peso_rapido"):
+            d_peso = st.date_input("Data", value=data_hoje)
             
-            # Salva na tabela completa
-            executar_sql("""
-                INSERT INTO public.body_measurements 
-                (log_date, weight_kg, waist_cm, neck_cm, hip_cm, body_fat_est, notes) 
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, (dt_lanc, p_val, waist, neck, hip, fat_est, notes))
+            # Pega último peso
+            ultimo = executar_sql("SELECT peso_kg FROM public.peso ORDER BY data DESC LIMIT 1", is_select=True)
+            val_padrao = float(ultimo.iloc[0]['peso_kg']) if not ultimo.empty else 125.0
             
-            # Salva também na tabela simples de peso (redundância útil)
-            executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", (dt_lanc, p_val))
+            p_val = st.number_input("Peso (kg)", 40.0, 200.0, step=0.1, value=val_padrao)
             
-            st.success(f"Salvo! Gordura Estimada: {fat_est:.1f}%")
-            st.rerun()
+            if st.form_submit_button("💾 Salvar Apenas Peso", use_container_width=True):
+                executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", (d_peso, p_val))
+                st.success("Peso salvo!")
+                st.rerun()
+                
+    # --- COLUNA DIREITA: MEDIDAS SEMANAIS ---
+    with col_weekly:
+        st.markdown("##### 📏 Medidas Semanais")
+        with st.form("form_medidas_completo"):
+            d_med = st.date_input("Data Medição", value=data_hoje)
+            
+            # Inputs já puxam o último valor salvo no perfil (ou seus padrões)
+            cm1, cm2, cm3 = st.columns(3)
+            # Barriga/Cintura
+            waist = cm1.number_input("Cintura (Umbigo)", 60.0, 150.0, step=0.5, value=METAS['last_waist'])
+            # Pescoço
+            neck = cm2.number_input("Pescoço", 30.0, 60.0, step=0.5, value=METAS['last_neck'])
+            # Quadril/Cintura Alta
+            hip = cm3.number_input("Quadril", 80.0, 150.0, step=0.5, value=METAS['last_hip'])
+            
+            notes = st.text_input("Obs:", placeholder="Ex: Jejum...")
+            
+            # Só pede peso aqui se quiser atualizar junto, mas puxa o padrão
+            p_med = st.number_input("Peso na Medição (kg)", 40.0, 200.0, step=0.1, value=val_padrao)
+
+            if st.form_submit_button("💾 Salvar Medidas Completas", use_container_width=True):
+                # Calcula gordura
+                fat_est = calculate_body_fat(waist, neck, METAS['altura'])
+                
+                # 1. Salva no histórico de medidas
+                executar_sql("""
+                    INSERT INTO public.body_measurements 
+                    (log_date, weight_kg, waist_cm, neck_cm, hip_cm, body_fat_est, notes) 
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, (d_med, p_med, waist, neck, hip, fat_est, notes))
+                
+                # 2. Salva no histórico de peso também (sincroniza)
+                executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", (d_med, p_med))
+                
+                # 3. ATUALIZA O PERFIL PARA LEMBRAR NA PRÓXIMA
+                executar_sql("""
+                    UPDATE public.perfil 
+                    SET ultima_cintura=%s, ultimo_pescoco=%s, ultimo_quadril=%s 
+                    WHERE id=1
+                """, (waist, neck, hip))
+                
+                st.success(f"Medidas salvas! BF Est: {fat_est:.1f}%")
+                st.rerun()
 
     # Gráfico de Peso
+    st.divider()
     df_p = executar_sql("SELECT * FROM public.peso ORDER BY data ASC", is_select=True)
     if not df_p.empty:
         df_p['data'] = pd.to_datetime(df_p['data'])
@@ -365,7 +401,7 @@ with tab_rel:
             except Exception as e: st.error(f"Erro PDF: {e}")
         else: st.warning("Sem dados no período.")
 
-# ABA ADMIN (COM FORMULÁRIO PARA NÃO PISCAR)
+# ABA ADMIN
 with tab_admin:
     st.header("⚙️ Configuração")
     df_perfil = executar_sql("SELECT * FROM public.perfil WHERE id = 1", is_select=True)
@@ -415,4 +451,4 @@ with tab_admin:
             st.success("Perfil Salvo!")
             st.rerun()
 
-st.caption("Leo Tracker Pro v4.0 | Full Features + No Refresh")
+st.caption("Leo Tracker Pro v4.1 | Split Forms & Auto-Fill")
