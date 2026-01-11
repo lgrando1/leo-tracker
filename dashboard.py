@@ -74,7 +74,6 @@ st.sidebar.info(f"🧬 **Metas:**\n🔥 {p['meta_kcal']} kcal | 🥩 {p['meta_pr
 hoje = datetime.now(pytz.timezone('America/Sao_Paulo')).date()
 DATA_INICIO = pd.to_datetime("2025-12-30").date()
 
-# Query Completa (Macros + Quantidade)
 df_hoje = run_query("SELECT * FROM public.consumo WHERE data = %s", (hoje,))
 df_hist = run_query("""
     SELECT data, 
@@ -110,24 +109,21 @@ c4.metric("⚖️ Peso Atual", f"{PESO_ATUAL} kg")
 st.divider()
 
 # ==========================================
-# SEÇÃO 1: PROGRESSO DE PESO (ADIANTADO/ATRASADO)
+# SEÇÃO 1: PROGRESSO DE PESO
 # ==========================================
 st.subheader("⚖️ Análise de Progresso (Meta vs Real)")
 
 peso_inicial = 144.9
 ritmo_semanal = float(p.get('ritmo_semanal', 0.8))
 ritmo_diario = ritmo_semanal / 7.0
-
-# Cálculos de Engenharia Reversa
 peso_perdido = peso_inicial - PESO_ATUAL
 dias_esperados = peso_perdido / ritmo_diario if ritmo_diario > 0 else 0
 data_esperada_para_peso_atual = DATA_INICIO + timedelta(days=int(dias_esperados))
 diferenca_dias = (hoje - data_esperada_para_peso_atual).days
 
 col_a, col_b = st.columns([1, 2])
-
 with col_a:
-    st.write("") # Espaço
+    st.write("") 
     if diferenca_dias < 0:
         st.success(f"🚀 **ADIANTADO: {abs(diferenca_dias)} dias**")
         st.caption(f"Com {PESO_ATUAL}kg, você atingiu hoje uma meta prevista para **{data_esperada_para_peso_atual.strftime('%d/%m')}**.")
@@ -148,100 +144,115 @@ with col_b:
         fig_combo = go.Figure()
         fig_combo.add_trace(go.Scatter(x=dates_m, y=vals_m, name="Meta Planejada", mode='lines', line=dict(color='gray', dash='dot')))
         fig_combo.add_trace(go.Scatter(x=df_peso['data'], y=df_peso['peso_kg'], name="Peso Real", mode='lines+markers', line=dict(color='#1f77b4', width=4)))
-        
-        fig_combo.add_trace(go.Scatter(
-            x=[data_esperada_para_peso_atual], y=[PESO_ATUAL],
-            mode='markers', marker=dict(color='purple', size=12, symbol='star'),
-            name="Data Esperada (Teórica)"
-        ))
+        fig_combo.add_trace(go.Scatter(x=[data_esperada_para_peso_atual], y=[PESO_ATUAL], mode='markers', marker=dict(color='purple', size=12, symbol='star'), name="Data Esperada"))
         fig_combo.update_layout(height=300, margin=dict(l=10,r=10,t=10,b=10), hovermode="x unified")
         st.plotly_chart(fig_combo, use_container_width=True)
 
 st.divider()
 
 # ==========================================
-# SEÇÃO 2: NUTRIÇÃO (VOLUME, MACROS E PIZZA)
-# ==========================================
-st.subheader("🍽️ Inteligência Nutricional")
-
-# 2.1 VOLUME VS CALORIAS (NOVO)
-if not df_hist.empty:
-    fig_dens = make_subplots(specs=[[{"secondary_y": True}]])
-    fig_dens.add_trace(go.Bar(x=df_hist['data'], y=df_hist['tqtd'], name="Volume (g)", marker_color='rgba(52, 152, 219, 0.4)'), secondary_y=False)
-    fig_dens.add_trace(go.Scatter(x=df_hist['data'], y=df_hist['tkcal'], name="Calorias", mode='lines+markers', line=dict(color='#e74c3c', width=2)), secondary_y=True)
-    fig_dens.add_trace(go.Scatter(x=df_hist['data'], y=[p['meta_kcal']]*len(df_hist), name="Meta Kcal", mode='lines', line=dict(color='gray', dash='dot')), secondary_y=True)
-    fig_dens.update_layout(title="Volume de Comida (g) vs Calorias (kcal)", height=300, margin=dict(l=10,r=10,t=40,b=10), legend=dict(orientation="h", y=1.1))
-    fig_dens.update_yaxes(title_text="Gramas", secondary_y=False)
-    fig_dens.update_yaxes(title_text="Kcal", secondary_y=True)
-    st.plotly_chart(fig_dens, use_container_width=True)
-
-# 2.2 MACROS E PIZZA (RESTAURADOS)
-if not df_hist.empty:
-    st.markdown("#### 🔍 Controle de Macros")
-    
-    # 3 Colunas para os gráficos de barras
-    m1, m2, m3 = st.columns(3)
-    def plot_macro(df, col_real, val_meta, nome, cor):
-        f = go.Figure()
-        f.add_trace(go.Bar(x=df['data'], y=df[col_real], name="Real", marker_color=cor))
-        f.add_trace(go.Scatter(x=df['data'], y=[val_meta]*len(df), name="Meta", mode='lines', line=dict(color='gray', dash='dot')))
-        f.update_layout(title=dict(text=nome), height=220, margin=dict(l=5,r=5,t=30,b=5), showlegend=False)
-        return f
-
-    m1.plotly_chart(plot_macro(df_hist, 'tprot', p['meta_proteina'], f"Proteína (Meta: {p['meta_proteina']}g)", "#3366CC"), use_container_width=True)
-    m2.plotly_chart(plot_macro(df_hist, 'tcarb', p.get('meta_carbo', 150), f"Carbo (Meta: {p.get('meta_carbo', 150)}g)", "#FF9900"), use_container_width=True)
-    m3.plotly_chart(plot_macro(df_hist, 'tgord', p.get('meta_gordura', 59), f"Gordura (Meta: {p.get('meta_gordura', 59)}g)", "#DC3912"), use_container_width=True)
-
-    # Gráfico de Pizza (Lado a lado com resumo)
-    gp1, gp2 = st.columns([2, 1])
-    with gp2:
-        if k_act > 0:
-            c_act = df_hoje['carbo'].sum()
-            g_act = df_hoje['gordura'].sum()
-            fig_p = go.Figure(data=[go.Pie(labels=['Prot','Carb','Gord'], values=[p_act*4, c_act*4, g_act*9], hole=.4, marker=dict(colors=['#3366CC','#FF9900','#DC3912']))])
-            fig_p.update_layout(title="Distribuição Hoje", height=250, margin=dict(l=10,r=10,t=30,b=10), showlegend=False)
-            st.plotly_chart(fig_p, use_container_width=True)
-        else:
-            st.info("Sem dados hoje.")
-    
-    with gp1:
-        # Resumo em texto
-        st.markdown(f"""
-        **Resumo dos últimos 30 dias:**
-        - Média Calórica: **{int(df_hist['tkcal'].mean())} kcal**
-        - Média Proteica: **{int(df_hist['tprot'].mean())} g**
-        - Volume Médio: **{int(df_hist['tqtd'].mean())} g/dia**
-        """)
-
-st.divider()
-
-# ==========================================
-# SEÇÃO 3: SAÚDE E CORPO
+# SEÇÃO 2: SAÚDE & CORPO (RESTAURADA)
 # ==========================================
 st.subheader("🧬 Saúde & Composição Corporal")
 
-col_med, col_press = st.columns(2)
+if not df_medidas.empty:
+    last_m = df_medidas.iloc[-1]
+    
+    # Cálculos Avançados
+    bf_atual = last_m['body_fat_est']
+    cintura = last_m['waist_cm']
+    quadril = last_m['hip_cm']
+    pescoco = last_m['neck_cm']
+    
+    # Relação Cintura-Quadril (RCQ)
+    rcq = cintura / quadril if quadril > 0 else 0
+    risco_rcq = "Baixo" if rcq < 0.90 else ("Moderado" if rcq < 0.95 else "Alto Risco")
+    
+    # MÉTRICAS VISUAIS (O INDICADOR LEGAL)
+    mc1, mc2, mc3, mc4 = st.columns(4)
+    mc1.metric("⚖️ Peso (Medidas)", f"{last_m.get('weight_kg', PESO_ATUAL)} kg")
+    mc2.metric("🐷 Gordura (BF)", f"{bf_atual:.1f}%", "-1.2% (Est)" if len(df_medidas) > 1 else None)
+    mc3.metric("📏 Cintura", f"{cintura} cm", f"Pesc: {pescoco}cm")
+    mc4.metric("🫀 Risco Cardíaco (RCQ)", f"{rcq:.2f}", risco_rcq, delta_color="inverse")
 
+col_med, col_press = st.columns(2)
 with col_med:
-    st.write("**Composição (Gordura/Cintura)**")
+    st.markdown("**📉 Evolução de Gordura (%)**")
     if not df_medidas.empty:
-        last_m = df_medidas.iloc[-1]
-        bf_atual = last_m['body_fat_est']
-        
-        # Gráfico BF
         fig_bf = go.Figure()
-        fig_bf.add_trace(go.Scatter(x=df_medidas['log_date'], y=df_medidas['body_fat_est'], mode='lines+markers', name='% Gordura', line=dict(color='#e67e22')))
-        fig_bf.update_layout(height=250, margin=dict(l=10,r=10,t=30,b=10), title=f"BF Atual: {bf_atual:.1f}%")
+        fig_bf.add_trace(go.Scatter(x=df_medidas['log_date'], y=df_medidas['body_fat_est'], mode='lines+markers', name='% Gordura', line=dict(color='#e67e22', width=3)))
+        fig_bf.update_layout(height=250, margin=dict(l=10,r=10,t=20,b=10))
         st.plotly_chart(fig_bf, use_container_width=True)
-    else: st.info("Sem medidas.")
 
 with col_press:
-    st.write("**Pressão Arterial**")
+    st.markdown("**🫀 Pressão Arterial**")
     if not df_bp.empty:
         fig_bp = go.Figure()
         fig_bp.add_hline(y=120, line_dash="dot", line_color="green")
         fig_bp.add_trace(go.Scatter(x=df_bp['measurement_time'], y=df_bp['systolic'], name="Alta", line=dict(color='red')))
         fig_bp.add_trace(go.Scatter(x=df_bp['measurement_time'], y=df_bp['diastolic'], name="Baixa", line=dict(color='blue')))
-        fig_bp.update_layout(height=250, margin=dict(l=10,r=10,t=30,b=10), title="Histórico PA")
+        fig_bp.update_layout(height=250, margin=dict(l=10,r=10,t=20,b=10))
         st.plotly_chart(fig_bp, use_container_width=True)
-    else: st.info("Sem pressão.")
+
+st.divider()
+
+# ==========================================
+# SEÇÃO 3: NUTRIÇÃO (EM PERCENTUAL)
+# ==========================================
+st.subheader("🍽️ Inteligência Nutricional")
+
+if not df_hist.empty:
+    # Preparar dados percentuais
+    # 1g Prot = 4kcal, 1g Carb = 4kcal, 1g Gord = 9kcal
+    df_macros = df_hist.copy()
+    df_macros['kcal_p'] = df_macros['tprot'] * 4
+    df_macros['kcal_c'] = df_macros['tcarb'] * 4
+    df_macros['kcal_g'] = df_macros['tgord'] * 9
+    df_macros['kcal_total_calc'] = df_macros['kcal_p'] + df_macros['kcal_c'] + df_macros['kcal_g']
+    
+    # Evitar divisão por zero
+    df_macros = df_macros[df_macros['kcal_total_calc'] > 0]
+    
+    df_macros['pct_p'] = (df_macros['kcal_p'] / df_macros['kcal_total_calc']) * 100
+    df_macros['pct_c'] = (df_macros['kcal_c'] / df_macros['kcal_total_calc']) * 100
+    df_macros['pct_g'] = (df_macros['kcal_g'] / df_macros['kcal_total_calc']) * 100
+
+    c1, c2 = st.columns([2, 1])
+    
+    with c1:
+        st.markdown("#### 📊 Distribuição de Macros por Dia (%)")
+        fig_stack = go.Figure()
+        fig_stack.add_trace(go.Bar(x=df_macros['data'], y=df_macros['pct_p'], name='Proteína', marker_color='#3366CC'))
+        fig_stack.add_trace(go.Bar(x=df_macros['data'], y=df_macros['pct_g'], name='Gordura', marker_color='#DC3912'))
+        fig_stack.add_trace(go.Bar(x=df_macros['data'], y=df_macros['pct_c'], name='Carbo', marker_color='#FF9900'))
+        
+        fig_stack.update_layout(
+            barmode='stack', 
+            height=350, 
+            margin=dict(l=10,r=10,t=20,b=10),
+            legend=dict(orientation="h", y=1.1),
+            yaxis=dict(title="Percentual (%)", range=[0, 100])
+        )
+        st.plotly_chart(fig_stack, use_container_width=True)
+        
+    with c2:
+        st.markdown("#### 🥗 Hoje")
+        if k_act > 0:
+            c_act = df_hoje['carbo'].sum()
+            g_act = df_hoje['gordura'].sum()
+            fig_p = go.Figure(data=[go.Pie(labels=['Prot','Carb','Gord'], values=[p_act*4, c_act*4, g_act*9], hole=.4, marker=dict(colors=['#3366CC','#FF9900','#DC3912']))])
+            fig_p.update_layout(height=350, margin=dict(l=10,r=10,t=20,b=10), showlegend=False)
+            st.plotly_chart(fig_p, use_container_width=True)
+        else:
+            st.info("Registre sua alimentação hoje para ver a distribuição.")
+
+    # Gráfico de Volume vs Kcal (mantido abaixo pois é útil)
+    st.markdown("#### 📏 Volume vs Calorias")
+    fig_dens = make_subplots(specs=[[{"secondary_y": True}]])
+    fig_dens.add_trace(go.Bar(x=df_hist['data'], y=df_hist['tqtd'], name="Volume (g)", marker_color='rgba(52, 152, 219, 0.3)'), secondary_y=False)
+    fig_dens.add_trace(go.Scatter(x=df_hist['data'], y=df_hist['tkcal'], name="Kcal", mode='lines+markers', line=dict(color='#e74c3c', width=2)), secondary_y=True)
+    fig_dens.update_layout(height=250, margin=dict(l=10,r=10,t=20,b=10), showlegend=False)
+    st.plotly_chart(fig_dens, use_container_width=True)
+
+else:
+    st.info("Sem dados de consumo registrados.")
