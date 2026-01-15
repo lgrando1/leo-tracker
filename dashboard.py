@@ -19,31 +19,24 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- CONEXÃO ---
-@st.cache_resource(ttl=300)
-def get_connection():
-    return psycopg2.connect(st.secrets["DATABASE_URL"])
+from sqlalchemy import create_engine
+
+@st.cache_resource(ttl=600)
+def get_engine():
+    # Converte o DATABASE_URL do Streamlit para o formato que o SQLAlchemy entende
+    db_url = st.secrets["DATABASE_URL"]
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+    return create_engine(db_url)
 
 def run_query(query, params=None, is_select=True):
-    conn = None
-    try:
-        conn = get_connection()
-        with conn.cursor() as cur:
-            cur.execute("SET timezone TO 'America/Sao_Paulo';")
-            if is_select: 
-                df = pd.read_sql(query, conn, params=params)
-                for col in ['data', 'log_date', 'measurement_time']:
-                    if col in df.columns:
-                        try: df[col] = pd.to_datetime(df[col])
-                        except: pass 
-                return df
-            else:
-                cur.execute(query, params)
-                conn.commit()
-                return True
-    except Exception as e:
-        if conn: conn.rollback()
-        st.error(f"Erro DB: {e}")
-        return pd.DataFrame() if is_select else False
+    engine = get_engine()
+    if is_select:
+        return pd.read_sql(query, engine, params=params)
+    else:
+        with engine.begin() as conn:
+            conn.execute(query, params)
+        return True
 
 # --- TRAVA DE SEGURANÇA ---
 if st.query_params.get("token") != st.secrets.get("DASH_ACCESS_TOKEN"):
