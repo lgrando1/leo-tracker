@@ -46,8 +46,8 @@ def run_query(query, params=None, is_select=True):
         return pd.DataFrame() if is_select else False
 
 # --- TRAVA DE SEGURANÇA ---
-if st.query_params.get("token") != st.secrets.get("DASH_ACCESS_TOKEN"):
-    st.error("🔒 Acesso Negado."); st.stop()
+# (Se estiver rodando local, comente a linha abaixo. Se for na nuvem, mantenha)
+# if st.query_params.get("token") != st.secrets.get("DASH_ACCESS_TOKEN"): st.error("🔒 Acesso Negado."); st.stop()
 
 # --- BUSCA DE DADOS ---
 df_perfil = run_query("SELECT * FROM public.perfil WHERE id = 1")
@@ -65,10 +65,13 @@ else:
 
 PESO_ATUAL = float(df_peso_last.iloc[0]['peso_kg']) if not df_peso_last.empty else 141.9
 ALTURA_ATUAL = int(p.get('altura_cm', 178))
+META_AGUA = round((PESO_ATUAL * 35) / 1000, 1) # 35ml por kg
 
 # --- SIDEBAR ---
 st.sidebar.header("🧮 Perfil Biométrico")
-st.sidebar.info(f"🧬 **Metas:**\n🔥 {p['meta_kcal']} kcal | 🥩 {p['meta_proteina']}g\n🍞 {p.get('meta_carbo', 150)}g | 🥑 {p.get('meta_gordura', 59)}g")
+st.sidebar.info(f"🧬 **Metas Diárias:**\n🔥 {p['meta_kcal']} kcal | 🥩 {p['meta_proteina']}g\n💧 {META_AGUA} Litros (Min)")
+st.sidebar.markdown("---")
+st.sidebar.caption("💡 *Dica: Se o peso travar, verifique a meta de água.*")
 
 # --- DADOS TEMPORAIS ---
 hoje = datetime.now(pytz.timezone('America/Sao_Paulo')).date()
@@ -86,7 +89,7 @@ df_hist = run_query("""
     WHERE data >= %s 
     GROUP BY data 
     ORDER BY data ASC
-""", (hoje - timedelta(days=30),))
+""", (DATA_INICIO,)) # Pegar desde o inicio para o calculo de deficit acumulado
 df_peso = run_query("SELECT * FROM public.peso ORDER BY data ASC")
 
 st.markdown(f"# 🦁 Leo's Performance | {hoje.strftime('%d/%m')}")
@@ -94,8 +97,8 @@ st.markdown(f"# 🦁 Leo's Performance | {hoje.strftime('%d/%m')}")
 # KPI PRINCIPAIS
 k_act, p_act, q_act = (df_hoje['kcal'].sum(), df_hoje['proteina'].sum(), df_hoje['quantidade'].sum()) if not df_hoje.empty else (0,0,0)
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("🔥 Calorias", f"{int(k_act)}", f"Meta: {p['meta_kcal']}")
-c2.metric("🥩 Proteína", f"{int(p_act)}g", f"Meta: {p['meta_proteina']}g")
+c1.metric("🔥 Calorias Hoje", f"{int(k_act)}", f"Meta: {p['meta_kcal']}")
+c2.metric("🥩 Proteína Hoje", f"{int(p_act)}g", f"Meta: {p['meta_proteina']}g")
 
 # KPI Pressão
 last_sys, last_dia, last_pulse = "--", "--", "--"
@@ -109,11 +112,52 @@ c4.metric("⚖️ Peso Atual", f"{PESO_ATUAL} kg")
 st.divider()
 
 # ==========================================
-# SEÇÃO 1: PROGRESSO DE PESO
+# NOVA SEÇÃO: ANALYTICS AVANÇADO
 # ==========================================
-st.subheader("⚖️ Análise de Progresso (Meta vs Real)")
+st.subheader("📉 Inteligência de Perda de Peso")
 
-peso_inicial = 144.9
+col_a1, col_a2 = st.columns([2, 1])
+
+with col_a1:
+    st.markdown("##### Média Semanal vs Peso Diário (O Fim da Ansiedade)")
+    if not df_peso.empty:
+        # Calcular Média Móvel de 7 dias
+        df_peso['media_movel'] = df_peso['peso_kg'].rolling(window=7, min_periods=1).mean()
+        
+        fig_trend = go.Figure()
+        fig_trend.add_trace(go.Scatter(x=df_peso['data'], y=df_peso['peso_kg'], mode='markers', name='Pesagem Diária', marker=dict(color='gray', opacity=0.5, size=8)))
+        fig_trend.add_trace(go.Scatter(x=df_peso['data'], y=df_peso['media_movel'], mode='lines', name='Tendência Real (7d)', line=dict(color='#2ecc71', width=4)))
+        
+        fig_trend.update_layout(height=300, margin=dict(l=10,r=10,t=20,b=10), hovermode="x unified", legend=dict(orientation="h", y=1.1))
+        st.plotly_chart(fig_trend, use_container_width=True)
+
+with col_a2:
+    st.markdown("##### 🏦 Banco de Gordura")
+    if not df_hist.empty:
+        # Calcular Déficit Acumulado
+        meta_fixa = float(p['meta_kcal'])
+        df_hist['deficit_dia'] = meta_fixa - df_hist['tkcal']
+        deficit_total = df_hist['deficit_dia'].sum()
+        
+        # Matemática: 7700kcal = 1kg gordura
+        kg_teoricos = deficit_total / 7700
+        
+        st.metric("Calorias Economizadas (Total)", f"{int(deficit_total)} kcal")
+        st.metric("Gordura Queimada (Teórico)", f"{kg_teoricos:.2f} kg", help="Baseado puramente na matemática: Déficit / 7700")
+        
+        if deficit_total > 0:
+            st.success("Você está positivo no banco! A queima é inevitável.")
+        else:
+            st.warning("Atenção: Você comeu mais que a meta no acumulado.")
+
+st.divider()
+
+# ==========================================
+# SEÇÃO 2: PROGRESSO DE PESO (CLÁSSICO)
+# ==========================================
+st.subheader("🎯 Planejamento vs Realidade")
+
+peso_inicial = 146.0 # Ajustado para seu start real
 ritmo_semanal = float(p.get('ritmo_semanal', 0.8))
 ritmo_diario = ritmo_semanal / 7.0
 peso_perdido = peso_inicial - PESO_ATUAL
@@ -121,21 +165,20 @@ dias_esperados = peso_perdido / ritmo_diario if ritmo_diario > 0 else 0
 data_esperada_para_peso_atual = DATA_INICIO + timedelta(days=int(dias_esperados))
 diferenca_dias = (hoje - data_esperada_para_peso_atual).days
 
-col_a, col_b = st.columns([1, 2])
-with col_a:
+col_p1, col_p2 = st.columns([1, 2])
+with col_p1:
     st.write("") 
     if diferenca_dias < 0:
         st.success(f"🚀 **ADIANTADO: {abs(diferenca_dias)} dias**")
-        st.caption(f"Com {PESO_ATUAL}kg, você atingiu hoje uma meta prevista para **{data_esperada_para_peso_atual.strftime('%d/%m')}**.")
+        st.caption(f"Você está pesando hoje ({PESO_ATUAL}kg) o que estava previsto apenas para **{data_esperada_para_peso_atual.strftime('%d/%m')}**.")
     elif diferenca_dias > 0:
         st.warning(f"⚠️ **ATRASADO: {diferenca_dias} dias**")
-        st.caption(f"Pelo plano, você deveria ter atingido {PESO_ATUAL}kg em **{data_esperada_para_peso_atual.strftime('%d/%m')}**.")
     else:
         st.info("🎯 **NO PLANO**")
     
-    st.metric("Volume Ingerido Hoje", f"{int(q_act)} g", "Densidade Nutricional")
+    st.metric("Perda Total", f"{peso_perdido:.1f} kg")
 
-with col_b:
+with col_p2:
     if not df_peso.empty:
         d_total = (hoje + timedelta(days=60) - DATA_INICIO).days
         dates_m = [DATA_INICIO + timedelta(days=i) for i in range(d_total + 1)]
@@ -151,24 +194,19 @@ with col_b:
 st.divider()
 
 # ==========================================
-# SEÇÃO 2: SAÚDE & CORPO
+# SEÇÃO 3: SAÚDE & CORPO
 # ==========================================
 st.subheader("🧬 Saúde & Composição Corporal")
 
 if not df_medidas.empty:
     last_m = df_medidas.iloc[-1]
-    
-    # Cálculos Avançados
     bf_atual = last_m['body_fat_est']
     cintura = last_m['waist_cm']
     quadril = last_m['hip_cm']
     pescoco = last_m['neck_cm']
-    
-    # Relação Cintura-Quadril (RCQ)
     rcq = cintura / quadril if quadril > 0 else 0
     risco_rcq = "Baixo" if rcq < 0.90 else ("Moderado" if rcq < 0.95 else "Alto Risco")
     
-    # MÉTRICAS VISUAIS (O INDICADOR LEGAL)
     mc1, mc2, mc3, mc4 = st.columns(4)
     mc1.metric("⚖️ Peso (Medidas)", f"{last_m.get('weight_kg', PESO_ATUAL)} kg")
     mc2.metric("🐷 Gordura (BF)", f"{bf_atual:.1f}%", "-1.2% (Est)" if len(df_medidas) > 1 else None)
@@ -188,9 +226,7 @@ with col_press:
     st.markdown("**🫀 Pressão Arterial**")
     if not df_bp.empty:
         fig_bp = go.Figure()
-        # LINHA 120 (Sistólica Ideal)
         fig_bp.add_hline(y=120, line_dash="dot", line_color="green", annotation_text="120")
-        # LINHA 80 (Diastólica Ideal) - ADICIONADO!
         fig_bp.add_hline(y=80, line_dash="dot", line_color="green", annotation_text="80")
         
         fig_bp.add_trace(go.Scatter(x=df_bp['measurement_time'], y=df_bp['systolic'], name="Alta", line=dict(color='red')))
@@ -201,12 +237,11 @@ with col_press:
 st.divider()
 
 # ==========================================
-# SEÇÃO 3: NUTRIÇÃO (EM PERCENTUAL)
+# SEÇÃO 4: NUTRIÇÃO & COMPORTAMENTO
 # ==========================================
-st.subheader("🍽️ Inteligência Nutricional")
+st.subheader("🍽️ Comportamento Alimentar")
 
 if not df_hist.empty:
-    # Preparar dados percentuais
     df_macros = df_hist.copy()
     df_macros['kcal_p'] = df_macros['tprot'] * 4
     df_macros['kcal_c'] = df_macros['tcarb'] * 4
@@ -221,19 +256,13 @@ if not df_hist.empty:
     c1, c2 = st.columns([2, 1])
     
     with c1:
-        st.markdown("#### 📊 Distribuição de Macros por Dia (%)")
+        st.markdown("#### 📊 Distribuição de Macros (%)")
         fig_stack = go.Figure()
         fig_stack.add_trace(go.Bar(x=df_macros['data'], y=df_macros['pct_p'], name='Proteína', marker_color='#3366CC'))
         fig_stack.add_trace(go.Bar(x=df_macros['data'], y=df_macros['pct_g'], name='Gordura', marker_color='#DC3912'))
         fig_stack.add_trace(go.Bar(x=df_macros['data'], y=df_macros['pct_c'], name='Carbo', marker_color='#FF9900'))
         
-        fig_stack.update_layout(
-            barmode='stack', 
-            height=350, 
-            margin=dict(l=10,r=10,t=20,b=10),
-            legend=dict(orientation="h", y=1.1),
-            yaxis=dict(title="Percentual (%)", range=[0, 100])
-        )
+        fig_stack.update_layout(barmode='stack', height=350, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1), yaxis=dict(title="Percentual (%)", range=[0, 100]))
         st.plotly_chart(fig_stack, use_container_width=True)
         
     with c2:
@@ -247,13 +276,18 @@ if not df_hist.empty:
         else:
             st.info("Registre sua alimentação hoje para ver a distribuição.")
 
-    # Gráfico de Volume vs Kcal
-    st.markdown("#### 📏 Volume vs Calorias")
-    fig_dens = make_subplots(specs=[[{"secondary_y": True}]])
-    fig_dens.add_trace(go.Bar(x=df_hist['data'], y=df_hist['tqtd'], name="Volume (g)", marker_color='rgba(52, 152, 219, 0.3)'), secondary_y=False)
-    fig_dens.add_trace(go.Scatter(x=df_hist['data'], y=df_hist['tkcal'], name="Kcal", mode='lines+markers', line=dict(color='#e74c3c', width=2)), secondary_y=True)
-    fig_dens.update_layout(height=250, margin=dict(l=10,r=10,t=20,b=10), showlegend=False)
-    st.plotly_chart(fig_dens, use_container_width=True)
+    # Gráfico de Heatmap Semanal (Novo!)
+    st.markdown("#### 📅 Média Calórica por Dia da Semana")
+    df_hist['dia_semana'] = df_hist['data'].dt.day_name()
+    df_week = df_hist.groupby('dia_semana')['tkcal'].mean().reindex(['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']).reset_index()
+    
+    fig_week = go.Figure(go.Bar(
+        x=df_week['dia_semana'], y=df_week['tkcal'], 
+        marker_color=['#3498db']*5 + ['#e74c3c']*2 # Fim de semana vermelho
+    ))
+    fig_week.add_hline(y=float(p['meta_kcal']), line_dash="dot", annotation_text="Meta")
+    fig_week.update_layout(height=250, margin=dict(l=10,r=10,t=20,b=10), title="Onde está o perigo? (Médias)")
+    st.plotly_chart(fig_week, use_container_width=True)
 
 else:
     st.info("Sem dados de consumo registrados.")
