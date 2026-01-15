@@ -112,16 +112,15 @@ c4.metric("⚖️ Peso Atual", f"{PESO_ATUAL} kg")
 st.divider()
 
 # ==========================================
-# NOVA SEÇÃO: ANALYTICS AVANÇADO
+# NOVA SEÇÃO: ANALYTICS AVANÇADO (CORRIGIDO V2.1)
 # ==========================================
 st.subheader("📉 Inteligência de Perda de Peso")
 
 col_a1, col_a2 = st.columns([2, 1])
 
 with col_a1:
-    st.markdown("##### Média Semanal vs Peso Diário (O Fim da Ansiedade)")
+    st.markdown("##### Média Semanal vs Peso Diário")
     if not df_peso.empty:
-        # Calcular Média Móvel de 7 dias
         df_peso['media_movel'] = df_peso['peso_kg'].rolling(window=7, min_periods=1).mean()
         
         fig_trend = go.Figure()
@@ -132,25 +131,34 @@ with col_a1:
         st.plotly_chart(fig_trend, use_container_width=True)
 
 with col_a2:
-    st.markdown("##### 🏦 Banco de Gordura")
+    st.markdown("##### 🏦 Banco de Gordura (Real)")
     if not df_hist.empty:
-        # Calcular Déficit Acumulado
-        meta_fixa = float(p['meta_kcal'])
-        df_hist['deficit_dia'] = meta_fixa - df_hist['tkcal']
-        deficit_total = df_hist['deficit_dia'].sum()
+        # 1. Cruzar dados de consumo com peso do dia (para calcular o basal dinâmico)
+        df_merged = pd.merge_asof(df_hist.sort_values('data'), df_peso.sort_values('data'), on='data', direction='backward')
         
-        # Matemática: 7700kcal = 1kg gordura
-        kg_teoricos = deficit_total / 7700
+        # Se faltar peso em algum dia, usa o peso inicial como fallback
+        peso_fallback = 146.0 
+        df_merged['peso_kg'] = df_merged['peso_kg'].fillna(peso_fallback)
         
-        st.metric("Calorias Economizadas (Total)", f"{int(deficit_total)} kcal")
-        st.metric("Gordura Queimada (Teórico)", f"{kg_teoricos:.2f} kg", help="Baseado puramente na matemática: Déficit / 7700")
+        # 2. Calcular GET (Gasto Energético Total) Diário - Fórmula Mifflin-St Jeor
+        # TMB = (10 x peso) + (6.25 x altura) - (5 x idade) + 5
+        # GET = TMB * 1.2 (Sedentário)
+        altura_cm = int(p.get('altura_cm', 178))
+        idade = int(p.get('idade', 41))
         
-        if deficit_total > 0:
-            st.success("Você está positivo no banco! A queima é inevitável.")
-        else:
-            st.warning("Atenção: Você comeu mais que a meta no acumulado.")
-
-st.divider()
+        df_merged['tmb_dia'] = (10 * df_merged['peso_kg']) + (6.25 * altura_cm) - (5 * idade) + 5
+        df_merged['get_dia'] = df_merged['tmb_dia'] * 1.2 # Fator atividade leve/sedentário
+        
+        # 3. Calcular Déficit Real (O que gastou - O que comeu)
+        df_merged['deficit_real'] = df_merged['get_dia'] - df_merged['tkcal']
+        
+        deficit_total_real = df_merged['deficit_real'].sum()
+        kg_gordura_queimada = deficit_total_real / 7700
+        
+        st.metric("Déficit Calórico Total", f"{int(deficit_total_real)} kcal", help="Soma de (Seu Gasto Basal + Atividade - Comida) de todos os dias.")
+        st.metric("Gordura Eliminada (Teórico)", f"{kg_gordura_queimada:.2f} kg", help="Matemática pura: Déficit Real / 7700 kcal")
+        
+        st.caption(f"ℹ️ Baseado num gasto médio diário de ~{int(df_merged['get_dia'].mean())} kcal.")
 
 # ==========================================
 # SEÇÃO 2: PROGRESSO DE PESO (CLÁSSICO)
