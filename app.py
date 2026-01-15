@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import psycopg2
+from sqlalchemy import create_engine, text
 from datetime import datetime, timedelta
 import json
 import pytz 
@@ -34,31 +34,34 @@ def check_password():
 if not check_password(): st.stop()
 
 # ============================================================================
-# 2. CONEXÃO E BANCO DE DADOS
+# 2. CONEXÃO E BANCO DE DADOS (SQLAlchemy Otimizado)
 # ============================================================================
 @st.cache_resource(ttl=600)
-def get_connection():
-    return psycopg2.connect(st.secrets["DATABASE_URL"])
+def get_engine():
+    db_url = st.secrets["DATABASE_URL"]
+    # Garante compatibilidade com URLs antigas do Heroku/Render
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+    return create_engine(db_url)
 
 def executar_sql(sql, params=None, is_select=False):
-    conn = None
+    engine = get_engine()
     try:
-        conn = get_connection()
-        with conn.cursor() as cur:
-            cur.execute("SET timezone TO 'America/Sao_Paulo';")
-            if is_select:
-                df = pd.read_sql(sql, conn, params=params)
-                for col in ['data', 'log_date', 'measurement_time']:
-                    if col in df.columns:
-                        try: df[col] = pd.to_datetime(df[col])
-                        except: pass
-                return df
-            else:
-                cur.execute(sql, params)
-                conn.commit()
-                return True
+        if is_select:
+            # Leitura Otimizada com Pandas + SQLAlchemy
+            df = pd.read_sql(sql, engine, params=params)
+            # Padronização de datas para evitar erros de fuso
+            for col in ['data', 'log_date', 'measurement_time']:
+                if col in df.columns:
+                    try: df[col] = pd.to_datetime(df[col])
+                    except: pass
+            return df
+        else:
+            # Escrita Segura (Transacional)
+            with engine.begin() as conn:
+                conn.execute(text(sql), params)
+            return True
     except Exception as e:
-        if conn: conn.rollback()
         st.error(f"Erro no Banco: {e}")
         return pd.DataFrame() if is_select else False
 
@@ -284,7 +287,7 @@ tab_add, tab_hist, tab_medidas, tab_rel, tab_admin = st.tabs(["➕ Inserir", "�
 
 with tab_add:
     st.write("### O que você comeu?")
-    texto_input = st.text_area("", height=100, placeholder="Ex: 2 ovos mexidos e café preto.")
+    texto_input = st.text_area("Descrição da Refeição", height=100, placeholder="Ex: 2 ovos mexidos e café preto.", label_visibility="collapsed")
     
     if st.button("🚀 Processar com IA (Auditado)", type="primary"):
         api_key = st.secrets.get("GROQ_API_KEY")
@@ -305,8 +308,8 @@ with tab_add:
                         # Usa a maior (para garantir que não subestime)
                         kcal_final = max(kcal_auditada, float(item.get('kcal', 0)))
 
-                        executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-                                     (item.get('data'), item.get('alimento'), item.get('quantidade_g'), kcal_final, prot, carb, gord, item.get('gluten')))
+                        executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (:dt, :ali, :qtd, :kcal, :prot, :carb, :gord, :glut)",
+                                     {'dt': item.get('data'), 'ali': item.get('alimento'), 'qtd': item.get('quantidade_g'), 'kcal': kcal_final, 'prot': prot, 'carb': carb, 'gord': gord, 'glut': item.get('gluten')})
                     st.rerun()
                 else: st.error(f"Erro IA: {res}")
     
@@ -337,7 +340,7 @@ O JSON deve seguir estritamente este padrão (lista):
         st.code(prompt_helper, language="text")
         
         st.divider()
-        json_manual = st.text_area("Cole a resposta (JSON) aqui:")
+        json_manual = st.text_area("Cole a resposta (JSON) aqui:", label_visibility="collapsed")
         if st.button("Salvar JSON"):
             try:
                 cleaned = json_manual.replace('```json', '').replace('```', '')
@@ -355,8 +358,8 @@ O JSON deve seguir estritamente este padrão (lista):
                     kcal_auditada = (prot * 4) + (carb * 4) + (gord * 9)
                     kcal_final = max(kcal_auditada, float(item.get('kcal', 0)))
 
-                    executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-                                 (dt, item.get('alimento'), item.get('quantidade_g'), kcal_final, prot, carb, gord, item.get('gluten')))
+                    executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (:dt, :ali, :qtd, :kcal, :prot, :carb, :gord, :glut)",
+                                 {'dt': dt, 'ali': item.get('alimento'), 'qtd': item.get('quantidade_g'), 'kcal': kcal_final, 'prot': prot, 'carb': carb, 'gord': gord, 'glut': item.get('gluten')})
                     count += 1
                 st.success(f"{count} salvos com auditoria!"); st.rerun()
             except Exception as e: st.error(f"Erro: {e}")
@@ -371,7 +374,7 @@ with tab_hist:
                 cc2.caption(f"{int(row['kcal'])} kcal | P:{int(row['proteina'])} C:{int(row['carbo'])} G:{int(row['gordura'])}")
                 cc3.caption(f"Glúten: {row['gluten']}")
                 if cc4.button("❌", key=f"del_{row['id']}"):
-                    executar_sql("DELETE FROM public.consumo WHERE id = %s", (row['id'],)); st.rerun()
+                    executar_sql("DELETE FROM public.consumo WHERE id = :id", {'id': row['id']}); st.rerun()
                 st.markdown("---")
     else: st.info("Nada registrado hoje.")
 
@@ -384,7 +387,8 @@ with tab_medidas:
         dia_in = cp2.number_input("Diastólica (Baixa)", 50, 130, 76)
         pulse_in = cp3.number_input("Pulsação (BPM)", 40, 200, 75)
         if st.form_submit_button("❤️ Gravar Pressão"):
-            executar_sql("INSERT INTO public.blood_pressure (systolic, diastolic, pulse, notes) VALUES (%s, %s, %s, 'Registro Manual')", (sys_in, dia_in, pulse_in))
+            executar_sql("INSERT INTO public.blood_pressure (systolic, diastolic, pulse, notes) VALUES (:s, :d, :p, 'Registro Manual')", 
+                         {'s': sys_in, 'd': dia_in, 'p': pulse_in})
             st.success("Registrado!")
             st.rerun()
     st.divider()
@@ -400,7 +404,7 @@ with tab_medidas:
             val_padrao = float(ultimo.iloc[0]['peso_kg']) if not ultimo.empty else 125.0
             p_val = st.number_input("Peso (kg)", 40.0, 200.0, step=0.1, value=val_padrao)
             if st.form_submit_button("💾 Salvar Apenas Peso", use_container_width=True):
-                executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", (d_peso, p_val))
+                executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (:d, :p)", {'d': d_peso, 'p': p_val})
                 st.success("Peso salvo!")
                 st.rerun()
                 
@@ -412,13 +416,15 @@ with tab_medidas:
             waist = cm1.number_input("Cintura (Umbigo)", 60.0, 150.0, step=0.5, value=METAS['last_waist'])
             neck = cm2.number_input("Pescoço", 30.0, 60.0, step=0.5, value=METAS['last_neck'])
             hip = cm3.number_input("Quadril", 80.0, 150.0, step=0.5, value=METAS['last_hip'])
-            notes = st.text_input("Obs:", placeholder="Ex: Jejum...")
+            notes = st.text_input("Obs:", placeholder="Ex: Jejum...", label_visibility="collapsed")
             p_med = st.number_input("Peso na Medição (kg)", 40.0, 200.0, step=0.1, value=val_padrao)
             if st.form_submit_button("💾 Salvar Medidas Completas", use_container_width=True):
                 fat_est = calculate_body_fat(waist, neck, METAS['altura'])
-                executar_sql("INSERT INTO public.body_measurements (log_date, weight_kg, waist_cm, neck_cm, hip_cm, body_fat_est, notes) VALUES (%s, %s, %s, %s, %s, %s, %s)", (d_med, p_med, waist, neck, hip, fat_est, notes))
-                executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (%s, %s)", (d_med, p_med))
-                executar_sql("UPDATE public.perfil SET ultima_cintura=%s, ultimo_pescoco=%s, ultimo_quadril=%s WHERE id=1", (waist, neck, hip))
+                executar_sql("INSERT INTO public.body_measurements (log_date, weight_kg, waist_cm, neck_cm, hip_cm, body_fat_est, notes) VALUES (:d, :w, :wa, :ne, :hi, :bf, :no)", 
+                             {'d': d_med, 'w': p_med, 'wa': waist, 'ne': neck, 'hi': hip, 'bf': fat_est, 'no': notes})
+                executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (:d, :w)", {'d': d_med, 'w': p_med})
+                executar_sql("UPDATE public.perfil SET ultima_cintura=:wa, ultimo_pescoco=:ne, ultimo_quadril=:hi WHERE id=1", 
+                             {'wa': waist, 'ne': neck, 'hi': hip})
                 st.success(f"Medidas salvas! BF Est: {fat_est:.1f}%")
                 st.rerun()
 
@@ -436,10 +442,10 @@ with tab_rel:
     d_fim = col_d2.date_input("Data Fim:", value=data_hoje)
     
     if st.button("🔍 Gerar Arquivos"):
-        df_cons_rel = executar_sql("SELECT * FROM public.consumo WHERE data >= %s AND data <= %s ORDER BY data ASC", (d_inicio, d_fim), is_select=True)
-        df_peso_rel = executar_sql("SELECT * FROM public.peso WHERE data >= %s AND data <= %s ORDER BY data ASC", (d_inicio, d_fim), is_select=True)
-        df_medidas_rel = executar_sql("SELECT * FROM public.body_measurements WHERE log_date >= %s AND log_date <= %s ORDER BY log_date ASC", (d_inicio, d_fim), is_select=True)
-        df_bp_rel = executar_sql("SELECT * FROM public.blood_pressure WHERE measurement_time >= %s AND measurement_time <= %s ORDER BY measurement_time ASC", (d_inicio, d_fim), is_select=True)
+        df_cons_rel = executar_sql("SELECT * FROM public.consumo WHERE data >= :d1 AND data <= :d2 ORDER BY data ASC", {'d1': d_inicio, 'd2': d_fim}, is_select=True)
+        df_peso_rel = executar_sql("SELECT * FROM public.peso WHERE data >= :d1 AND data <= :d2 ORDER BY data ASC", {'d1': d_inicio, 'd2': d_fim}, is_select=True)
+        df_medidas_rel = executar_sql("SELECT * FROM public.body_measurements WHERE log_date >= :d1 AND log_date <= :d2 ORDER BY log_date ASC", {'d1': d_inicio, 'd2': d_fim}, is_select=True)
+        df_bp_rel = executar_sql("SELECT * FROM public.blood_pressure WHERE measurement_time >= :d1 AND measurement_time <= :d2 ORDER BY measurement_time ASC", {'d1': d_inicio, 'd2': d_fim}, is_select=True)
         
         if not df_cons_rel.empty:
             st.download_button("📥 Excel Completo (.xlsx)", gerar_excel(df_cons_rel, df_peso_rel, df_medidas_rel, df_bp_rel, d_inicio, d_fim), f"Relatorio_{d_inicio}.xlsx")
@@ -482,15 +488,19 @@ with tab_admin:
         if st.form_submit_button("💾 Salvar Configurações"):
             sql = """
                 INSERT INTO public.perfil (id, genero, idade, altura_cm, atividade, objetivo, ritmo_semanal, meta_kcal, meta_proteina, meta_carbo, meta_gordura, meta_peso_alvo)
-                VALUES (1, %s, %s, %s, %s, 'Custom', %s, %s, %s, %s, %s, %s)
+                VALUES (1, :gen, :id, :alt, :atv, 'Custom', :rit, :mk, :mp, :mc, :mg, :mpa)
                 ON CONFLICT (id) DO UPDATE SET 
                 genero=EXCLUDED.genero, idade=EXCLUDED.idade, altura_cm=EXCLUDED.altura_cm, atividade=EXCLUDED.atividade, 
                 ritmo_semanal=EXCLUDED.ritmo_semanal, meta_kcal=EXCLUDED.meta_kcal, 
                 meta_proteina=EXCLUDED.meta_proteina, meta_carbo=EXCLUDED.meta_carbo, meta_gordura=EXCLUDED.meta_gordura, 
                 meta_peso_alvo=EXCLUDED.meta_peso_alvo;
             """
-            executar_sql(sql, (genero, idade, altura, atividade, n_ritmo, n_kcal, n_prot, n_carb, n_gord, n_peso))
+            params = {
+                'gen': genero, 'id': idade, 'alt': altura, 'atv': atividade, 'rit': n_ritmo,
+                'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 'mpa': n_peso
+            }
+            executar_sql(sql, params)
             st.success("Perfil Salvo!")
             st.rerun()
 
-st.caption("Leo Tracker Pro v5.1 | Módulo Auditoria + Configurações Completas")
+st.caption("Leo Tracker Pro v5.2 | Engine SQLAlchemy v2.0")
