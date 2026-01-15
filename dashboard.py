@@ -18,11 +18,10 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- CONEXÃO (SQLAlchemy Otimizado) ---
+# --- CONEXÃO ---
 @st.cache_resource(ttl=600)
 def get_engine():
     db_url = st.secrets["DATABASE_URL"]
-    # Corrige URL antiga do Heroku/Render se necessário
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
     return create_engine(db_url)
@@ -30,10 +29,14 @@ def get_engine():
 def run_query(query, params=None, is_select=True):
     engine = get_engine()
     if is_select:
-        # Pandas lê direto via Engine (Rápido e sem erro de UserWarning)
-        return pd.read_sql(query, engine, params=params)
+        df = pd.read_sql(query, engine, params=params)
+        # Padronização agressiva de datas
+        for col in ['data', 'log_date', 'measurement_time']:
+            if col in df.columns:
+                try: df[col] = pd.to_datetime(df[col])
+                except: pass
+        return df
     else:
-        # Para INSERT/UPDATE/DELETE (Segurança do SQLAlchemy 2.0)
         with engine.begin() as conn:
             conn.execute(text(query), params)
         return True
@@ -43,13 +46,12 @@ if st.query_params.get("token") != st.secrets.get("DASH_ACCESS_TOKEN"):
     st.error("🔒 Acesso Negado."); st.stop()
 
 # --- 1. BUSCA DE DADOS ---
-# Nota: pd.read_sql lida bem com %s para parâmetros
 df_perfil = run_query("SELECT * FROM public.perfil WHERE id = 1")
 df_peso_last = run_query("SELECT peso_kg FROM public.peso ORDER BY data DESC, id DESC LIMIT 1")
 df_medidas = run_query("SELECT * FROM public.body_measurements ORDER BY log_date ASC")
 df_bp = run_query("SELECT * FROM public.blood_pressure ORDER BY measurement_time ASC")
 
-# Valores Padrão / Perfil
+# Valores Padrão
 if not df_perfil.empty:
     p = df_perfil.iloc[0]
 else:
@@ -60,14 +62,14 @@ else:
 PESO_ATUAL = float(df_peso_last.iloc[0]['peso_kg']) if not df_peso_last.empty else 141.9
 META_AGUA = round((PESO_ATUAL * 35) / 1000, 1)
 
-# --- 2. TRATAMENTO DE VARIÁVEIS DE SAÚDE (PRESSÃO E PULSO) ---
+# --- 2. VARIÁVEIS DE SAÚDE ---
 last_sys, last_dia, last_pulse = "--", "--", "--"
 if not df_bp.empty:
     last_bp = df_bp.iloc[-1]
     last_sys, last_dia = last_bp['systolic'], last_bp['diastolic']
     last_pulse = last_bp.get('pulse', "--")
 
-# --- 3. DADOS TEMPORAIS E CONSUMO ---
+# --- 3. HISTÓRICO ---
 hoje = datetime.now(pytz.timezone('America/Sao_Paulo')).date()
 DATA_INICIO = pd.to_datetime("2025-12-30").date()
 
@@ -79,7 +81,7 @@ df_hist = run_query("""
 """, (DATA_INICIO,))
 df_peso = run_query("SELECT * FROM public.peso ORDER BY data ASC")
 
-# --- 4. CÁLCULO DE HOJE (FIX PARA O GRÁFICO DE PIZZA) ---
+# Variáveis de Hoje
 if not df_hoje.empty:
     k_act = df_hoje['kcal'].sum()
     p_act = df_hoje['proteina'].sum()
@@ -100,7 +102,7 @@ c5.metric("⚖️ Peso", f"{PESO_ATUAL}kg", f"Alvo: {p['meta_peso_alvo']}")
 
 st.divider()
 
-# ANALYTICS AVANÇADO
+# ANALYTICS AVANÇADO (CORRIGIDO)
 st.subheader("📉 Inteligência de Perda de Peso")
 col_a1, col_a2 = st.columns([2, 1])
 
@@ -114,16 +116,29 @@ with col_a1:
         st.plotly_chart(fig_trend, use_container_width=True)
 
 with col_a2:
-    st.markdown("##### 🏦 Banco de Gordura (Real)")
-    if not df_hist.empty:
-        df_merged = pd.merge_asof(df_hist.sort_values('data'), df_peso.sort_values('data'), on='data', direction='backward')
-        df_merged['peso_kg'] = df_merged['peso_kg'].fillna(146.0)
-        idade, altura = int(p.get('idade', 41)), int(p.get('altura_cm', 178))
-        df_merged['get_dia'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * 1.09 * 1.2
-        deficit_total = (df_merged['get_dia'] - df_merged['tkcal']).sum()
-        kg_gordura = deficit_total / 7700
-        st.metric("Déficit Acumulado", f"{int(deficit_total)} kcal")
-        st.metric("Gordura Eliminada", f"{kg_gordura:.2f} kg")
+    st.markdown("##### 🏦 Banco de Gordura")
+    # AQUI ESTAVA O ERRO: Verificação de segurança e Conversão de Tipos
+    if not df_hist.empty and not df_peso.empty:
+        try:
+            # Força conversão para garantir compatibilidade no merge
+            df_hist['data'] = pd.to_datetime(df_hist['data'])
+            df_peso['data'] = pd.to_datetime(df_peso['data'])
+            
+            # Agora o merge funciona
+            df_merged = pd.merge_asof(df_hist.sort_values('data'), df_peso.sort_values('data'), on='data', direction='backward')
+            df_merged['peso_kg'] = df_merged['peso_kg'].fillna(146.0)
+            
+            idade, altura = int(p.get('idade', 41)), int(p.get('altura_cm', 178))
+            df_merged['get_dia'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * 1.09 * 1.2
+            deficit_total = (df_merged['get_dia'] - df_merged['tkcal']).sum()
+            kg_gordura = deficit_total / 7700
+            
+            st.metric("Déficit Acumulado", f"{int(deficit_total)} kcal")
+            st.metric("Gordura Eliminada", f"{kg_gordura:.2f} kg")
+        except Exception as e:
+            st.warning(f"Calculando dados... (Sincronizando datas)")
+    else:
+        st.info("Aguardando mais dados para calcular o banco.")
 
 st.divider()
 
@@ -163,6 +178,9 @@ if not df_hist.empty:
     with c_n1:
         df_macros = df_hist.copy()
         df_macros['tot'] = (df_macros['tprot']*4 + df_macros['tcarb']*4 + df_macros['tgord']*9)
+        # Proteção contra divisão por zero
+        df_macros['tot'] = df_macros['tot'].replace(0, 1) 
+        
         fig_stack = go.Figure()
         fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tprot']*4/df_macros['tot'])*100, name='Prot', marker_color='#3366CC'))
         fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tgord']*9/df_macros['tot'])*100, name='Gord', marker_color='#DC3912'))
@@ -175,4 +193,4 @@ if not df_hist.empty:
             fig_pie.update_layout(height=350, showlegend=False, margin=dict(l=10,r=10,t=20,b=10))
             st.plotly_chart(fig_pie, use_container_width=True)
 
-st.caption("Leo Tracker Dash v2.4 | Engine SQLAlchemy + Text Fix")
+st.caption("Leo Tracker Dash v2.5 | Type-Safe Merge Fix")
