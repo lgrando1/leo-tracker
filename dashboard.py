@@ -96,21 +96,17 @@ st.markdown(f"# 🦁 Leo's Performance | {hoje.strftime('%d/%m')}")
 
 # KPI PRINCIPAIS
 k_act, p_act, q_act = (df_hoje['kcal'].sum(), df_hoje['proteina'].sum(), df_hoje['quantidade'].sum()) if not df_hoje.empty else (0,0,0)
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("🔥 Calorias Hoje", f"{int(k_act)}", f"Meta: {p['meta_kcal']}")
-c2.metric("🥩 Proteína Hoje", f"{int(p_act)}g", f"Meta: {p['meta_proteina']}g")
 
-# KPI Pressão
-last_sys, last_dia, last_pulse = "--", "--", "--"
-if not df_bp.empty:
-    last_bp = df_bp.iloc[-1]
-    last_sys, last_dia, last_pulse = last_bp['systolic'], last_bp['diastolic'], last_bp['pulse']
+# Criamos 5 colunas agora para caber a água
+c1, c2, c3, c4, c5 = st.columns(5)
 
-c3.metric("❤️ Pressão", f"{last_sys} x {last_dia}", "Normal" if isinstance(last_sys, int) and last_sys < 130 else "Atenção")
-c4.metric("⚖️ Peso Atual", f"{PESO_ATUAL} kg")
+c1.metric("🔥 Calorias", f"{int(k_act)}", f"Meta: {p['meta_kcal']}")
+c2.metric("🥩 Proteína", f"{int(p_act)}g", f"Meta: {p['meta_proteina']}g")
+c3.metric("💧 Água", f"{META_AGUA}L", "Meta Mínima") # <--- AQUI ESTÁ ELA!
+c4.metric("❤️ Pressão", f"{last_sys}x{last_dia}", "Última")
+c5.metric("⚖️ Peso", f"{PESO_ATUAL}kg", f"Alvo: {p['meta_peso_alvo']}")
 
 st.divider()
-
 # ==========================================
 # NOVA SEÇÃO: ANALYTICS AVANÇADO (CORRIGIDO V2.1)
 # ==========================================
