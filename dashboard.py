@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import psycopg2
+from sqlalchemy import create_engine, text
 from datetime import datetime, timedelta
 import pytz
 import plotly.graph_objects as go
@@ -18,13 +18,11 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- CONEXÃO ---
-from sqlalchemy import create_engine
-
+# --- CONEXÃO (SQLAlchemy Otimizado) ---
 @st.cache_resource(ttl=600)
 def get_engine():
-    # Converte o DATABASE_URL do Streamlit para o formato que o SQLAlchemy entende
     db_url = st.secrets["DATABASE_URL"]
+    # Corrige URL antiga do Heroku/Render se necessário
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
     return create_engine(db_url)
@@ -32,10 +30,12 @@ def get_engine():
 def run_query(query, params=None, is_select=True):
     engine = get_engine()
     if is_select:
+        # Pandas lê direto via Engine (Rápido e sem erro de UserWarning)
         return pd.read_sql(query, engine, params=params)
     else:
+        # Para INSERT/UPDATE/DELETE (Segurança do SQLAlchemy 2.0)
         with engine.begin() as conn:
-            conn.execute(query, params)
+            conn.execute(text(query), params)
         return True
 
 # --- TRAVA DE SEGURANÇA ---
@@ -43,6 +43,7 @@ if st.query_params.get("token") != st.secrets.get("DASH_ACCESS_TOKEN"):
     st.error("🔒 Acesso Negado."); st.stop()
 
 # --- 1. BUSCA DE DADOS ---
+# Nota: pd.read_sql lida bem com %s para parâmetros
 df_perfil = run_query("SELECT * FROM public.perfil WHERE id = 1")
 df_peso_last = run_query("SELECT peso_kg FROM public.peso ORDER BY data DESC, id DESC LIMIT 1")
 df_medidas = run_query("SELECT * FROM public.body_measurements ORDER BY log_date ASC")
@@ -174,4 +175,4 @@ if not df_hist.empty:
             fig_pie.update_layout(height=350, showlegend=False, margin=dict(l=10,r=10,t=20,b=10))
             st.plotly_chart(fig_pie, use_container_width=True)
 
-st.caption("Leo Tracker Dash v2.3 | Corrigido: NameError & Pulse")
+st.caption("Leo Tracker Dash v2.4 | Engine SQLAlchemy + Text Fix")
