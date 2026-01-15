@@ -31,7 +31,6 @@ def run_query(query, params=None, is_select=True):
     try:
         if is_select:
             df = pd.read_sql(query, engine, params=params)
-            # Padronização de datas
             for col in ['data', 'log_date', 'measurement_time']:
                 if col in df.columns:
                     try: df[col] = pd.to_datetime(df[col])
@@ -143,21 +142,27 @@ with col_a2:
 
 st.divider()
 
-# SAÚDE & COMPOSIÇÃO (ATUALIZADO PARA WELTMAN)
+# SAÚDE & COMPOSIÇÃO (CORREÇÃO DE ERRO TYPEERROR)
 st.subheader("🧬 Saúde & Composição Corporal")
 
 if not df_medidas.empty:
     l_m = df_medidas.iloc[-1]
     
-    # 1. Identificar qual BF foi usado (App salva em body_fat_est o principal)
-    bf_est = l_m.get('body_fat_est', 0)
-    bf_welt = l_m.get('body_fat_weltman', 0)
-    bf_pol = l_m.get('body_fat_pollock', 0)
+    # --- FIX: TRATAMENTO DE VALORES NULOS ---
+    def safe_get(key, default=0.0):
+        val = l_m.get(key)
+        if pd.isna(val): return default
+        return float(val)
+
+    bf_est = safe_get('body_fat_est')
+    bf_welt = safe_get('body_fat_weltman')
+    bf_pol = safe_get('body_fat_pollock')
+    dobra_abd = safe_get('fold_abdominal')
     
     # Lógica de Rótulo
-    if bf_welt and bf_welt > 0 and abs(bf_est - bf_welt) < 0.1:
+    if bf_welt > 0 and abs(bf_est - bf_welt) < 0.1:
         label_bf = "🐷 Gordura (Weltman)"
-    elif bf_pol and bf_pol > 0 and abs(bf_est - bf_pol) < 0.1:
+    elif bf_pol > 0 and abs(bf_est - bf_pol) < 0.1:
         label_bf = "🐷 Gordura (Pollock)"
     else:
         label_bf = "🐷 Gordura (Navy/Est)"
@@ -169,8 +174,7 @@ if not df_medidas.empty:
     m2.metric("📏 Cintura", f"{l_m['waist_cm']} cm")
     m3.metric("🫀 Risco (RCQ)", f"{rcq:.2f}", "Moderado" if rcq > 0.9 else "Baixo")
     
-    # Se tiver dobras (adipômetro), mostra. Se não, mostra quadril (relevante para Weltman/RCQ).
-    dobra_abd = l_m.get('fold_abdominal', 0)
+    # Se tiver dobras (adipômetro), mostra. Se não, mostra quadril.
     if dobra_abd > 0:
         m4.metric("🤏 Dobra Abdominal", f"{dobra_abd} mm")
     else:
@@ -214,4 +218,4 @@ if not df_hist.empty:
             fig_pie.update_layout(height=350, showlegend=False, margin=dict(l=10,r=10,t=20,b=10))
             st.plotly_chart(fig_pie, use_container_width=True)
 
-st.caption("Leo Tracker Dash v2.7 | Weltman Edition")
+st.caption("Leo Tracker Dash v2.8 | Correção TypeError + Weltman")
