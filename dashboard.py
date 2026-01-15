@@ -18,7 +18,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- CONEXÃO ---
+# --- CONEXÃO BLINDADA (IGUAL AO APP) ---
 @st.cache_resource(ttl=600)
 def get_engine():
     db_url = st.secrets["DATABASE_URL"]
@@ -28,18 +28,22 @@ def get_engine():
 
 def run_query(query, params=None, is_select=True):
     engine = get_engine()
-    if is_select:
-        df = pd.read_sql(query, engine, params=params)
-        # Padronização agressiva de datas
-        for col in ['data', 'log_date', 'measurement_time']:
-            if col in df.columns:
-                try: df[col] = pd.to_datetime(df[col])
-                except: pass
-        return df
-    else:
-        with engine.begin() as conn:
-            conn.execute(text(query), params)
-        return True
+    try:
+        if is_select:
+            df = pd.read_sql(query, engine, params=params)
+            # Padronização agressiva de datas
+            for col in ['data', 'log_date', 'measurement_time']:
+                if col in df.columns:
+                    try: df[col] = pd.to_datetime(df[col])
+                    except: pass
+            return df
+        else:
+            with engine.begin() as conn:
+                conn.execute(text(query), params)
+            return True
+    except Exception as e:
+        # st.error(f"Erro DB: {e}") # Comentado para não sujar a tela se for erro temporário
+        return pd.DataFrame() if is_select else False
 
 # --- TRAVA DE SEGURANÇA ---
 if st.query_params.get("token") != st.secrets.get("DASH_ACCESS_TOKEN"):
@@ -48,6 +52,7 @@ if st.query_params.get("token") != st.secrets.get("DASH_ACCESS_TOKEN"):
 # --- 1. BUSCA DE DADOS ---
 df_perfil = run_query("SELECT * FROM public.perfil WHERE id = 1")
 df_peso_last = run_query("SELECT peso_kg FROM public.peso ORDER BY data DESC, id DESC LIMIT 1")
+# Pegamos todas as colunas novas de dobras automaticamente com o *
 df_medidas = run_query("SELECT * FROM public.body_measurements ORDER BY log_date ASC")
 df_bp = run_query("SELECT * FROM public.blood_pressure ORDER BY measurement_time ASC")
 
@@ -97,12 +102,12 @@ c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("🔥 Calorias", f"{int(k_act)}", f"Meta: {p['meta_kcal']}")
 c2.metric("🥩 Proteína", f"{int(p_act)}g", f"Meta: {p['meta_proteina']}g")
 c3.metric("💧 Água", f"{META_AGUA}L", "Meta Mínima")
-c4.metric("❤️ Pressão", f"{last_sys}x{last_dia}", "Última")
+c4.metric("❤️ Pressão", f"{last_sys}x{last_dia}", f"Pulso: {last_pulse}")
 c5.metric("⚖️ Peso", f"{PESO_ATUAL}kg", f"Alvo: {p['meta_peso_alvo']}")
 
 st.divider()
 
-# ANALYTICS AVANÇADO (CORRIGIDO)
+# ANALYTICS AVANÇADO
 st.subheader("📉 Inteligência de Perda de Peso")
 col_a1, col_a2 = st.columns([2, 1])
 
@@ -117,45 +122,59 @@ with col_a1:
 
 with col_a2:
     st.markdown("##### 🏦 Banco de Gordura")
-    # AQUI ESTAVA O ERRO: Verificação de segurança e Conversão de Tipos
     if not df_hist.empty and not df_peso.empty:
         try:
-            # Força conversão para garantir compatibilidade no merge
             df_hist['data'] = pd.to_datetime(df_hist['data'])
             df_peso['data'] = pd.to_datetime(df_peso['data'])
             
-            # Agora o merge funciona
             df_merged = pd.merge_asof(df_hist.sort_values('data'), df_peso.sort_values('data'), on='data', direction='backward')
             df_merged['peso_kg'] = df_merged['peso_kg'].fillna(146.0)
             
             idade, altura = int(p.get('idade', 41)), int(p.get('altura_cm', 178))
+            # Fator 1.09 (Bioimpedância) * 1.2 (Sedentário)
             df_merged['get_dia'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * 1.09 * 1.2
             deficit_total = (df_merged['get_dia'] - df_merged['tkcal']).sum()
             kg_gordura = deficit_total / 7700
             
             st.metric("Déficit Acumulado", f"{int(deficit_total)} kcal")
             st.metric("Gordura Eliminada", f"{kg_gordura:.2f} kg")
-        except Exception as e:
-            st.warning(f"Calculando dados... (Sincronizando datas)")
+        except:
+            st.info("Sincronizando dados...")
     else:
-        st.info("Aguardando mais dados para calcular o banco.")
+        st.info("Aguardando dados...")
 
 st.divider()
 
-# SAÚDE & COMPOSIÇÃO
+# SAÚDE & COMPOSIÇÃO (ATUALIZADO COM ADIPÔMETRO)
 st.subheader("🧬 Saúde & Composição Corporal")
+
 if not df_medidas.empty:
     l_m = df_medidas.iloc[-1]
+    
+    # 1. Lógica do BF (Pollock vs Navy)
+    bf_pollock = l_m.get('body_fat_pollock', 0)
+    bf_est = l_m.get('body_fat_est', 0)
+    
+    label_bf = "🐷 Gordura (Pollock)" if (bf_pollock and bf_pollock > 0) else "🐷 Gordura (Estimada)"
+    val_bf = bf_pollock if (bf_pollock and bf_pollock > 0) else bf_est
+    
+    # 2. Dobra Abdominal (O grande vilão)
+    dobra_abd = l_m.get('fold_abdominal', 0)
+    label_dobra = f"{dobra_abd} mm" if (dobra_abd and dobra_abd > 0) else "--"
+
     rcq = l_m['waist_cm'] / l_m['hip_cm'] if l_m['hip_cm'] > 0 else 0
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("🐷 Gordura (BF)", f"{l_m['body_fat_est']:.1f}%")
-    m2.metric("📏 Cintura", f"{l_m['waist_cm']} cm")
-    m3.metric("🫀 Risco (RCQ)", f"{rcq:.2f}", "Moderado" if rcq > 0.9 else "Baixo")
-    m4.metric("💓 Pulsação", f"{last_pulse} bpm")
+    
+    m1, m2, m3, m4, m5 = st.columns(5) # 5 colunas agora
+    m1.metric(label_bf, f"{val_bf:.1f}%")
+    m2.metric("🤏 Dobra Abdominal", label_dobra, help="Meta: Baixar este número!")
+    m3.metric("📏 Cintura", f"{l_m['waist_cm']} cm")
+    m4.metric("🫀 Risco (RCQ)", f"{rcq:.2f}", "Moderado" if rcq > 0.9 else "Baixo")
+    m5.metric("💓 Pulsação", f"{last_pulse} bpm")
 
 col_left, col_right = st.columns(2)
 with col_left:
     st.markdown("**📉 Evolução de Gordura (%)**")
+    # O app salva o melhor BF disponível em body_fat_est, então o gráfico continua funcionando
     fig_bf = go.Figure(go.Scatter(x=df_medidas['log_date'], y=df_medidas['body_fat_est'], mode='lines+markers', line=dict(color='#e67e22')))
     fig_bf.update_layout(height=250, margin=dict(l=10,r=10,t=20,b=10))
     st.plotly_chart(fig_bf, use_container_width=True)
@@ -178,9 +197,7 @@ if not df_hist.empty:
     with c_n1:
         df_macros = df_hist.copy()
         df_macros['tot'] = (df_macros['tprot']*4 + df_macros['tcarb']*4 + df_macros['tgord']*9)
-        # Proteção contra divisão por zero
-        df_macros['tot'] = df_macros['tot'].replace(0, 1) 
-        
+        df_macros['tot'] = df_macros['tot'].replace(0, 1)
         fig_stack = go.Figure()
         fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tprot']*4/df_macros['tot'])*100, name='Prot', marker_color='#3366CC'))
         fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tgord']*9/df_macros['tot'])*100, name='Gord', marker_color='#DC3912'))
@@ -193,4 +210,4 @@ if not df_hist.empty:
             fig_pie.update_layout(height=350, showlegend=False, margin=dict(l=10,r=10,t=20,b=10))
             st.plotly_chart(fig_pie, use_container_width=True)
 
-st.caption("Leo Tracker Dash v2.5 | Type-Safe Merge Fix")
+st.caption("Leo Tracker Dash v2.6 | Adipômetro Ready & Pollock Metrics")
