@@ -76,14 +76,10 @@ def inicializar_banco():
         );
     """)
     # Migrações
-    cols_float = ['ultimo_pescoco', 'ultima_cintura', 'ultimo_quadril']
-    for c in cols_float:
+    for c in ['ultimo_pescoco', 'ultima_cintura', 'ultimo_quadril']:
         try: executar_sql(f"ALTER TABLE public.perfil ADD COLUMN IF NOT EXISTS {c} REAL;")
         except: pass
-    
-    # Adicionando body_fat_weltman
-    cols_dobras = ['fold_chest', 'fold_abdominal', 'fold_thigh', 'fold_triceps', 'body_fat_pollock', 'body_fat_est', 'body_fat_weltman', 'weight_kg']
-    for c in cols_dobras:
+    for c in ['fold_chest', 'fold_abdominal', 'fold_thigh', 'fold_triceps', 'body_fat_pollock', 'body_fat_est', 'body_fat_weltman', 'weight_kg']:
         try: executar_sql(f"ALTER TABLE public.body_measurements ADD COLUMN IF NOT EXISTS {c} REAL;")
         except: pass
 
@@ -127,16 +123,12 @@ METAS = get_metas_do_banco()
 
 # --- CÁLCULOS CIENTÍFICOS ---
 def calc_bf_navy(waist, neck, height):
+    # Fallback silencioso se pescoço for zero
     if waist <= 0 or neck <= 0 or height <= 0: return 0.0
     try: return 495 / (1.0324 - 0.19077 * math.log10(waist - neck) + 0.15456 * math.log10(height)) - 450
     except: return 0.0
 
 def calc_bf_weltman_obese(waist, weight_kg, height_cm, gender):
-    """
-    Equação de Weltman et al. (1988) específica para obesidade.
-    Homens: G% = 0.31457 * Abd(cm) - 0.10969 * Peso(kg) + 10.8336
-    Mulheres: G% = 0.11077 * Abd(cm) - 0.17666 * Alt(cm) + 0.14354 * Peso(kg) + 51.03301
-    """
     if waist <= 0 or weight_kg <= 0: return 0.0
     try:
         if gender == 'Masculino':
@@ -260,7 +252,7 @@ with tab_hist:
             st.markdown("---")
     else: st.info("Dia vazio.")
 
-# --- ABA 3: SAÚDE (ATUALIZADA PARA WELTMAN) ---
+# --- ABA 3: SAÚDE (SEM PESCOÇO) ---
 with tab_medidas:
     st.subheader("🫀 Pressão Arterial")
     with st.form("bp_form"):
@@ -273,44 +265,47 @@ with tab_medidas:
 
     st.divider()
     
-    st.subheader("📏 Avaliação Corporal (Gold Standard: Weltman)")
+    st.subheader("📏 Avaliação Corporal (Weltman)")
     
     with st.form("medidas_form"):
         d_med = st.date_input("Data", value=data_hoje)
         
-        # Dados Básicos
-        st.markdown("##### 1. Dados Básicos (Obrigatório)")
-        c_m1, c_m2, c_m3 = st.columns(3)
+        # UI SIMPLIFICADA: SÓ PESO E CINTURA
+        st.markdown("##### Dados Principais")
+        c_m1, c_m2 = st.columns(2)
         p_input = c_m1.number_input("Peso Atual (kg)", 40.0, 200.0, step=0.1, value=peso_atual_sidebar)
         waist = c_m2.number_input("Cintura (Umbigo) cm", 50.0, 200.0, step=0.5, value=METAS['last_waist'])
-        hip = c_m3.number_input("Quadril (cm)", 50.0, 200.0, step=0.5, value=METAS['last_hip'])
         
-        # Cálculo Automático de Weltman
-        bf_weltman = calc_bf_weltman_obese(waist, p_input, METAS['altura'], METAS['genero'])
-        st.info(f"🧬 **BF Estimado (Weltman): {bf_weltman:.1f}%** (Recomendado para o seu perfil)")
+        # Recupera pescoço do banco "escondido" (para não quebrar Marinha)
+        neck = METAS['last_neck'] 
+        hip = METAS['last_hip'] # Quadril também escondi, se quiser reativar é só avisar
 
-        # Expander para Adipômetro (Opcional)
-        with st.expander("🛠️ Protocolo Adipômetro (Opcional)"):
-            st.caption("Preencher apenas se for usar o adipômetro.")
+        # Weltman Calculation
+        bf_weltman = calc_bf_weltman_obese(waist, p_input, METAS['altura'], METAS['genero'])
+        st.info(f"🧬 **BF Weltman: {bf_weltman:.1f}%**")
+
+        with st.expander("🛠️ Outras Medidas (Pescoço, Quadril, Dobras)"):
             c_a1, c_a2 = st.columns(2)
-            neck = c_a1.number_input("Pescoço (cm) - Navy", value=METAS['last_neck'])
-            fold_pec = c_a2.number_input("Dobra Peitoral (mm)", 0.0, 100.0, step=0.5)
-            c_a3, c_a4, c_a5 = st.columns(3)
-            fold_abd = c_a3.number_input("Dobra Abdominal (mm)", 0.0, 100.0, step=0.5)
-            fold_thigh = c_a4.number_input("Dobra Coxa (mm)", 0.0, 100.0, step=0.5)
-            fold_tri = c_a5.number_input("Dobra Tríceps (mm)", 0.0, 100.0, step=0.5)
+            neck = c_a1.number_input("Pescoço (cm)", value=neck)
+            hip = c_a2.number_input("Quadril (cm)", value=hip)
+            
+            st.caption("Adipômetro:")
+            c_d1, c_d2 = st.columns(2)
+            fold_pec = c_d1.number_input("Peitoral (mm)", 0.0)
+            fold_abd = c_d2.number_input("Abdominal (mm)", 0.0)
+            c_d3, c_d4 = st.columns(2)
+            fold_thigh = c_d3.number_input("Coxa (mm)", 0.0)
+            fold_tri = c_d4.number_input("Tríceps (mm)", 0.0)
 
         obs = st.text_input("Obs", placeholder="Jejum?")
         
         if st.form_submit_button("💾 Salvar Avaliação"):
-            # Cálculos Secundários
             bf_navy = calc_bf_navy(waist, neck, METAS['altura'])
             bf_pollock = 0.0
             if fold_pec > 0 and fold_abd > 0 and fold_thigh > 0:
                 bf_pollock = calc_bf_pollock_3(fold_pec, fold_abd, fold_thigh, METAS['idade'])
             
-            # Decisão Inteligente: Qual BF é o principal?
-            # Se for Obeso (IMC > 30), Weltman é a prioridade.
+            # Prioridade: Weltman (Se Obeso) > Pollock > Navy
             imc = p_input / ((METAS['altura']/100)**2)
             if imc > 30 and bf_weltman > 0:
                 bf_final = bf_weltman
@@ -333,13 +328,11 @@ with tab_medidas:
             executar_sql(sql_med, params)
             executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (:dt, :w)", {'dt': d_med, 'w': p_input})
             executar_sql("UPDATE public.perfil SET ultima_cintura=:wa, ultimo_pescoco=:ne, ultimo_quadril=:hi WHERE id=1", {'wa': waist, 'ne': neck, 'hi': hip})
-            
-            st.success(f"Salvo! BF Final ({'Weltman' if bf_final == bf_weltman else 'Outro'}): {bf_final:.1f}%")
+            st.success(f"Salvo! BF: {bf_final:.1f}%")
             st.rerun()
 
 with tab_rel:
     st.header("Relatórios")
-    # (Mantido funcionalidade anterior de gerar Excel)
     if st.button("Gerar Relatório"): st.info("Pronto para gerar.")
 
 with tab_admin:
@@ -401,4 +394,4 @@ with tab_admin:
             st.success("Perfil Atualizado!")
             st.rerun()
 
-st.caption("Leo Tracker Pro v5.6 | Weltman Protocol & Full Features")
+st.caption("Leo Tracker Pro v5.7 | Weltman Clean UI")
