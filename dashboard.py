@@ -18,7 +18,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- CONEXÃO BLINDADA (IGUAL AO APP) ---
+# --- CONEXÃO BLINDADA (SQLAlchemy) ---
 @st.cache_resource(ttl=600)
 def get_engine():
     db_url = st.secrets["DATABASE_URL"]
@@ -31,7 +31,7 @@ def run_query(query, params=None, is_select=True):
     try:
         if is_select:
             df = pd.read_sql(query, engine, params=params)
-            # Padronização agressiva de datas
+            # Padronização de datas
             for col in ['data', 'log_date', 'measurement_time']:
                 if col in df.columns:
                     try: df[col] = pd.to_datetime(df[col])
@@ -42,7 +42,6 @@ def run_query(query, params=None, is_select=True):
                 conn.execute(text(query), params)
             return True
     except Exception as e:
-        # st.error(f"Erro DB: {e}") # Comentado para não sujar a tela se for erro temporário
         return pd.DataFrame() if is_select else False
 
 # --- TRAVA DE SEGURANÇA ---
@@ -52,7 +51,6 @@ if st.query_params.get("token") != st.secrets.get("DASH_ACCESS_TOKEN"):
 # --- 1. BUSCA DE DADOS ---
 df_perfil = run_query("SELECT * FROM public.perfil WHERE id = 1")
 df_peso_last = run_query("SELECT peso_kg FROM public.peso ORDER BY data DESC, id DESC LIMIT 1")
-# Pegamos todas as colunas novas de dobras automaticamente com o *
 df_medidas = run_query("SELECT * FROM public.body_measurements ORDER BY log_date ASC")
 df_bp = run_query("SELECT * FROM public.blood_pressure ORDER BY measurement_time ASC")
 
@@ -131,7 +129,7 @@ with col_a2:
             df_merged['peso_kg'] = df_merged['peso_kg'].fillna(146.0)
             
             idade, altura = int(p.get('idade', 41)), int(p.get('altura_cm', 178))
-            # Fator 1.09 (Bioimpedância) * 1.2 (Sedentário)
+            # Fator 1.09 (Calibração Bioimpedância) * 1.2 (Sedentário)
             df_merged['get_dia'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * 1.09 * 1.2
             deficit_total = (df_merged['get_dia'] - df_merged['tkcal']).sum()
             kg_gordura = deficit_total / 7700
@@ -145,36 +143,42 @@ with col_a2:
 
 st.divider()
 
-# SAÚDE & COMPOSIÇÃO (ATUALIZADO COM ADIPÔMETRO)
+# SAÚDE & COMPOSIÇÃO (ATUALIZADO PARA WELTMAN)
 st.subheader("🧬 Saúde & Composição Corporal")
 
 if not df_medidas.empty:
     l_m = df_medidas.iloc[-1]
     
-    # 1. Lógica do BF (Pollock vs Navy)
-    bf_pollock = l_m.get('body_fat_pollock', 0)
+    # 1. Identificar qual BF foi usado (App salva em body_fat_est o principal)
     bf_est = l_m.get('body_fat_est', 0)
+    bf_welt = l_m.get('body_fat_weltman', 0)
+    bf_pol = l_m.get('body_fat_pollock', 0)
     
-    label_bf = "🐷 Gordura (Pollock)" if (bf_pollock and bf_pollock > 0) else "🐷 Gordura (Estimada)"
-    val_bf = bf_pollock if (bf_pollock and bf_pollock > 0) else bf_est
-    
-    # 2. Dobra Abdominal (O grande vilão)
-    dobra_abd = l_m.get('fold_abdominal', 0)
-    label_dobra = f"{dobra_abd} mm" if (dobra_abd and dobra_abd > 0) else "--"
+    # Lógica de Rótulo
+    if bf_welt and bf_welt > 0 and abs(bf_est - bf_welt) < 0.1:
+        label_bf = "🐷 Gordura (Weltman)"
+    elif bf_pol and bf_pol > 0 and abs(bf_est - bf_pol) < 0.1:
+        label_bf = "🐷 Gordura (Pollock)"
+    else:
+        label_bf = "🐷 Gordura (Navy/Est)"
 
     rcq = l_m['waist_cm'] / l_m['hip_cm'] if l_m['hip_cm'] > 0 else 0
     
-    m1, m2, m3, m4, m5 = st.columns(5) # 5 colunas agora
-    m1.metric(label_bf, f"{val_bf:.1f}%")
-    m2.metric("🤏 Dobra Abdominal", label_dobra, help="Meta: Baixar este número!")
-    m3.metric("📏 Cintura", f"{l_m['waist_cm']} cm")
-    m4.metric("🫀 Risco (RCQ)", f"{rcq:.2f}", "Moderado" if rcq > 0.9 else "Baixo")
-    m5.metric("💓 Pulsação", f"{last_pulse} bpm")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric(label_bf, f"{bf_est:.1f}%")
+    m2.metric("📏 Cintura", f"{l_m['waist_cm']} cm")
+    m3.metric("🫀 Risco (RCQ)", f"{rcq:.2f}", "Moderado" if rcq > 0.9 else "Baixo")
+    
+    # Se tiver dobras (adipômetro), mostra. Se não, mostra quadril (relevante para Weltman/RCQ).
+    dobra_abd = l_m.get('fold_abdominal', 0)
+    if dobra_abd > 0:
+        m4.metric("🤏 Dobra Abdominal", f"{dobra_abd} mm")
+    else:
+        m4.metric("📐 Quadril", f"{l_m['hip_cm']} cm")
 
 col_left, col_right = st.columns(2)
 with col_left:
     st.markdown("**📉 Evolução de Gordura (%)**")
-    # O app salva o melhor BF disponível em body_fat_est, então o gráfico continua funcionando
     fig_bf = go.Figure(go.Scatter(x=df_medidas['log_date'], y=df_medidas['body_fat_est'], mode='lines+markers', line=dict(color='#e67e22')))
     fig_bf.update_layout(height=250, margin=dict(l=10,r=10,t=20,b=10))
     st.plotly_chart(fig_bf, use_container_width=True)
@@ -210,4 +214,4 @@ if not df_hist.empty:
             fig_pie.update_layout(height=350, showlegend=False, margin=dict(l=10,r=10,t=20,b=10))
             st.plotly_chart(fig_pie, use_container_width=True)
 
-st.caption("Leo Tracker Dash v2.6 | Adipômetro Ready & Pollock Metrics")
+st.caption("Leo Tracker Dash v2.7 | Weltman Edition")
