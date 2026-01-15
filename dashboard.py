@@ -133,32 +133,33 @@ with col_a1:
 with col_a2:
     st.markdown("##### 🏦 Banco de Gordura (Real)")
     if not df_hist.empty:
-        # 1. Cruzar dados de consumo com peso do dia (para calcular o basal dinâmico)
+        # 1. Cruzar dados de consumo com peso do dia
         df_merged = pd.merge_asof(df_hist.sort_values('data'), df_peso.sort_values('data'), on='data', direction='backward')
         
-        # Se faltar peso em algum dia, usa o peso inicial como fallback
         peso_fallback = 146.0 
         df_merged['peso_kg'] = df_merged['peso_kg'].fillna(peso_fallback)
         
-        # 2. Calcular GET (Gasto Energético Total) Diário - Fórmula Mifflin-St Jeor
-        # TMB = (10 x peso) + (6.25 x altura) - (5 x idade) + 5
-        # GET = TMB * 1.2 (Sedentário)
+        # 2. CÁLCULO CALIBRADO (Baseado na sua Bioimpedância)
+        # A balança deu 2525 kcal para 140kg. Isso é ~9% a mais que a fórmula teórica.
+        # Vamos usar a fórmula de Mifflin-St Jeor com um multiplicador de correção (1.09)
+        # para que o cálculo acompanhe sua perda de peso, mas mantenha a precisão da sua massa magra.
         altura_cm = int(p.get('altura_cm', 178))
         idade = int(p.get('idade', 41))
         
-        df_merged['tmb_dia'] = (10 * df_merged['peso_kg']) + (6.25 * altura_cm) - (5 * idade) + 5
-        df_merged['get_dia'] = df_merged['tmb_dia'] * 1.2 # Fator atividade leve/sedentário
+        df_merged['tmb_teorica'] = (10 * df_merged['peso_kg']) + (6.25 * altura_cm) - (5 * idade) + 5
+        df_merged['tmb_real'] = df_merged['tmb_teorica'] * 1.09  # Ajuste baseado na sua bioimpedância
+        df_merged['get_dia'] = df_merged['tmb_real'] * 1.2 # Fator sedentário
         
-        # 3. Calcular Déficit Real (O que gastou - O que comeu)
+        # 3. Calcular Déficit Real
         df_merged['deficit_real'] = df_merged['get_dia'] - df_merged['tkcal']
         
         deficit_total_real = df_merged['deficit_real'].sum()
         kg_gordura_queimada = deficit_total_real / 7700
         
-        st.metric("Déficit Calórico Total", f"{int(deficit_total_real)} kcal", help="Soma de (Seu Gasto Basal + Atividade - Comida) de todos os dias.")
-        st.metric("Gordura Eliminada (Teórico)", f"{kg_gordura_queimada:.2f} kg", help="Matemática pura: Déficit Real / 7700 kcal")
+        st.metric("Déficit Calórico Total", f"{int(deficit_total_real)} kcal")
+        st.metric("Gordura Eliminada (Teórico)", f"{kg_gordura_queimada:.2f} kg")
         
-        st.caption(f"ℹ️ Baseado num gasto médio diário de ~{int(df_merged['get_dia'].mean())} kcal.")
+        st.caption(f"ℹ️ GET Médio calibrado pela Bioimpedância: ~{int(df_merged['get_dia'].mean())} kcal/dia.")
 
 # ==========================================
 # SEÇÃO 2: PROGRESSO DE PESO (CLÁSSICO)
