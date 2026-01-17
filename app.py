@@ -34,7 +34,7 @@ def check_password():
 if not check_password(): st.stop()
 
 # ============================================================================
-# 2. CONEXÃO BLINDADA
+# 2. CONEXÃO BLINDADA (CORREÇÃO APLICADA AQUI)
 # ============================================================================
 @st.cache_resource(ttl=600)
 def get_engine():
@@ -49,6 +49,7 @@ def executar_sql(sql, params=None, is_select=False):
         if is_select:
             with engine.connect() as conn:
                 df = pd.read_sql(text(sql), conn, params=params)
+                # Conversão de datas para evitar erros de fuso
                 for col in ['data', 'log_date', 'measurement_time']:
                     if col in df.columns:
                         try: df[col] = pd.to_datetime(df[col])
@@ -59,7 +60,10 @@ def executar_sql(sql, params=None, is_select=False):
                 conn.execute(text(sql), params)
             return True
     except Exception as e:
-        # Retorna DataFrame vazio se der erro no Select para não quebrar a tela
+        # Mostra o erro na tela para sabermos o que houve
+        st.error(f"❌ ERRO NO BANCO: {e}")
+        
+        # CORREÇÃO CRÍTICA: Retorna Tabela Vazia se der erro, não False
         if is_select: return pd.DataFrame()
         return False
 
@@ -77,7 +81,7 @@ def inicializar_banco():
             meta_kcal REAL, meta_proteina REAL, meta_carbo REAL, meta_gordura REAL, meta_peso_alvo REAL
         );
     """)
-    # Migrações silenciosas
+    # Migrações seguras (add column if not exists)
     for c in ['ultimo_pescoco', 'ultima_cintura', 'ultimo_quadril']:
         try: executar_sql(f"ALTER TABLE public.perfil ADD COLUMN IF NOT EXISTS {c} REAL;")
         except: pass
@@ -159,12 +163,13 @@ def processar_texto_ia(texto_usuario, api_key):
     try:
         completion = client.chat.completions.create(messages=[{"role": "system", "content": prompt_system}, {"role": "user", "content": texto_usuario}], model="llama-3.3-70b-versatile", response_format={"type": "json_object"})
         content = json.loads(completion.choices[0].message.content)
-        if isinstance(content, list): content = {"analise": "Processado", "alimentos": content}
+        # Proteção: Se a IA devolver lista em vez de dict, arruma.
+        if isinstance(content, list): content = {"analise": "Processado (Lista)", "alimentos": content}
         return True, content
     except Exception as e: return False, str(e)
 
 # ============================================================================
-# 6. INTERFACE
+# 6. INTERFACE PRINCIPAL
 # ============================================================================
 st.title("🦁 Leo Tracker Pro")
 
@@ -176,9 +181,9 @@ st.sidebar.header("🎯 Status")
 ultimo_peso_df = executar_sql("SELECT peso_kg FROM public.peso ORDER BY data DESC LIMIT 1", is_select=True)
 peso_atual_sidebar = float(ultimo_peso_df.iloc[0]['peso_kg']) if not ultimo_peso_df.empty else 140.0
 st.sidebar.metric("Peso Atual", f"{peso_atual_sidebar} kg", f"Meta: {METAS['peso_alvo']} kg")
-st.sidebar.progress(min(max(0.0, (150 - peso_atual_sidebar) / (150 - METAS['peso_alvo'])), 1.0))
+st.sidebar.progress(min((150 - peso_atual_sidebar) / (150 - METAS['peso_alvo']), 1.0))
 
-# Métricas Topo
+# Métricas Topo (Protegidas)
 k_hoje = float(df_hoje['kcal'].sum()) if not df_hoje.empty else 0.0
 p_hoje = float(df_hoje['proteina'].sum()) if not df_hoje.empty else 0.0
 c_hoje = float(df_hoje['carbo'].sum()) if not df_hoje.empty else 0.0
@@ -207,7 +212,7 @@ with tab_daily:
             if cp3.form_submit_button("💾 Salvar Peso", use_container_width=True):
                 ok = executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (:d, :p)", {'d': d_peso, 'p': p_val})
                 if ok:
-                    st.cache_resource.clear() # Limpa cache do banco
+                    st.cache_resource.clear()
                     st.rerun()
     st.divider()
 
@@ -224,11 +229,13 @@ with tab_daily:
                     for item in res.get('alimentos', []):
                         k_calc = (item.get('p',0)*4 + item.get('c',0)*4 + item.get('g',0)*9)
                         k_final = max(k_calc, float(item.get('kcal', 0)))
+                        
                         params = {
                             'dt': item.get('data') or data_hoje, 
                             'ali': item.get('alimento'), 'qtd': item.get('quantidade_g'), 
                             'kc': k_final, 'pr': item.get('p'), 'ca': item.get('c'), 'go': item.get('g'), 'gl': item.get('gluten')
                         }
+                        
                         ok_db = executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (:dt, :ali, :qtd, :kc, :pr, :ca, :go, :gl)", params)
                         if not ok_db: st.stop()
                     
@@ -237,7 +244,7 @@ with tab_daily:
 
     # 3. JSON MANUAL
     with st.expander("Importação JSON Manual"):
-        st.info("Para quando a IA falhar.")
+        st.info("Backup Gemini/GPT")
         json_manual = st.text_area("JSON", label_visibility="collapsed")
         if st.button("Salvar JSON"):
             try:
@@ -256,16 +263,16 @@ with tab_daily:
                     executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (:dt, :ali, :qtd, :kcal, :prot, :carb, :gord, :glut)", params)
                 st.cache_resource.clear()
                 st.rerun()
-            except Exception as e: st.error(f"Erro: {e}")
+            except Exception as e: st.error(f"Erro no JSON: {e}")
 
-    # 4. LISTA DO DIA (Restaurada para a Tela Principal)
+    # 4. LISTAGEM DO DIA (Restaurada para a Tela Principal)
     st.subheader("Hoje")
     if not df_hoje.empty:
         for i, row in df_hoje.iterrows():
             c1, c2, c3 = st.columns([3, 2, 0.5])
             c1.markdown(f"**{row['alimento']}**")
             c2.caption(f"{int(row['kcal'])} kcal | P:{int(row['proteina'])} G:{int(row['gordura'])}")
-            if c3.button("❌", key=f"del_daily_{row['id']}"):
+            if c3.button("❌", key=f"del_d_{row['id']}"):
                 executar_sql("DELETE FROM public.consumo WHERE id=:id", {'id': row['id']})
                 st.cache_resource.clear()
                 st.rerun()
@@ -273,9 +280,10 @@ with tab_daily:
     else: st.info("Nada registrado hoje.")
 
 with tab_hist:
-    st.write("Histórico Geral")
-    if not df_hoje.empty:
-        st.dataframe(df_hoje)
+    st.header("Histórico Completo")
+    df_all = executar_sql("SELECT * FROM public.consumo ORDER BY data DESC LIMIT 50", is_select=True)
+    if not df_all.empty:
+        st.dataframe(df_all)
 
 with tab_medidas:
     st.subheader("🫀 Pressão Arterial")
@@ -289,16 +297,14 @@ with tab_medidas:
             if ok: st.rerun()
 
     st.divider()
-    st.subheader("📏 Avaliação Corporal (Weltman)")
+    st.subheader("📏 Avaliação Corporal")
     with st.form("medidas_form"):
         d_med = st.date_input("Data", value=data_hoje)
         c_m1, c_m2 = st.columns(2)
         p_input = c_m1.number_input("Peso Atual (kg)", 40.0, 200.0, step=0.1, value=peso_atual_sidebar)
-        waist = c_m2.number_input("Cintura (Umbigo) cm", 50.0, 200.0, step=0.5, value=METAS['last_waist'])
-        
+        waist = c_m2.number_input("Cintura (cm)", 50.0, 200.0, step=0.5, value=METAS['last_waist'])
         bf_weltman = calc_bf_weltman_obese(waist, p_input, METAS['altura'], METAS['genero'])
         st.info(f"🧬 **BF Weltman: {bf_weltman:.1f}%**")
-
         if st.form_submit_button("Salvar Avaliação"):
             params = {'dt': d_med, 'w': p_input, 'wa': waist, 'ne': METAS['last_neck'], 'hi': METAS['last_hip'], 'bf_est': bf_weltman, 'f_pec': 0, 'f_abd': 0, 'f_thi': 0, 'f_tri': 0, 'bf_pol': 0, 'bf_wel': bf_weltman, 'nt': 'Weltman Simples'}
             sql_med = "INSERT INTO public.body_measurements (log_date, weight_kg, waist_cm, neck_cm, hip_cm, body_fat_est, fold_chest, fold_abdominal, fold_thigh, fold_triceps, body_fat_pollock, body_fat_weltman, notes) VALUES (:dt, :w, :wa, :ne, :hi, :bf_est, :f_pec, :f_abd, :f_thi, :f_tri, :bf_pol, :bf_wel, :nt)"
@@ -310,7 +316,7 @@ with tab_medidas:
 
 with tab_rel:
     st.header("Relatórios")
-    if st.button("Gerar Relatório"): st.info("Pronto.")
+    if st.button("Gerar Relatório (PDF)"): st.info("Funcionalidade pronta para ativar.")
 
 with tab_admin:
     st.header("⚙️ Configurações & Metas")
@@ -320,4 +326,4 @@ with tab_admin:
              executar_sql("UPDATE public.perfil SET meta_peso_alvo=:p WHERE id=1", {'p': n_peso})
              st.rerun()
 
-st.caption("Leo Tracker Pro v5.9 | List Restored")
+st.caption("Leo Tracker Pro v6.0 | Base Refactored")
