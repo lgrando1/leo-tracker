@@ -22,7 +22,7 @@ def check_password():
         st.session_state["password_correct"] = False
     if st.session_state["password_correct"]: return True
     
-    st.title("🦁 Leo Tracker Pro v6.0")
+    st.title("🦁 Leo Tracker Pro v6.2")
     password = st.text_input("Senha de Acesso:", type="password")
     if st.button("Entrar"):
         if password == st.secrets.get("PASSWORD", "admin"): 
@@ -55,7 +55,7 @@ def executar_sql(sql, params=None, is_select=False):
                         except: pass
                 return df
         else:
-            with engine.begin() as conn: # Engine.begin abre transação e dá auto-commit
+            with engine.begin() as conn:
                 conn.execute(text(sql), params)
             return True
     except Exception as e:
@@ -66,11 +66,8 @@ def executar_sql(sql, params=None, is_select=False):
 # 3. SETUP E METAS
 # ============================================================================
 def inicializar_banco():
-    # Tabelas Core
     executar_sql("CREATE TABLE IF NOT EXISTS public.consumo (id SERIAL PRIMARY KEY, data DATE, alimento TEXT, quantidade REAL, kcal REAL, proteina REAL, carbo REAL, gordura REAL, gluten TEXT DEFAULT 'Não informado');")
     executar_sql("CREATE TABLE IF NOT EXISTS public.peso (id SERIAL PRIMARY KEY, data DATE, peso_kg REAL);")
-    
-    # Tabela Perfil (Garante que existe linha 1)
     executar_sql("""
         CREATE TABLE IF NOT EXISTS public.perfil (
             id SERIAL PRIMARY KEY, 
@@ -84,7 +81,6 @@ def inicializar_banco():
     if res.iloc[0]['c'] == 0:
         executar_sql("INSERT INTO public.perfil (id, meta_kcal, meta_proteina, meta_carbo, meta_gordura, ritmo_semanal, meta_peso_alvo) VALUES (1, 1638, 108, 164, 67, 0.8, 120.0)")
 
-    # Tabelas Auxiliares
     executar_sql("""
         CREATE TABLE IF NOT EXISTS public.body_measurements (
             id SERIAL PRIMARY KEY, log_date DATE NOT NULL,
@@ -121,25 +117,12 @@ def get_metas_do_banco():
 inicializar_banco()
 METAS = get_metas_do_banco()
 
-# CÁLCULOS BF
-def calc_bf_navy(waist, neck, height):
-    if waist <= 0 or neck <= 0 or height <= 0: return 0.0
-    try: return 495 / (1.0324 - 0.19077 * math.log10(waist - neck) + 0.15456 * math.log10(height)) - 450
-    except: return 0.0
-
+# CÁLCULOS
 def calc_bf_weltman_obese(waist, weight_kg, height_cm, gender):
     if waist <= 0 or weight_kg <= 0: return 0.0
     try:
         if gender == 'Masculino': return (0.31457 * waist) - (0.10969 * weight_kg) + 10.8336
         else: return (0.11077 * waist) - (0.17666 * height_cm) + (0.14354 * weight_kg) + 51.03301
-    except: return 0.0
-
-def calc_bf_pollock_3(chest, abdominal, thigh, age):
-    soma = chest + abdominal + thigh
-    if soma <= 0: return 0.0
-    try:
-        bd = 1.10938 - (0.0008267 * soma) + (0.0000016 * (soma ** 2)) - (0.0002574 * age)
-        return (495 / bd) - 450
     except: return 0.0
 
 # ============================================================================
@@ -158,7 +141,7 @@ def processar_texto_ia(texto_usuario, api_key):
     except Exception as e: return False, str(e)
 
 # ============================================================================
-# 5. GERADOR DE RELATÓRIO PDF
+# 5. GERADORES
 # ============================================================================
 def gerar_pdf_relatorio(dias=7):
     pdf = FPDF()
@@ -166,8 +149,6 @@ def gerar_pdf_relatorio(dias=7):
     pdf.set_font("Arial", 'B', 16)
     pdf.cell(0, 10, f"Leo Tracker - Relatorio ({dias} dias)", 0, 1, 'C')
     pdf.set_font("Arial", '', 12)
-    
-    # Dados
     dt_inicio = (get_now_br() - timedelta(days=dias)).date()
     df_con = executar_sql(f"SELECT data, sum(kcal) as k, sum(proteina) as p, sum(carbo) as c, sum(gordura) as g FROM public.consumo WHERE data >= '{dt_inicio}' GROUP BY data ORDER BY data", is_select=True)
     
@@ -181,8 +162,6 @@ def gerar_pdf_relatorio(dias=7):
         pdf.cell(0, 8, f"Calorias: {media_k:.0f} kcal (Meta: {METAS['kcal']})", 0, 1)
         pdf.cell(0, 8, f"Proteina: {media_p:.0f} g (Meta: {METAS['prot']})", 0, 1)
         pdf.ln(5)
-        
-        # Tabela Simples
         pdf.set_font("Arial", 'B', 10)
         pdf.cell(30, 8, "Data", 1)
         pdf.cell(25, 8, "Kcal", 1)
@@ -198,30 +177,38 @@ def gerar_pdf_relatorio(dias=7):
             pdf.cell(25, 8, str(int(row['c'])), 1)
             pdf.cell(25, 8, str(int(row['g'])), 1)
             pdf.ln()
-            
     return pdf.output(dest='S').encode('latin-1')
 
+def gerar_excel_completo():
+    output = io.BytesIO()
+    df_consumo = executar_sql("SELECT * FROM public.consumo ORDER BY data DESC", is_select=True)
+    df_peso = executar_sql("SELECT * FROM public.peso ORDER BY data DESC", is_select=True)
+    df_medidas = executar_sql("SELECT * FROM public.body_measurements ORDER BY log_date DESC", is_select=True)
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df_consumo.to_excel(writer, sheet_name='Diario Alimentar', index=False)
+        df_peso.to_excel(writer, sheet_name='Historico Peso', index=False)
+        if not df_medidas.empty: df_medidas.to_excel(writer, sheet_name='Medidas Corporais', index=False)
+    return output.getvalue()
+
 # ============================================================================
-# 6. INTERFACE PRINCIPAL
+# 6. INTERFACE
 # ============================================================================
 st.title("🦁 Leo Tracker Pro")
-
 data_hoje = get_now_br().date()
 df_hoje = executar_sql("SELECT * FROM public.consumo WHERE data = %s", (data_hoje,), is_select=True)
 
-# SIDEBAR (Resumo Rápido)
+# SIDEBAR
 st.sidebar.header("🎯 Status")
 ultimo_peso_df = executar_sql("SELECT peso_kg FROM public.peso ORDER BY data DESC LIMIT 1", is_select=True)
 peso_atual_sidebar = float(ultimo_peso_df.iloc[0]['peso_kg']) if not ultimo_peso_df.empty else 140.0
 st.sidebar.metric("Peso Atual", f"{peso_atual_sidebar} kg", f"Meta: {METAS['peso_alvo']} kg")
 st.sidebar.progress(min((150 - peso_atual_sidebar) / (150 - METAS['peso_alvo']), 1.0))
 
-# Métricas Topo (Consumo Hoje)
+# Métricas Topo
 k_hoje = float(df_hoje['kcal'].sum()) if not df_hoje.empty else 0.0
 p_hoje = float(df_hoje['proteina'].sum()) if not df_hoje.empty else 0.0
 c_hoje = float(df_hoje['carbo'].sum()) if not df_hoje.empty else 0.0
 g_hoje = float(df_hoje['gordura'].sum()) if not df_hoje.empty else 0.0
-
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("🔥 Calorias", f"{int(k_hoje)}", f"Meta: {METAS['kcal']}")
 c2.metric("🥩 Proteína", f"{int(p_hoje)}g", f"Meta: {METAS['prot']}g")
@@ -230,10 +217,10 @@ c4.metric("🥑 Gordura", f"{int(g_hoje)}g", f"Meta: {METAS['gord']}g")
 st.progress(min(k_hoje/METAS['kcal'], 1.0))
 st.divider()
 
-# ABAS
-tab_daily, tab_hist, tab_medidas, tab_rel, tab_admin = st.tabs(["📝 Diário", "📜 Histórico / Gráfico", "❤️ Saúde", "📄 Relatórios", "⚙️ Metas & Config"])
+# ABAS - REORGANIZADAS
+tab_daily, tab_graph, tab_logs, tab_health, tab_config = st.tabs(["📝 Diário", "📉 Peso", "📊 Análise & Logs", "❤️ Saúde", "⚙️ Export/Config"])
 
-# --- ABA 1: DIÁRIO ---
+# --- 1. DIÁRIO ---
 with tab_daily:
     st.write("### ⚖️ Registro Rápido")
     with st.form("form_peso_diario_top"):
@@ -243,182 +230,154 @@ with tab_daily:
         if cp3.form_submit_button("💾 Salvar Peso", use_container_width=True):
             ok = executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (:d, :p)", {'d': d_peso, 'p': p_val})
             if ok: st.cache_data.clear(); st.rerun()
-    
     st.divider()
-    
     st.write("### 🍎 Refeições (IA)")
-    texto_input = st.text_area("Descreva sua refeição:", height=80, placeholder="Ex: 3 ovos cozidos e 30g de queijo meia cura")
+    texto_input = st.text_area("Refeição", height=80, placeholder="Ex: 3 ovos cozidos...")
     if st.button("🚀 Processar"):
         api_key = st.secrets.get("GROQ_API_KEY")
         if texto_input and api_key:
-            with st.spinner("Analisando com Llama 3..."):
+            with st.spinner("Analisando..."):
                 ok_ia, res = processar_texto_ia(texto_input, api_key)
                 if ok_ia:
                     st.success(res.get('analise'))
                     for item in res.get('alimentos', []):
                         k_calc = (item.get('p',0)*4 + item.get('c',0)*4 + item.get('g',0)*9)
                         k_final = max(k_calc, float(item.get('kcal', 0)))
-                        params = {
-                            'dt': item.get('data') or data_hoje, 'ali': item.get('alimento'), 
-                            'qtd': item.get('quantidade_g'), 'kc': k_final, 
-                            'pr': item.get('p'), 'ca': item.get('c'), 'go': item.get('g'), 'gl': item.get('gluten')
-                        }
+                        params = {'dt': item.get('data') or data_hoje, 'ali': item.get('alimento'), 'qtd': item.get('quantidade_g'), 'kc': k_final, 'pr': item.get('p'), 'ca': item.get('c'), 'go': item.get('g'), 'gl': item.get('gluten')}
                         executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (:dt, :ali, :qtd, :kc, :pr, :ca, :go, :gl)", params)
-                    st.cache_data.clear()
-                    st.rerun()
+                    st.cache_data.clear(); st.rerun()
 
-    # Import JSON Manual (Backup)
-    with st.expander("Importação JSON Manual"):
-        st.caption("Cole o JSON gerado pelo Gemini aqui se a IA falhar.")
-        json_manual = st.text_area("JSON", label_visibility="collapsed")
-        if st.button("Importar JSON"):
-            try:
-                cleaned = json_manual.replace('```json', '').replace('```', '')
-                start, end = cleaned.find('['), cleaned.rfind(']')
-                if start != -1: cleaned = cleaned[start:end+1]
-                lista = json.loads(cleaned)
-                for item in (lista if isinstance(lista, list) else [lista]):
-                    k_final = max((float(item.get('p',0))*4 + float(item.get('c',0))*4 + float(item.get('g',0))*9), float(item.get('kcal',0)))
-                    params = {'dt': item.get('data', data_hoje), 'ali': item.get('alimento'), 'qtd': item.get('quantidade_g'), 'kc': k_final, 'pr': item.get('p'), 'ca': item.get('c'), 'go': item.get('g'), 'gl': item.get('gluten')}
-                    executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (:dt, :ali, :qtd, :kc, :pr, :ca, :go, :gl)", params)
-                st.cache_data.clear(); st.rerun()
-            except Exception as e: st.error(f"Erro: {e}")
-
-    # Listagem de Hoje
     st.subheader("Hoje")
     if not df_hoje.empty:
         for i, row in df_hoje.iterrows():
             c1, c2, c3 = st.columns([3, 2, 0.5])
             c1.markdown(f"**{row['alimento']}**")
-            c2.caption(f"{int(row['kcal'])} kcal | P:{int(row['proteina'])} C:{int(row['carbo'])} G:{int(row['gordura'])}")
+            c2.caption(f"{int(row['kcal'])} kcal | P:{int(row['proteina'])} C:{int(row['carbo']} G:{int(row['gordura'])}")
             if c3.button("🗑️", key=f"del_{row['id']}"):
                 executar_sql("DELETE FROM public.consumo WHERE id=:id", {'id': row['id']})
                 st.cache_data.clear(); st.rerun()
             st.markdown("---")
 
-# --- ABA 2: GRÁFICOS E HISTÓRICO ---
-with tab_hist:
+# --- 2. GRÁFICO PESO ---
+with tab_graph:
     st.header("📉 Evolução vs Meta")
-    
-    # Busca histórico de peso
     df_peso = executar_sql("SELECT data, peso_kg FROM public.peso ORDER BY data ASC", is_select=True)
-    
     if not df_peso.empty:
         df_peso['data'] = pd.to_datetime(df_peso['data'])
-        
-        # Criação da Linha de Meta (Target)
         start_date = df_peso.iloc[0]['data']
         start_weight = df_peso.iloc[0]['peso_kg']
-        ritmo_semanal = METAS['ritmo'] # kg por semana
-        
-        # Gera linha de tendência ideal
         df_peso['semanas'] = (df_peso['data'] - start_date).dt.days / 7
-        df_peso['Meta Ideal'] = start_weight - (df_peso['semanas'] * ritmo_semanal)
-        
-        # Renomeia para o gráfico
+        df_peso['Meta Ideal'] = start_weight - (df_peso['semanas'] * METAS['ritmo'])
         df_chart = df_peso.set_index('data')[['peso_kg', 'Meta Ideal']]
-        df_chart.rename(columns={'peso_kg': 'Peso Real'}, inplace=True)
+        st.line_chart(df_chart, color=["#FF4B4B", "#29B5E8"])
         
-        st.line_chart(df_chart, color=["#FF4B4B", "#29B5E8"]) # Vermelho=Real, Azul=Meta
-        
-        # Análise de Performance
-        ultimo_real = df_peso.iloc[-1]['peso_kg']
-        ultimo_meta = df_peso.iloc[-1]['Meta Ideal']
-        diff = ultimo_real - ultimo_meta
-        
-        col_res1, col_res2 = st.columns(2)
-        col_res1.info(f"Ritmo Configurado: -{ritmo_semanal} kg/semana")
-        if diff < 0:
-            col_res2.success(f"🦁 Você está {abs(diff):.1f} kg ADIANTADO em relação à meta!")
-        else:
-            col_res2.warning(f"⚠️ Você está {diff:.1f} kg atrás da meta teórica.")
-            
-    else:
-        st.warning("Insira dados de peso para ver o gráfico.")
+        diff = df_peso.iloc[-1]['peso_kg'] - df_peso.iloc[-1]['Meta Ideal']
+        if diff < 0: st.success(f"🦁 {abs(diff):.1f} kg à frente da meta!")
+        else: st.warning(f"⚠️ {diff:.1f} kg atrás da meta.")
+    else: st.warning("Sem dados.")
 
-# --- ABA 3: SAÚDE ---
-with tab_medidas:
-    st.subheader("🫀 Pressão Arterial")
-    with st.form("bp_form"):
-        c1, c2, c3 = st.columns(3)
-        sys = c1.number_input("Sistólica", 90, 200, 120)
-        dia = c2.number_input("Diastólica", 50, 130, 80)
-        pul = c3.number_input("Pulso", 40, 200, 75)
-        if st.form_submit_button("Salvar Pressão"):
-            ok = executar_sql("INSERT INTO public.blood_pressure (systolic, diastolic, pulse, notes) VALUES (:s, :d, :p, 'App')", {'s': sys, 'd': dia, 'p': pul})
-            if ok: st.success("Salvo!"); st.cache_data.clear()
+# --- 3. ANÁLISE & LOGS (NOVA) ---
+with tab_logs:
+    st.header("📊 Análise de Dados")
+    
+    tab_resumo, tab_detalhado = st.tabs(["📅 Resumo por Dia", "📋 Extrato Detalhado"])
+    
+    with tab_resumo:
+        # Agrupa por dia
+        sql_resumo = """
+            SELECT data, SUM(kcal) as "Kcal", SUM(proteina) as "Prot", SUM(carbo) as "Carb", SUM(gordura) as "Gord" 
+            FROM public.consumo 
+            GROUP BY data 
+            ORDER BY data DESC
+        """
+        df_resumo = executar_sql(sql_resumo, is_select=True)
+        st.dataframe(df_resumo, use_container_width=True)
 
+    with tab_detalhado:
+        # Mostra tudo
+        sql_full = """
+            SELECT data, alimento, quantidade, kcal, proteina as prot, carbo, gordura as gord 
+            FROM public.consumo 
+            ORDER BY data DESC, id DESC 
+            LIMIT 200
+        """
+        df_full = executar_sql(sql_full, is_select=True)
+        st.dataframe(df_full, use_container_width=True)
+
+# --- 4. SAÚDE (ATUALIZADA) ---
+with tab_health:
+    st.header("❤️ Saúde & Medidas")
+    
+    c_h1, c_h2 = st.columns(2)
+    
+    with c_h1:
+        st.subheader("🫀 Pressão Arterial")
+        with st.form("bp_form"):
+            sys = st.number_input("Sistólica", 90, 200, 120)
+            dia = st.number_input("Diastólica", 50, 130, 80)
+            pul = st.number_input("Pulso", 40, 200, 75)
+            if st.form_submit_button("Salvar Pressão"):
+                ok = executar_sql("INSERT INTO public.blood_pressure (systolic, diastolic, pulse, notes) VALUES (:s, :d, :p, 'App')", {'s': sys, 'd': dia, 'p': pul})
+                if ok: st.success("Salvo!"); st.cache_data.clear(); st.rerun()
+        
+        # VISUALIZAÇÃO DA PRESSÃO
+        st.write("Histórico (Últimos 10)")
+        df_bp = executar_sql("SELECT measurement_time as data, systolic, diastolic, pulse FROM public.blood_pressure ORDER BY measurement_time DESC LIMIT 10", is_select=True)
+        if not df_bp.empty:
+            st.dataframe(df_bp, hide_index=True)
+
+    with c_h2:
+        st.subheader("📏 Avaliação Corporal")
+        with st.form("medidas_form"):
+            d_med = st.date_input("Data", value=data_hoje)
+            p_input = st.number_input("Peso (kg)", value=peso_atual_sidebar)
+            waist = st.number_input("Cintura (cm)", value=METAS['last_waist'])
+            bf_weltman = calc_bf_weltman_obese(waist, p_input, METAS['altura'], METAS['genero'])
+            st.info(f"BF Estimado: {bf_weltman:.1f}%")
+            if st.form_submit_button("Salvar Medida"):
+                 params = {'dt': d_med, 'w': p_input, 'wa': waist, 'ne': METAS['last_neck'], 'hi': METAS['last_hip'], 'bf_est': bf_weltman, 'f_pec': 0, 'f_abd': 0, 'f_thi': 0, 'f_tri': 0, 'bf_pol': 0, 'bf_wel': bf_weltman, 'nt': 'Weltman Simples'}
+                 executar_sql("INSERT INTO public.body_measurements (log_date, weight_kg, waist_cm, neck_cm, hip_cm, body_fat_est, fold_chest, fold_abdominal, fold_thigh, fold_triceps, body_fat_pollock, body_fat_weltman, notes) VALUES (:dt, :w, :wa, :ne, :hi, :bf_est, :f_pec, :f_abd, :f_thi, :f_tri, :bf_pol, :bf_wel, :nt)", params)
+                 executar_sql("UPDATE public.perfil SET ultima_cintura=:wa WHERE id=1", {'wa': waist})
+                 executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (:dt, :w)", {'dt': d_med, 'w': p_input})
+                 st.success("Salvo!"); st.cache_data.clear(); st.rerun()
+        
+        # VISUALIZAÇÃO DAS MEDIDAS
+        st.write("Histórico (Últimos 5)")
+        df_med = executar_sql("SELECT log_date as data, waist_cm as cintura, body_fat_est as bf FROM public.body_measurements ORDER BY log_date DESC LIMIT 5", is_select=True)
+        if not df_med.empty:
+            st.dataframe(df_med, hide_index=True)
+
+# --- 5. EXPORT & CONFIG ---
+with tab_config:
+    st.header("⚙️ Configurações & Backup")
+    
+    st.subheader("📄 Exportar")
+    c_btn1, c_btn2 = st.columns(2)
+    if c_btn1.button("📄 Gerar PDF (7 dias)"):
+        pdf_bytes = gerar_pdf_relatorio(7)
+        st.download_button("📥 Baixar PDF", pdf_bytes, f"Relatorio_{data_hoje}.pdf", "application/pdf")
+    
+    if c_btn2.button("📊 Excel Completo (Backup)"):
+        try:
+            excel_bytes = gerar_excel_completo()
+            st.download_button("📥 Baixar XLSX", excel_bytes, f"Backup_LeoTracker_{data_hoje}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        except Exception as e: st.error(f"Erro Excel: {e}")
+    
     st.divider()
-    st.subheader("📏 Avaliação Corporal")
-    # Formulário simplificado de Weltman
-    with st.form("medidas_form"):
-        d_med = st.date_input("Data", value=data_hoje)
-        c_m1, c_m2 = st.columns(2)
-        p_input = c_m1.number_input("Peso (kg)", 40.0, 200.0, step=0.1, value=peso_atual_sidebar)
-        waist = c_m2.number_input("Cintura (cm)", 50.0, 200.0, step=0.5, value=METAS['last_waist'])
-        
-        bf_weltman = calc_bf_weltman_obese(waist, p_input, METAS['altura'], METAS['genero'])
-        st.info(f"🧬 **BF Estimado (Weltman): {bf_weltman:.1f}%**")
-        
-        if st.form_submit_button("Salvar Medida"):
-             params = {
-                'dt': d_med, 'w': p_input, 'wa': waist, 'ne': METAS['last_neck'], 'hi': METAS['last_hip'], 
-                'bf_est': bf_weltman, 'f_pec': 0, 'f_abd': 0, 'f_thi': 0, 'f_tri': 0, 'bf_pol': 0, 'bf_wel': bf_weltman, 'nt': 'Weltman Simples'
-            }
-             executar_sql("INSERT INTO public.body_measurements (log_date, weight_kg, waist_cm, neck_cm, hip_cm, body_fat_est, fold_chest, fold_abdominal, fold_thigh, fold_triceps, body_fat_pollock, body_fat_weltman, notes) VALUES (:dt, :w, :wa, :ne, :hi, :bf_est, :f_pec, :f_abd, :f_thi, :f_tri, :bf_pol, :bf_wel, :nt)", params)
-             executar_sql("UPDATE public.perfil SET ultima_cintura=:wa WHERE id=1", {'wa': waist})
-             executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (:dt, :w)", {'dt': d_med, 'w': p_input})
-             st.success("Medidas Salvas!"); st.cache_data.clear(); st.rerun()
-
-# --- ABA 4: RELATÓRIOS ---
-with tab_rel:
-    st.header("📄 Exportar Relatórios")
-    col_pdf1, col_pdf2 = st.columns(2)
-    dias_rel = col_pdf1.slider("Período (dias)", 7, 90, 30)
     
-    if col_pdf2.button("Gerar PDF"):
-        with st.spinner("Gerando PDF..."):
-            pdf_bytes = gerar_pdf_relatorio(dias_rel)
-            st.download_button(
-                label="📥 Baixar Relatório PDF",
-                data=pdf_bytes,
-                file_name=f"LeoTracker_Relatorio_{data_hoje}.pdf",
-                mime="application/pdf"
-            )
-
-# --- ABA 5: CONFIGURAÇÕES (RESTAURADA) ---
-with tab_admin:
-    st.header("⚙️ Configurações e Metas")
-    
-    with st.form("form_metas_completo"):
-        st.subheader("Macros e Calorias")
+    with st.form("form_metas"):
+        st.subheader("Editar Metas")
         c_k1, c_k2 = st.columns(2)
-        n_kcal = c_k1.number_input("Meta Calorias", value=METAS['kcal'])
-        n_prot = c_k2.number_input("Meta Proteína (g)", value=METAS['prot'])
-        
+        n_kcal = c_k1.number_input("Meta Kcal", value=METAS['kcal'])
+        n_prot = c_k2.number_input("Meta Prot", value=METAS['prot'])
         c_k3, c_k4 = st.columns(2)
-        n_carb = c_k3.number_input("Meta Carbo (g)", value=METAS['carb'])
-        n_gord = c_k4.number_input("Meta Gordura (g)", value=METAS['gord'])
-        
-        st.subheader("Planejamento de Peso")
+        n_carb = c_k3.number_input("Meta Carb", value=METAS['carb'])
+        n_gord = c_k4.number_input("Meta Gord", value=METAS['gord'])
         c_p1, c_p2 = st.columns(2)
-        n_peso_alvo = c_p1.number_input("Peso Alvo Final (kg)", value=METAS['peso_alvo'])
-        n_ritmo = c_p2.number_input("Ritmo Semanal (kg/semana)", value=METAS['ritmo'], step=0.1)
-        
-        if st.form_submit_button("💾 Atualizar Metas"):
-            sql_up = """
-                UPDATE public.perfil SET 
-                meta_kcal=:mk, meta_proteina=:mp, meta_carbo=:mc, meta_gordura=:mg, 
-                meta_peso_alvo=:mpa, ritmo_semanal=:rit 
-                WHERE id=1
-            """
-            params = {
-                'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 
-                'mpa': n_peso_alvo, 'rit': n_ritmo
-            }
-            if executar_sql(sql_up, params):
-                st.success("Metas atualizadas com sucesso!")
-                st.cache_data.clear()
-                st.rerun()
+        n_peso_alvo = c_p1.number_input("Peso Alvo", value=METAS['peso_alvo'])
+        n_ritmo = c_p2.number_input("Ritmo (kg/sem)", value=METAS['ritmo'])
+        if st.form_submit_button("Atualizar Metas"):
+            executar_sql("UPDATE public.perfil SET meta_kcal=:mk, meta_proteina=:mp, meta_carbo=:mc, meta_gordura=:mg, meta_peso_alvo=:mpa, ritmo_semanal=:rit WHERE id=1", {'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 'mpa': n_peso_alvo, 'rit': n_ritmo})
+            st.success("Atualizado!"); st.cache_data.clear(); st.rerun()
 
-st.caption("Leo Tracker Pro v6.0 | System Stable 🦁")
+st.caption("Leo Tracker Pro v6.2 | Data Views Restored 🦁")
