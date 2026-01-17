@@ -141,26 +141,45 @@ def calc_bf_pollock_3(chest, abdominal, thigh, age):
     except: return 0.0
 
 # ============================================================================
-# 5. GROQ IA
+# 5. GROQ IA (COM VERIFICAÇÃO MATEMÁTICA)
 # ============================================================================
 def processar_texto_ia(texto_usuario, api_key):
     client = Groq(api_key=api_key)
+    # Prompt Refinado para evitar alucinações matemáticas
     prompt_system = f"""
-    Aja como Nutricionista. Hoje: {get_now_br().strftime('%Y-%m-%d')}.
-    Regras: GORDURA OCULTA (fritura/grelhado = +5g gordura).
-    Retorne APENAS um JSON válido.
-    Formato: {{ "analise": "txt", "alimentos": [ {{ "data": "YYYY-MM-DD", "alimento": "txt", "quantidade_g": 0, "kcal": 0, "p": 0, "c": 0, "g": 0, "gluten": "Não contém" }} ] }}
+    Aja como Nutricionista Matemático. Hoje: {get_now_br().strftime('%Y-%m-%d')}.
+    
+    DIRETRIZES RÍGIDAS DE CÁLCULO:
+    1. Identifique o alimento e sua densidade calórica padrão (kcal/g).
+       - Vegetais: ~0.3 kcal/g
+       - Arroz/Massas cozidos: ~1.3 kcal/g
+       - Carnes magras: ~1.5 kcal/g
+       - Bolos simples: ~3.0 kcal/g
+       - Queijos/Gorduras: ~4.0 a 9.0 kcal/g
+    2. MULTIPLIQUE a densidade pelo peso informado pelo usuário.
+       Exemplo: 49g de bolo * 3.0 = ~147 kcal. NUNCA retorne 277 kcal para 49g de bolo (isso seria 5.6 kcal/g, impossível).
+    3. GORDURA OCULTA: Se for fritura/grelhado de restaurante, adicione +5g a +10g de gordura.
+    
+    SAÍDA: Retorne APENAS um JSON válido.
+    Formato: {{ "analise": "Texto curto explicando o cálculo (ex: 'Densidade estimada 3kcal/g')", "alimentos": [ {{ "data": "YYYY-MM-DD", "alimento": "Nome", "quantidade_g": 0, "kcal": 0, "p": 0, "c": 0, "g": 0, "gluten": "txt" }} ] }}
     """
     try:
         completion = client.chat.completions.create(messages=[{"role": "system", "content": prompt_system}, {"role": "user", "content": texto_usuario}], model="llama-3.3-70b-versatile", response_format={"type": "json_object"})
+        
         raw_content = completion.choices[0].message.content
         cleaned_content = raw_content.replace("```json", "").replace("```", "").strip()
+        
         start_idx = cleaned_content.find('{')
         end_idx = cleaned_content.rfind('}')
-        if start_idx != -1 and end_idx != -1: cleaned_content = cleaned_content[start_idx:end_idx+1]
+        if start_idx != -1 and end_idx != -1:
+             cleaned_content = cleaned_content[start_idx:end_idx+1]
+        
         content = json.loads(cleaned_content)
-        if isinstance(content, list): content = {"analise": "Processado (Lista Direta)", "alimentos": content}
+        
+        if isinstance(content, list): content = {"analise": "Processado", "alimentos": content}
+        
         return True, content
+        
     except Exception as e:
         return False, f"Erro: {str(e)}"
 
