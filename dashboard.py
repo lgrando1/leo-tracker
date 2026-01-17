@@ -30,12 +30,13 @@ def run_query(query, params=None, is_select=True):
     engine = get_engine()
     try:
         if is_select:
-            df = pd.read_sql(query, engine, params=params)
-            for col in ['data', 'log_date', 'measurement_time']:
-                if col in df.columns:
-                    try: df[col] = pd.to_datetime(df[col])
-                    except: pass
-            return df
+            with engine.connect() as conn:
+                df = pd.read_sql(text(query), conn, params=params)
+                for col in ['data', 'log_date', 'measurement_time']:
+                    if col in df.columns:
+                        try: df[col] = pd.to_datetime(df[col])
+                        except: pass
+                return df
         else:
             with engine.begin() as conn:
                 conn.execute(text(query), params)
@@ -75,12 +76,12 @@ if not df_bp.empty:
 hoje = datetime.now(pytz.timezone('America/Sao_Paulo')).date()
 DATA_INICIO = pd.to_datetime("2025-12-30").date()
 
-df_hoje = run_query("SELECT * FROM public.consumo WHERE data = %s", (hoje,))
+df_hoje = run_query("SELECT * FROM public.consumo WHERE data = :d", {"d": hoje})
 df_hist = run_query("""
     SELECT data, SUM(kcal) as tkcal, SUM(proteina) as tprot, SUM(carbo) as tcarb, 
            SUM(gordura) as tgord, SUM(quantidade) as tqtd
-    FROM public.consumo WHERE data >= %s GROUP BY data ORDER BY data ASC
-""", (DATA_INICIO,))
+    FROM public.consumo WHERE data >= :d GROUP BY data ORDER BY data ASC
+""", {"d": DATA_INICIO})
 df_peso = run_query("SELECT * FROM public.peso ORDER BY data ASC")
 
 # Variáveis de Hoje
@@ -104,6 +105,63 @@ c5.metric("⚖️ Peso", f"{PESO_ATUAL}kg", f"Alvo: {p['meta_peso_alvo']}")
 
 st.divider()
 
+# ============================================================================
+# NOVO: 🎯 PROJEÇÃO VS REALIDADE (DATA BASE 31/12/2025)
+# ============================================================================
+st.subheader("🎯 Projeção vs. Realidade")
+if not df_peso.empty:
+    df_peso['data_dt'] = pd.to_datetime(df_peso['data']).dt.date
+    
+    # Data de Início do Cálculo: 31/12/2025
+    BASE_DATE = pd.to_datetime("2025-12-31").date()
+    
+    # Peso Inicial na data base (ou o primeiro peso registrado após ela)
+    df_base = df_peso[df_peso['data_dt'] >= BASE_DATE].sort_values('data_dt')
+    
+    if not df_base.empty:
+        peso_inicial = float(df_base.iloc[0]['peso_kg'])
+        
+        # Gerar datas até hoje
+        datas_proj = pd.date_range(start=BASE_DATE, end=hoje)
+        ritmo_diario = p['ritmo_semanal'] / 7
+        
+        # Peso Estimado = Peso Inicial - (dias * ritmo_diario)
+        pesos_estimados = [peso_inicial - (i * ritmo_diario) for i in range(len(datas_proj))]
+        
+        # Cálculo de Antecipação/Atraso
+        peso_esperado_hoje = peso_inicial - ((hoje - BASE_DATE).days * ritmo_diario)
+        diferenca_peso = PESO_ATUAL - peso_esperado_hoje
+        dias_diff = diferenca_peso / ritmo_diario
+        
+        cp1, cp2, cp3 = st.columns([2, 1, 1])
+        
+        with cp1:
+            fig_proj = go.Figure()
+            # Linha de Projeção (Meta)
+            fig_proj.add_trace(go.Scatter(x=datas_proj, y=pesos_estimados, mode='lines', name='Meta (Previsto)', line=dict(color='#29B5E8', dash='dash')))
+            # Linha Real
+            fig_proj.add_trace(go.Scatter(x=df_base['data_dt'], y=df_base['peso_kg'], mode='lines+markers', name='Realizado', line=dict(color='#FF4B4B', width=3)))
+            
+            fig_proj.update_layout(height=350, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1))
+            st.plotly_chart(fig_proj, use_container_width=True)
+            
+        with cp2:
+            st.write("")
+            st.metric("Peso Esperado (Hoje)", f"{peso_esperado_hoje:.1f} kg")
+            status_cor = "normal" if dias_diff <= 0 else "inverse"
+            label_status = "Adiantado" if dias_diff <= 0 else "Atrasado"
+            st.metric(f"Status vs Cronograma", f"{abs(dias_diff):.1f} dias", f"{label_status}", delta_color=status_cor)
+
+        with cp3:
+            st.write("")
+            meta_atingir = PESO_ATUAL - p['meta_peso_alvo']
+            semanas_restantes = meta_atingir / p['ritmo_semanal']
+            data_final = hoje + timedelta(weeks=semanas_restantes)
+            st.metric("Distância do Alvo", f"{meta_atingir:.1f} kg")
+            st.metric("Previsão de Chegada", data_final.strftime('%d/%m/%y'))
+
+st.divider()
+
 # ANALYTICS AVANÇADO
 st.subheader("📉 Inteligência de Perda de Peso")
 col_a1, col_a2 = st.columns([2, 1])
@@ -121,20 +179,19 @@ with col_a2:
     st.markdown("##### 🏦 Banco de Gordura")
     if not df_hist.empty and not df_peso.empty:
         try:
-            df_hist['data'] = pd.to_datetime(df_hist['data'])
-            df_peso['data'] = pd.to_datetime(df_peso['data'])
+            df_hist['data_dt'] = pd.to_datetime(df_hist['data']).dt.date
+            df_peso['data_dt'] = pd.to_datetime(df_peso['data']).dt.date
             
-            df_merged = pd.merge_asof(df_hist.sort_values('data'), df_peso.sort_values('data'), on='data', direction='backward')
-            df_merged['peso_kg'] = df_merged['peso_kg'].fillna(146.0)
+            # Merge das tabelas para cálculo de GET dinâmico
+            df_merged = pd.merge(df_hist, df_peso[['data_dt', 'peso_kg']], on='data_dt', how='left').ffill()
             
             idade, altura = int(p.get('idade', 41)), int(p.get('altura_cm', 178))
-            # Fator 1.09 (Calibração Bioimpedância) * 1.2 (Sedentário)
             df_merged['get_dia'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * 1.09 * 1.2
             deficit_total = (df_merged['get_dia'] - df_merged['tkcal']).sum()
             kg_gordura = deficit_total / 7700
             
             st.metric("Déficit Acumulado", f"{int(deficit_total)} kcal")
-            st.metric("Gordura Eliminada", f"{kg_gordura:.2f} kg")
+            st.metric("Gordura Eliminada (Teórica)", f"{kg_gordura:.2f} kg")
         except:
             st.info("Sincronizando dados...")
     else:
@@ -142,13 +199,12 @@ with col_a2:
 
 st.divider()
 
-# SAÚDE & COMPOSIÇÃO (CORREÇÃO DE ERRO TYPEERROR)
+# SAÚDE & COMPOSIÇÃO
 st.subheader("🧬 Saúde & Composição Corporal")
 
 if not df_medidas.empty:
     l_m = df_medidas.iloc[-1]
     
-    # --- FIX: TRATAMENTO DE VALORES NULOS ---
     def safe_get(key, default=0.0):
         val = l_m.get(key)
         if pd.isna(val): return default
@@ -159,7 +215,6 @@ if not df_medidas.empty:
     bf_pol = safe_get('body_fat_pollock')
     dobra_abd = safe_get('fold_abdominal')
     
-    # Lógica de Rótulo
     if bf_welt > 0 and abs(bf_est - bf_welt) < 0.1:
         label_bf = "🐷 Gordura (Weltman)"
     elif bf_pol > 0 and abs(bf_est - bf_pol) < 0.1:
@@ -174,7 +229,6 @@ if not df_medidas.empty:
     m2.metric("📏 Cintura", f"{l_m['waist_cm']} cm")
     m3.metric("🫀 Risco (RCQ)", f"{rcq:.2f}", "Moderado" if rcq > 0.9 else "Baixo")
     
-    # Se tiver dobras (adipômetro), mostra. Se não, mostra quadril.
     if dobra_abd > 0:
         m4.metric("🤏 Dobra Abdominal", f"{dobra_abd} mm")
     else:
@@ -218,4 +272,4 @@ if not df_hist.empty:
             fig_pie.update_layout(height=350, showlegend=False, margin=dict(l=10,r=10,t=20,b=10))
             st.plotly_chart(fig_pie, use_container_width=True)
 
-st.caption("Leo Tracker Dash v2.8 | Correção TypeError + Weltman")
+st.caption("Leo Tracker Dash v3.0 | Projeção Base 31/12/25")
