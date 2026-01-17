@@ -3,7 +3,7 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 from datetime import datetime, timedelta
 import json
-import pytz 
+import pytz
 from groq import Groq 
 import io
 from fpdf import FPDF
