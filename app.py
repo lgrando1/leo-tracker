@@ -290,4 +290,135 @@ with tab_daily:
         for i, row in df_hoje.iterrows():
             c1, c2, c3 = st.columns([3, 2, 0.5])
             c1.markdown(f"**{row['alimento']}**")
-            c2.caption(f"{int(row['kcal'])} kcal | P:{int(row
+            c2.caption(f"{int(row['kcal'])} kcal | P:{int(row['proteina'])} C:{int(row['carbo'])} G:{int(row['gordura'])}")
+            if c3.button("🗑️", key=f"del_{row['id']}"):
+                executar_sql("DELETE FROM public.consumo WHERE id=:id", {'id': row['id']})
+                st.cache_data.clear(); st.rerun()
+            st.markdown("---")
+
+# --- ABA 2: GRÁFICOS E HISTÓRICO ---
+with tab_hist:
+    st.header("📉 Evolução vs Meta")
+    
+    # Busca histórico de peso
+    df_peso = executar_sql("SELECT data, peso_kg FROM public.peso ORDER BY data ASC", is_select=True)
+    
+    if not df_peso.empty:
+        df_peso['data'] = pd.to_datetime(df_peso['data'])
+        
+        # Criação da Linha de Meta (Target)
+        start_date = df_peso.iloc[0]['data']
+        start_weight = df_peso.iloc[0]['peso_kg']
+        ritmo_semanal = METAS['ritmo'] # kg por semana
+        
+        # Gera linha de tendência ideal
+        df_peso['semanas'] = (df_peso['data'] - start_date).dt.days / 7
+        df_peso['Meta Ideal'] = start_weight - (df_peso['semanas'] * ritmo_semanal)
+        
+        # Renomeia para o gráfico
+        df_chart = df_peso.set_index('data')[['peso_kg', 'Meta Ideal']]
+        df_chart.rename(columns={'peso_kg': 'Peso Real'}, inplace=True)
+        
+        st.line_chart(df_chart, color=["#FF4B4B", "#29B5E8"]) # Vermelho=Real, Azul=Meta
+        
+        # Análise de Performance
+        ultimo_real = df_peso.iloc[-1]['peso_kg']
+        ultimo_meta = df_peso.iloc[-1]['Meta Ideal']
+        diff = ultimo_real - ultimo_meta
+        
+        col_res1, col_res2 = st.columns(2)
+        col_res1.info(f"Ritmo Configurado: -{ritmo_semanal} kg/semana")
+        if diff < 0:
+            col_res2.success(f"🦁 Você está {abs(diff):.1f} kg ADIANTADO em relação à meta!")
+        else:
+            col_res2.warning(f"⚠️ Você está {diff:.1f} kg atrás da meta teórica.")
+            
+    else:
+        st.warning("Insira dados de peso para ver o gráfico.")
+
+# --- ABA 3: SAÚDE ---
+with tab_medidas:
+    st.subheader("🫀 Pressão Arterial")
+    with st.form("bp_form"):
+        c1, c2, c3 = st.columns(3)
+        sys = c1.number_input("Sistólica", 90, 200, 120)
+        dia = c2.number_input("Diastólica", 50, 130, 80)
+        pul = c3.number_input("Pulso", 40, 200, 75)
+        if st.form_submit_button("Salvar Pressão"):
+            ok = executar_sql("INSERT INTO public.blood_pressure (systolic, diastolic, pulse, notes) VALUES (:s, :d, :p, 'App')", {'s': sys, 'd': dia, 'p': pul})
+            if ok: st.success("Salvo!"); st.cache_data.clear()
+
+    st.divider()
+    st.subheader("📏 Avaliação Corporal")
+    # Formulário simplificado de Weltman
+    with st.form("medidas_form"):
+        d_med = st.date_input("Data", value=data_hoje)
+        c_m1, c_m2 = st.columns(2)
+        p_input = c_m1.number_input("Peso (kg)", 40.0, 200.0, step=0.1, value=peso_atual_sidebar)
+        waist = c_m2.number_input("Cintura (cm)", 50.0, 200.0, step=0.5, value=METAS['last_waist'])
+        
+        bf_weltman = calc_bf_weltman_obese(waist, p_input, METAS['altura'], METAS['genero'])
+        st.info(f"🧬 **BF Estimado (Weltman): {bf_weltman:.1f}%**")
+        
+        if st.form_submit_button("Salvar Medida"):
+             params = {
+                'dt': d_med, 'w': p_input, 'wa': waist, 'ne': METAS['last_neck'], 'hi': METAS['last_hip'], 
+                'bf_est': bf_weltman, 'f_pec': 0, 'f_abd': 0, 'f_thi': 0, 'f_tri': 0, 'bf_pol': 0, 'bf_wel': bf_weltman, 'nt': 'Weltman Simples'
+            }
+             executar_sql("INSERT INTO public.body_measurements (log_date, weight_kg, waist_cm, neck_cm, hip_cm, body_fat_est, fold_chest, fold_abdominal, fold_thigh, fold_triceps, body_fat_pollock, body_fat_weltman, notes) VALUES (:dt, :w, :wa, :ne, :hi, :bf_est, :f_pec, :f_abd, :f_thi, :f_tri, :bf_pol, :bf_wel, :nt)", params)
+             executar_sql("UPDATE public.perfil SET ultima_cintura=:wa WHERE id=1", {'wa': waist})
+             executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (:dt, :w)", {'dt': d_med, 'w': p_input})
+             st.success("Medidas Salvas!"); st.cache_data.clear(); st.rerun()
+
+# --- ABA 4: RELATÓRIOS ---
+with tab_rel:
+    st.header("📄 Exportar Relatórios")
+    col_pdf1, col_pdf2 = st.columns(2)
+    dias_rel = col_pdf1.slider("Período (dias)", 7, 90, 30)
+    
+    if col_pdf2.button("Gerar PDF"):
+        with st.spinner("Gerando PDF..."):
+            pdf_bytes = gerar_pdf_relatorio(dias_rel)
+            st.download_button(
+                label="📥 Baixar Relatório PDF",
+                data=pdf_bytes,
+                file_name=f"LeoTracker_Relatorio_{data_hoje}.pdf",
+                mime="application/pdf"
+            )
+
+# --- ABA 5: CONFIGURAÇÕES (RESTAURADA) ---
+with tab_admin:
+    st.header("⚙️ Configurações e Metas")
+    
+    with st.form("form_metas_completo"):
+        st.subheader("Macros e Calorias")
+        c_k1, c_k2 = st.columns(2)
+        n_kcal = c_k1.number_input("Meta Calorias", value=METAS['kcal'])
+        n_prot = c_k2.number_input("Meta Proteína (g)", value=METAS['prot'])
+        
+        c_k3, c_k4 = st.columns(2)
+        n_carb = c_k3.number_input("Meta Carbo (g)", value=METAS['carb'])
+        n_gord = c_k4.number_input("Meta Gordura (g)", value=METAS['gord'])
+        
+        st.subheader("Planejamento de Peso")
+        c_p1, c_p2 = st.columns(2)
+        n_peso_alvo = c_p1.number_input("Peso Alvo Final (kg)", value=METAS['peso_alvo'])
+        n_ritmo = c_p2.number_input("Ritmo Semanal (kg/semana)", value=METAS['ritmo'], step=0.1)
+        
+        if st.form_submit_button("💾 Atualizar Metas"):
+            sql_up = """
+                UPDATE public.perfil SET 
+                meta_kcal=:mk, meta_proteina=:mp, meta_carbo=:mc, meta_gordura=:mg, 
+                meta_peso_alvo=:mpa, ritmo_semanal=:rit 
+                WHERE id=1
+            """
+            params = {
+                'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 
+                'mpa': n_peso_alvo, 'rit': n_ritmo
+            }
+            if executar_sql(sql_up, params):
+                st.success("Metas atualizadas com sucesso!")
+                st.cache_data.clear()
+                st.rerun()
+
+st.caption("Leo Tracker Pro v6.0 | System Stable 🦁")
