@@ -22,7 +22,7 @@ def check_password():
         st.session_state["password_correct"] = False
     if st.session_state["password_correct"]: return True
     
-    st.title("🦁 Leo Tracker Pro v6.2")
+    st.title("🦁 Leo Tracker Pro v6.3")
     password = st.text_input("Senha de Acesso:", type="password")
     if st.button("Entrar"):
         if password == st.secrets.get("PASSWORD", "admin"): 
@@ -217,7 +217,7 @@ c4.metric("🥑 Gordura", f"{int(g_hoje)}g", f"Meta: {METAS['gord']}g")
 st.progress(min(k_hoje/METAS['kcal'], 1.0))
 st.divider()
 
-# ABAS - REORGANIZADAS
+# ABAS
 tab_daily, tab_graph, tab_logs, tab_health, tab_config = st.tabs(["📝 Diário", "📉 Peso", "📊 Análise & Logs", "❤️ Saúde", "⚙️ Export/Config"])
 
 # --- 1. DIÁRIO ---
@@ -252,7 +252,8 @@ with tab_daily:
         for i, row in df_hoje.iterrows():
             c1, c2, c3 = st.columns([3, 2, 0.5])
             c1.markdown(f"**{row['alimento']}**")
-            c2.caption(f"{int(row['kcal'])} kcal | P:{int(row['proteina'])} C:{int(row['carbo']} G:{int(row['gordura'])}")
+            # CORREÇÃO AQUI: Faltava o parêntese em row['carbo']
+            c2.caption(f"{int(row['kcal'])} kcal | P:{int(row['proteina'])} C:{int(row['carbo'])} G:{int(row['gordura'])}")
             if c3.button("🗑️", key=f"del_{row['id']}"):
                 executar_sql("DELETE FROM public.consumo WHERE id=:id", {'id': row['id']})
                 st.cache_data.clear(); st.rerun()
@@ -276,14 +277,12 @@ with tab_graph:
         else: st.warning(f"⚠️ {diff:.1f} kg atrás da meta.")
     else: st.warning("Sem dados.")
 
-# --- 3. ANÁLISE & LOGS (NOVA) ---
+# --- 3. ANÁLISE & LOGS ---
 with tab_logs:
     st.header("📊 Análise de Dados")
-    
     tab_resumo, tab_detalhado = st.tabs(["📅 Resumo por Dia", "📋 Extrato Detalhado"])
     
     with tab_resumo:
-        # Agrupa por dia
         sql_resumo = """
             SELECT data, SUM(kcal) as "Kcal", SUM(proteina) as "Prot", SUM(carbo) as "Carb", SUM(gordura) as "Gord" 
             FROM public.consumo 
@@ -294,7 +293,6 @@ with tab_logs:
         st.dataframe(df_resumo, use_container_width=True)
 
     with tab_detalhado:
-        # Mostra tudo
         sql_full = """
             SELECT data, alimento, quantidade, kcal, proteina as prot, carbo, gordura as gord 
             FROM public.consumo 
@@ -304,12 +302,10 @@ with tab_logs:
         df_full = executar_sql(sql_full, is_select=True)
         st.dataframe(df_full, use_container_width=True)
 
-# --- 4. SAÚDE (ATUALIZADA) ---
+# --- 4. SAÚDE ---
 with tab_health:
     st.header("❤️ Saúde & Medidas")
-    
     c_h1, c_h2 = st.columns(2)
-    
     with c_h1:
         st.subheader("🫀 Pressão Arterial")
         with st.form("bp_form"):
@@ -319,12 +315,9 @@ with tab_health:
             if st.form_submit_button("Salvar Pressão"):
                 ok = executar_sql("INSERT INTO public.blood_pressure (systolic, diastolic, pulse, notes) VALUES (:s, :d, :p, 'App')", {'s': sys, 'd': dia, 'p': pul})
                 if ok: st.success("Salvo!"); st.cache_data.clear(); st.rerun()
-        
-        # VISUALIZAÇÃO DA PRESSÃO
         st.write("Histórico (Últimos 10)")
         df_bp = executar_sql("SELECT measurement_time as data, systolic, diastolic, pulse FROM public.blood_pressure ORDER BY measurement_time DESC LIMIT 10", is_select=True)
-        if not df_bp.empty:
-            st.dataframe(df_bp, hide_index=True)
+        if not df_bp.empty: st.dataframe(df_bp, hide_index=True)
 
     with c_h2:
         st.subheader("📏 Avaliação Corporal")
@@ -340,31 +333,24 @@ with tab_health:
                  executar_sql("UPDATE public.perfil SET ultima_cintura=:wa WHERE id=1", {'wa': waist})
                  executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (:dt, :w)", {'dt': d_med, 'w': p_input})
                  st.success("Salvo!"); st.cache_data.clear(); st.rerun()
-        
-        # VISUALIZAÇÃO DAS MEDIDAS
         st.write("Histórico (Últimos 5)")
         df_med = executar_sql("SELECT log_date as data, waist_cm as cintura, body_fat_est as bf FROM public.body_measurements ORDER BY log_date DESC LIMIT 5", is_select=True)
-        if not df_med.empty:
-            st.dataframe(df_med, hide_index=True)
+        if not df_med.empty: st.dataframe(df_med, hide_index=True)
 
 # --- 5. EXPORT & CONFIG ---
 with tab_config:
     st.header("⚙️ Configurações & Backup")
-    
     st.subheader("📄 Exportar")
     c_btn1, c_btn2 = st.columns(2)
     if c_btn1.button("📄 Gerar PDF (7 dias)"):
         pdf_bytes = gerar_pdf_relatorio(7)
         st.download_button("📥 Baixar PDF", pdf_bytes, f"Relatorio_{data_hoje}.pdf", "application/pdf")
-    
     if c_btn2.button("📊 Excel Completo (Backup)"):
         try:
             excel_bytes = gerar_excel_completo()
             st.download_button("📥 Baixar XLSX", excel_bytes, f"Backup_LeoTracker_{data_hoje}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         except Exception as e: st.error(f"Erro Excel: {e}")
-    
     st.divider()
-    
     with st.form("form_metas"):
         st.subheader("Editar Metas")
         c_k1, c_k2 = st.columns(2)
@@ -380,4 +366,4 @@ with tab_config:
             executar_sql("UPDATE public.perfil SET meta_kcal=:mk, meta_proteina=:mp, meta_carbo=:mc, meta_gordura=:mg, meta_peso_alvo=:mpa, ritmo_semanal=:rit WHERE id=1", {'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 'mpa': n_peso_alvo, 'rit': n_ritmo})
             st.success("Atualizado!"); st.cache_data.clear(); st.rerun()
 
-st.caption("Leo Tracker Pro v6.2 | Data Views Restored 🦁")
+st.caption("Leo Tracker Pro v6.3 | Final Fix 🦁")
