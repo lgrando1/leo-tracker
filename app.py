@@ -104,14 +104,10 @@ def get_metas_do_banco():
         if not df.empty:
             row = df.iloc[0]
             return {
-                "kcal": int(row.get('meta_kcal', 1638)), 
-                "prot": int(row.get('meta_proteina', 108)),
-                "carb": int(row.get('meta_carbo', 164)), 
-                "gord": int(row.get('meta_gordura', 67)),
-                "peso_alvo": float(row.get('meta_peso_alvo', 120.0)), 
-                "ritmo": float(row.get('ritmo_semanal', 0.8)),
-                "altura": int(row.get('altura_cm', 178)),
-                "idade": int(row.get('idade', 41)),
+                "kcal": int(row.get('meta_kcal', 1638)), "prot": int(row.get('meta_proteina', 108)),
+                "carb": int(row.get('meta_carbo', 164)), "gord": int(row.get('meta_gordura', 67)),
+                "peso_alvo": float(row.get('meta_peso_alvo', 120.0)), "ritmo": float(row.get('ritmo_semanal', 0.8)),
+                "altura": int(row.get('altura_cm', 178)), "idade": int(row.get('idade', 41)),
                 "genero": row.get('genero', 'Masculino'),
                 "last_waist": float(row.get('ultima_cintura') or 133.0),
                 "last_neck": float(row.get('ultimo_pescoco') or 53.0),
@@ -184,9 +180,7 @@ def gerar_excel_nutri(dt_ini, dt_fim):
     else:
         df_macros = pd.DataFrame(columns=['data', 'kcal', 'proteina', 'carbo', 'gordura'])
     
-    if not df_macros.empty:
-        df_macros['data'] = pd.to_datetime(df_macros['data']).dt.normalize()
-        
+    if not df_macros.empty: df_macros['data'] = pd.to_datetime(df_macros['data']).dt.normalize()
     if not df_peso.empty:
         df_peso['data'] = pd.to_datetime(df_peso['data']).dt.normalize()
         df_peso = df_peso.drop_duplicates(subset='data', keep='last')
@@ -205,7 +199,6 @@ def gerar_excel_nutri(dt_ini, dt_fim):
         df_detalhado.to_excel(writer, sheet_name='2. Diário Detalhado', index=False)
         df_medidas.to_excel(writer, sheet_name='3. Medidas', index=False)
         df_pressao.to_excel(writer, sheet_name='4. Pressão', index=False)
-        
     return output.getvalue()
 
 # ============================================================================
@@ -266,7 +259,24 @@ with tab_daily:
                         params = {'dt': item.get('data') or data_hoje, 'ali': item.get('alimento'), 'qtd': item.get('quantidade_g'), 'kc': k_final, 'pr': item.get('p'), 'ca': item.get('c'), 'go': item.get('g'), 'gl': item.get('gluten')}
                         executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (:dt, :ali, :qtd, :kc, :pr, :ca, :go, :gl)", params)
                     st.cache_resource.clear(); st.rerun()
-                else: st.error(f"Falha na IA: {res}")
+
+    # --- RESTAURAÇÃO: ENTRADA VIA JSON MANUAL ---
+    with st.expander("📥 Importação JSON Manual (Gemini/GPT)"):
+        st.info("Cole aqui o JSON gerado externamente:")
+        json_manual = st.text_area("JSON", label_visibility="collapsed", height=150)
+        if st.button("Salvar JSON Manual"):
+            try:
+                cleaned = json_manual.replace('```json', '').replace('```', '')
+                start, end = cleaned.find('['), cleaned.rfind(']')
+                if start != -1 and end != -1: cleaned = cleaned[start:end+1]
+                lista = json.loads(cleaned)
+                for item in (lista if isinstance(lista, list) else [lista]):
+                    dt = item.get('data') if item.get('data') else data_hoje
+                    k_final = max((float(item.get('p',0))*4 + float(item.get('c',0))*4 + float(item.get('g',0))*9), float(item.get('kcal', 0)))
+                    params = {'dt': dt, 'ali': item.get('alimento'), 'qtd': item.get('quantidade_g'), 'kcal': k_final, 'prot': item.get('p'), 'carb': item.get('c'), 'gord': item.get('g'), 'glut': item.get('gluten')}
+                    executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (:dt, :ali, :qtd, :kcal, :prot, :carb, :gord, :glut)", params)
+                st.success("Importado!"); st.cache_resource.clear(); st.rerun()
+            except Exception as e: st.error(f"Erro no JSON: {e}")
 
     st.subheader("Hoje")
     if not df_hoje.empty:
@@ -280,83 +290,52 @@ with tab_daily:
             st.markdown("---")
     else: st.info("Nada registrado hoje.")
 
-# --- ABA HISTÓRICO ---
+# --- DEMAIS ABAS MANTIDAS ---
 with tab_hist:
     st.header("Histórico Completo")
     df_all = executar_sql("SELECT * FROM public.consumo ORDER BY data DESC LIMIT 50", is_select=True)
     if not df_all.empty: st.dataframe(df_all)
 
-# --- ABA SAÚDE ---
 with tab_medidas:
     st.subheader("🫀 Pressão Arterial")
     with st.form("bp_form"):
         c1, c2, c3 = st.columns(3)
-        sys = c1.number_input("Sistólica", 90, 200, 120)
-        dia = c2.number_input("Diastólica", 50, 130, 80)
-        pul = c3.number_input("Pulso", 40, 200, 75)
+        sys = c1.number_input("Sistólica", 90, 200, 120); dia = c2.number_input("Diastólica", 50, 130, 80); pul = c3.number_input("Pulso", 40, 200, 75)
         if st.form_submit_button("Salvar Pressão"):
             ok = executar_sql("INSERT INTO public.blood_pressure (systolic, diastolic, pulse, notes) VALUES (:s, :d, :p, 'App')", {'s': sys, 'd': dia, 'p': pul})
             if ok: st.rerun()
-
-    st.divider()
-    st.subheader("📏 Avaliação Corporal")
+    st.divider(); st.subheader("📏 Avaliação Corporal")
     with st.form("medidas_form"):
         d_med = st.date_input("Data", value=data_hoje)
-        c_m1, c_m2 = st.columns(2)
-        p_input = c_m1.number_input("Peso Atual (kg)", 40.0, 200.0, step=0.1, value=peso_atual_sidebar)
-        waist = c_m2.number_input("Cintura (cm)", 50.0, 200.0, step=0.5, value=METAS['last_waist'])
+        p_input = st.number_input("Peso Atual (kg)", 40.0, 200.0, step=0.1, value=peso_atual_sidebar)
+        waist = st.number_input("Cintura (cm)", 50.0, 200.0, step=0.5, value=METAS['last_waist'])
         bf_weltman = calc_bf_weltman_obese(waist, p_input, METAS['altura'], METAS['genero'])
         st.info(f"🧬 **BF Weltman: {bf_weltman:.1f}%**")
         if st.form_submit_button("Salvar Avaliação"):
             params = {'dt': d_med, 'w': p_input, 'wa': waist, 'ne': METAS['last_neck'], 'hi': METAS['last_hip'], 'bf_est': bf_weltman, 'f_pec': 0, 'f_abd': 0, 'f_thi': 0, 'f_tri': 0, 'bf_pol': 0, 'bf_wel': bf_weltman, 'nt': 'Weltman Simples'}
-            sql_med = "INSERT INTO public.body_measurements (log_date, weight_kg, waist_cm, neck_cm, hip_cm, body_fat_est, fold_chest, fold_abdominal, fold_thigh, fold_triceps, body_fat_pollock, body_fat_weltman, notes) VALUES (:dt, :w, :wa, :ne, :hi, :bf_est, :f_pec, :f_abd, :f_thi, :f_tri, :bf_pol, :bf_wel, :nt)"
-            executar_sql(sql_med, params)
+            executar_sql("INSERT INTO public.body_measurements (log_date, weight_kg, waist_cm, neck_cm, hip_cm, body_fat_est, fold_chest, fold_abdominal, fold_thigh, fold_triceps, body_fat_pollock, body_fat_weltman, notes) VALUES (:dt, :w, :wa, :ne, :hi, :bf_est, :f_pec, :f_abd, :f_thi, :f_tri, :bf_pol, :bf_wel, :nt)", params)
             executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (:dt, :w)", {'dt': d_med, 'w': p_input})
             executar_sql("UPDATE public.perfil SET ultima_cintura=:wa WHERE id=1", {'wa': waist})
             st.cache_resource.clear(); st.rerun()
 
-# --- ABA RELATÓRIOS ---
 with tab_rel:
-    st.header("📄 Relatório para Nutricionista")
+    st.header("📄 Relatórios")
     col_d1, col_d2 = st.columns(2)
-    dt_ini = col_d1.date_input("Data Inicial", value=data_hoje - timedelta(days=30))
-    dt_fim = col_d2.date_input("Data Final", value=data_hoje)
+    dt_ini = col_d1.date_input("Data Inicial", value=data_hoje - timedelta(days=30)); dt_fim = col_d2.date_input("Data Final", value=data_hoje)
     if st.button("📊 Baixar Relatório Completo (.xlsx)"):
         try:
             excel_data = gerar_excel_nutri(dt_ini, dt_fim)
-            st.download_button(label="📥 Clique para Download", data=excel_data, file_name=f"Relatorio_Nutri_Leo_{dt_ini}_{dt_fim}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        except Exception as e: st.error(f"Erro ao gerar Excel: {e}")
+            st.download_button(label="📥 Download", data=excel_data, file_name=f"Relatorio_Nutri_Leo.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        except Exception as e: st.error(f"Erro: {e}")
 
-# --- ABA CONFIGURAÇÕES (RESTAURADA) ---
 with tab_admin:
-    st.header("⚙️ Configurações & Metas")
+    st.header("⚙️ Configurações")
     with st.form("form_metas_completo"):
-        st.subheader("🎯 Metas de Nutrição")
-        c_k1, c_k2 = st.columns(2)
-        n_kcal = c_k1.number_input("Meta Diária Calorias (kcal)", value=METAS['kcal'])
-        n_prot = c_k2.number_input("Meta Diária Proteína (g)", value=METAS['prot'])
-        
-        c_k3, c_k4 = st.columns(2)
-        n_carb = c_k3.number_input("Meta Diária Carbo (g)", value=METAS['carb'])
-        n_gord = c_k4.number_input("Meta Diária Gordura (g)", value=METAS['gord'])
-        
-        st.divider()
-        st.subheader("📉 Metas de Peso")
-        c_p1, c_p2 = st.columns(2)
-        n_peso_alvo = c_p1.number_input("Peso Alvo Final (kg)", value=METAS['peso_alvo'])
-        n_ritmo = c_p2.number_input("Ritmo de Perda (kg/semana)", value=METAS['ritmo'], step=0.1)
-        
-        if st.form_submit_button("💾 Salvar Todas as Metas"):
-            sql_upd = """
-                UPDATE public.perfil SET 
-                meta_kcal=:mk, meta_proteina=:mp, meta_carbo=:mc, 
-                meta_gordura=:mg, meta_peso_alvo=:mpa, ritmo_semanal=:rit 
-                WHERE id=1
-            """
-            params_upd = {'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 'mpa': n_peso_alvo, 'rit': n_ritmo}
-            if executar_sql(sql_upd, params_upd):
-                st.success("Metas atualizadas com sucesso!")
-                st.cache_resource.clear()
-                st.rerun()
+        c_k1, c_k2 = st.columns(2); n_kcal = c_k1.number_input("Calorias", value=METAS['kcal']); n_prot = c_k2.number_input("Proteína", value=METAS['prot'])
+        c_k3, c_k4 = st.columns(2); n_carb = c_k3.number_input("Carbo", value=METAS['carb']); n_gord = c_k4.number_input("Gordura", value=METAS['gord'])
+        c_p1, c_p2 = st.columns(2); n_peso_alvo = c_p1.number_input("Peso Alvo", value=METAS['peso_alvo']); n_ritmo = c_p2.number_input("Ritmo", value=METAS['ritmo'])
+        if st.form_submit_button("💾 Salvar Metas"):
+            executar_sql("UPDATE public.perfil SET meta_kcal=:mk, meta_proteina=:mp, meta_carbo=:mc, meta_gordura=:mg, meta_peso_alvo=:mpa, ritmo_semanal=:rit WHERE id=1", {'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 'mpa': n_peso_alvo, 'rit': n_ritmo})
+            st.cache_resource.clear(); st.rerun()
 
-st.caption("Leo Tracker Pro v6.4 | Full Config Restored")
+st.caption("Leo Tracker Pro v6.5 | JSON Import Restored")
