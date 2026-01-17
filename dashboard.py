@@ -111,47 +111,31 @@ st.divider()
 st.subheader("🎯 Projeção vs. Realidade")
 if not df_peso.empty:
     df_peso['data_dt'] = pd.to_datetime(df_peso['data']).dt.date
-    
-    # Data de Início do Cálculo: 31/12/2025
     BASE_DATE = pd.to_datetime("2025-12-31").date()
-    
-    # Peso Inicial na data base (ou o primeiro peso registrado após ela)
     df_base = df_peso[df_peso['data_dt'] >= BASE_DATE].sort_values('data_dt')
     
     if not df_base.empty:
         peso_inicial = float(df_base.iloc[0]['peso_kg'])
-        
-        # Gerar datas até hoje
         datas_proj = pd.date_range(start=BASE_DATE, end=hoje)
         ritmo_diario = p['ritmo_semanal'] / 7
-        
-        # Peso Estimado = Peso Inicial - (dias * ritmo_diario)
         pesos_estimados = [peso_inicial - (i * ritmo_diario) for i in range(len(datas_proj))]
-        
-        # Cálculo de Antecipação/Atraso
         peso_esperado_hoje = peso_inicial - ((hoje - BASE_DATE).days * ritmo_diario)
         diferenca_peso = PESO_ATUAL - peso_esperado_hoje
         dias_diff = diferenca_peso / ritmo_diario
         
         cp1, cp2, cp3 = st.columns([2, 1, 1])
-        
         with cp1:
             fig_proj = go.Figure()
-            # Linha de Projeção (Meta)
             fig_proj.add_trace(go.Scatter(x=datas_proj, y=pesos_estimados, mode='lines', name='Meta (Previsto)', line=dict(color='#29B5E8', dash='dash')))
-            # Linha Real
             fig_proj.add_trace(go.Scatter(x=df_base['data_dt'], y=df_base['peso_kg'], mode='lines+markers', name='Realizado', line=dict(color='#FF4B4B', width=3)))
-            
             fig_proj.update_layout(height=350, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1))
             st.plotly_chart(fig_proj, use_container_width=True)
-            
         with cp2:
             st.write("")
             st.metric("Peso Esperado (Hoje)", f"{peso_esperado_hoje:.1f} kg")
             status_cor = "normal" if dias_diff <= 0 else "inverse"
             label_status = "Adiantado" if dias_diff <= 0 else "Atrasado"
             st.metric(f"Status vs Cronograma", f"{abs(dias_diff):.1f} dias", f"{label_status}", delta_color=status_cor)
-
         with cp3:
             st.write("")
             meta_atingir = PESO_ATUAL - p['meta_peso_alvo']
@@ -181,21 +165,15 @@ with col_a2:
         try:
             df_hist['data_dt'] = pd.to_datetime(df_hist['data']).dt.date
             df_peso['data_dt'] = pd.to_datetime(df_peso['data']).dt.date
-            
-            # Merge das tabelas para cálculo de GET dinâmico
             df_merged = pd.merge(df_hist, df_peso[['data_dt', 'peso_kg']], on='data_dt', how='left').ffill()
-            
             idade, altura = int(p.get('idade', 41)), int(p.get('altura_cm', 178))
             df_merged['get_dia'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * 1.09 * 1.2
             deficit_total = (df_merged['get_dia'] - df_merged['tkcal']).sum()
             kg_gordura = deficit_total / 7700
-            
             st.metric("Déficit Acumulado", f"{int(deficit_total)} kcal")
             st.metric("Gordura Eliminada (Teórica)", f"{kg_gordura:.2f} kg")
-        except:
-            st.info("Sincronizando dados...")
-    else:
-        st.info("Aguardando dados...")
+        except: st.info("Sincronizando dados...")
+    else: st.info("Aguardando dados...")
 
 st.divider()
 
@@ -204,35 +182,24 @@ st.subheader("🧬 Saúde & Composição Corporal")
 
 if not df_medidas.empty:
     l_m = df_medidas.iloc[-1]
-    
     def safe_get(key, default=0.0):
         val = l_m.get(key)
         if pd.isna(val): return default
         return float(val)
 
-    bf_est = safe_get('body_fat_est')
-    bf_welt = safe_get('body_fat_weltman')
-    bf_pol = safe_get('body_fat_pollock')
-    dobra_abd = safe_get('fold_abdominal')
+    bf_est, bf_welt, bf_pol, dobra_abd = safe_get('body_fat_est'), safe_get('body_fat_weltman'), safe_get('body_fat_pollock'), safe_get('fold_abdominal')
     
-    if bf_welt > 0 and abs(bf_est - bf_welt) < 0.1:
-        label_bf = "🐷 Gordura (Weltman)"
-    elif bf_pol > 0 and abs(bf_est - bf_pol) < 0.1:
-        label_bf = "🐷 Gordura (Pollock)"
-    else:
-        label_bf = "🐷 Gordura (Navy/Est)"
+    if bf_welt > 0 and abs(bf_est - bf_welt) < 0.1: label_bf = "🐷 Gordura (Weltman)"
+    elif bf_pol > 0 and abs(bf_est - bf_pol) < 0.1: label_bf = "🐷 Gordura (Pollock)"
+    else: label_bf = "🐷 Gordura (Navy/Est)"
 
     rcq = l_m['waist_cm'] / l_m['hip_cm'] if l_m['hip_cm'] > 0 else 0
-    
     m1, m2, m3, m4 = st.columns(4)
     m1.metric(label_bf, f"{bf_est:.1f}%")
     m2.metric("📏 Cintura", f"{l_m['waist_cm']} cm")
     m3.metric("🫀 Risco (RCQ)", f"{rcq:.2f}", "Moderado" if rcq > 0.9 else "Baixo")
-    
-    if dobra_abd > 0:
-        m4.metric("🤏 Dobra Abdominal", f"{dobra_abd} mm")
-    else:
-        m4.metric("📐 Quadril", f"{l_m['hip_cm']} cm")
+    if dobra_abd > 0: m4.metric("🤏 Dobra Abdominal", f"{dobra_abd} mm")
+    else: m4.metric("📐 Quadril", f"{l_m['hip_cm']} cm")
 
 col_left, col_right = st.columns(2)
 with col_left:
@@ -252,43 +219,29 @@ with col_right:
 
 st.divider()
 
-# NUTRIÇÃO
+# NUTRIÇÃO (COM GRÁFICO DE LINHA DE META)
 st.subheader("🍽️ Comportamento Alimentar")
 
-# --- NOVO: GRÁFICO VOLUME VS CALORIAS ---
 if not df_hist.empty:
     st.markdown("##### ⚖️ Volume de Comida (g) vs. Energia (kcal)")
-    # Gráfico de eixo duplo
     fig_vol = make_subplots(specs=[[{"secondary_y": True}]])
 
     # Barras de Calorias
-    fig_vol.add_trace(
-        go.Bar(x=df_hist['data'], y=df_hist['tkcal'], name="Calorias (kcal)", marker_color='#e74c3c', opacity=0.7),
-        secondary_y=False
-    )
+    fig_vol.add_trace(go.Bar(x=df_hist['data'], y=df_hist['tkcal'], name="Calorias (kcal)", marker_color='#e74c3c', opacity=0.7), secondary_y=False)
+    # Linha de Volume
+    fig_vol.add_trace(go.Scatter(x=df_hist['data'], y=df_hist['tqtd'], name="Volume (g)", mode='lines+markers', line=dict(color='#3498db', width=3)), secondary_y=True)
+    
+    # --- NOVA LINHA DE META DA MARCELA ---
+    fig_vol.add_hline(y=p['meta_kcal'], line_dash="dash", line_color="#27ae60", annotation_text=f"Meta Marcela ({p['meta_kcal']} kcal)", annotation_position="top left", secondary_y=False)
 
-    # Linha de Quantidade (g)
-    fig_vol.add_trace(
-        go.Scatter(x=df_hist['data'], y=df_hist['tqtd'], name="Volume (g)", mode='lines+markers', line=dict(color='#3498db', width=3)),
-        secondary_y=True
-    )
-
-    fig_vol.update_layout(
-        height=350,
-        margin=dict(l=10,r=10,t=20,b=10),
-        legend=dict(orientation="h", y=1.1),
-        yaxis=dict(title="Energia (kcal)", showgrid=False),
-        yaxis2=dict(title="Volume (g)", showgrid=False)
-    )
+    fig_vol.update_layout(height=350, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1), yaxis=dict(title="Energia (kcal)", showgrid=False), yaxis2=dict(title="Volume (g)", showgrid=False))
     st.plotly_chart(fig_vol, use_container_width=True)
 
-    # MACROS E PIZZA (CÓDIGO ORIGINAL MANTIDO)
     c_n1, c_n2 = st.columns([2, 1])
     with c_n1:
         st.markdown("##### Distribuição de Macros")
         df_macros = df_hist.copy()
-        df_macros['tot'] = (df_macros['tprot']*4 + df_macros['tcarb']*4 + df_macros['tgord']*9)
-        df_macros['tot'] = df_macros['tot'].replace(0, 1)
+        df_macros['tot'] = (df_macros['tprot']*4 + df_macros['tcarb']*4 + df_macros['tgord']*9).replace(0, 1)
         fig_stack = go.Figure()
         fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tprot']*4/df_macros['tot'])*100, name='Prot', marker_color='#3366CC'))
         fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tgord']*9/df_macros['tot'])*100, name='Gord', marker_color='#DC3912'))
@@ -302,4 +255,4 @@ if not df_hist.empty:
             fig_pie.update_layout(height=350, showlegend=False, margin=dict(l=10,r=10,t=20,b=10))
             st.plotly_chart(fig_pie, use_container_width=True)
 
-st.caption("Leo Tracker Dash v3.1 | Vol x Kcal Added")
+st.caption("Leo Tracker Dash v3.2 | Meta Line Added")
