@@ -6,7 +6,6 @@ import json
 import pytz 
 from groq import Groq 
 import io
-from fpdf import FPDF
 import math
 
 # ============================================================================
@@ -63,7 +62,7 @@ def executar_sql(sql, params=None, is_select=False):
         return False
 
 # ============================================================================
-# 3. SETUP BÁSICO
+# 3. SINCRONIZAÇÃO DO BANCO
 # ============================================================================
 def inicializar_banco():
     executar_sql("CREATE TABLE IF NOT EXISTS public.consumo (id SERIAL PRIMARY KEY, data DATE, alimento TEXT, quantidade REAL, kcal REAL, proteina REAL, carbo REAL, gordura REAL, gluten TEXT DEFAULT 'Não informado');")
@@ -76,7 +75,6 @@ def inicializar_banco():
             meta_kcal REAL, meta_proteina REAL, meta_carbo REAL, meta_gordura REAL, meta_peso_alvo REAL
         );
     """)
-    # Migrações silenciosas
     for c in ['ultimo_pescoco', 'ultima_cintura', 'ultimo_quadril']:
         try: executar_sql(f"ALTER TABLE public.perfil ADD COLUMN IF NOT EXISTS {c} REAL;")
         except: pass
@@ -131,10 +129,8 @@ def calc_bf_navy(waist, neck, height):
 def calc_bf_weltman_obese(waist, weight_kg, height_cm, gender):
     if waist <= 0 or weight_kg <= 0: return 0.0
     try:
-        if gender == 'Masculino':
-            return (0.31457 * waist) - (0.10969 * weight_kg) + 10.8336
-        else:
-            return (0.11077 * waist) - (0.17666 * height_cm) + (0.14354 * weight_kg) + 51.03301
+        if gender == 'Masculino': return (0.31457 * waist) - (0.10969 * weight_kg) + 10.8336
+        else: return (0.11077 * waist) - (0.17666 * height_cm) + (0.14354 * weight_kg) + 51.03301
     except: return 0.0
 
 def calc_bf_pollock_3(chest, abdominal, thigh, age):
@@ -146,7 +142,7 @@ def calc_bf_pollock_3(chest, abdominal, thigh, age):
     except: return 0.0
 
 # ============================================================================
-# 5. GROQ IA (CORREÇÃO DE PARSER)
+# 5. GROQ IA
 # ============================================================================
 def processar_texto_ia(texto_usuario, api_key):
     client = Groq(api_key=api_key)
@@ -158,36 +154,71 @@ def processar_texto_ia(texto_usuario, api_key):
     """
     try:
         completion = client.chat.completions.create(messages=[{"role": "system", "content": prompt_system}, {"role": "user", "content": texto_usuario}], model="llama-3.3-70b-versatile", response_format={"type": "json_object"})
-        
-        # 1. PEGA O CONTEÚDO BRUTO
         raw_content = completion.choices[0].message.content
-        
-        # 2. LIMPEZA DE MARKDOWN (O Llama adora colocar ```json no começo)
         cleaned_content = raw_content.replace("```json", "").replace("```", "").strip()
-        
-        # 3. SEGURANÇA EXTRA: Tenta achar onde começa e termina o JSON
         start_idx = cleaned_content.find('{')
         end_idx = cleaned_content.rfind('}')
-        if start_idx != -1 and end_idx != -1:
-             cleaned_content = cleaned_content[start_idx:end_idx+1]
-        
-        # 4. PARSE
+        if start_idx != -1 and end_idx != -1: cleaned_content = cleaned_content[start_idx:end_idx+1]
         content = json.loads(cleaned_content)
-        
-        # 5. PROTEÇÃO DE ESTRUTURA
         if isinstance(content, list): content = {"analise": "Processado (Lista Direta)", "alimentos": content}
-        
         return True, content
-        
     except Exception as e:
-        # Retorna o erro e o texto cru para debug
-        return False, f"Erro: {str(e)} | Resposta da IA: {completion.choices[0].message.content if 'completion' in locals() else 'Sem resposta'}"
+        return False, f"Erro: {str(e)}"
 
 # ============================================================================
-# 6. INTERFACE
+# 6. GERADOR DE EXCEL (NOVO)
+# ============================================================================
+def gerar_excel_nutri(dt_ini, dt_fim):
+    output = io.BytesIO()
+    
+    # 1. Busca Dados Brutos
+    params = {'d1': dt_ini, 'd2': dt_fim}
+    
+    # Consumo Detalhado
+    df_detalhado = executar_sql("SELECT data, alimento, quantidade, kcal, proteina, carbo, gordura FROM public.consumo WHERE data >= :d1 AND data <= :d2 ORDER BY data DESC", params, is_select=True)
+    
+    # Peso
+    df_peso = executar_sql("SELECT data, peso_kg FROM public.peso WHERE data >= :d1 AND data <= :d2 ORDER BY data DESC", params, is_select=True)
+    
+    # Medidas
+    df_medidas = executar_sql("SELECT log_date as data, weight_kg as peso, waist_cm as cintura, body_fat_est as bf_estimado, notes FROM public.body_measurements WHERE log_date >= :d1 AND log_date <= :d2 ORDER BY log_date DESC", params, is_select=True)
+    
+    # Pressão
+    df_pressao = executar_sql("SELECT measurement_time as data_hora, systolic, diastolic, pulse FROM public.blood_pressure WHERE measurement_time >= :d1 AND measurement_time <= :d2 ORDER BY measurement_time DESC", params, is_select=True)
+
+    # 2. Cria Aba Resumo (Merge de Macros + Peso do dia)
+    # Agrupa consumo por dia
+    if not df_detalhado.empty:
+        df_macros = df_detalhado.groupby('data')[['kcal', 'proteina', 'carbo', 'gordura']].sum().reset_index()
+    else:
+        df_macros = pd.DataFrame(columns=['data', 'kcal', 'proteina', 'carbo', 'gordura'])
+    
+    # Garante datas compatíveis para merge
+    if not df_peso.empty: df_peso['data'] = pd.to_datetime(df_peso['data'])
+    if not df_macros.empty: df_macros['data'] = pd.to_datetime(df_macros['data'])
+    
+    # Merge
+    if not df_macros.empty or not df_peso.empty:
+        df_resumo = pd.merge(df_macros, df_peso, on='data', how='outer').sort_values('data', ascending=False)
+        # Formata colunas para ficar bonito
+        df_resumo = df_resumo[['data', 'peso_kg', 'kcal', 'proteina', 'carbo', 'gordura']]
+        df_resumo.columns = ['Data', 'Peso (kg)', 'Calorias (kcal)', 'Proteína (g)', 'Carbo (g)', 'Gordura (g)']
+    else:
+        df_resumo = pd.DataFrame(columns=['Data', 'Peso', 'Kcal', 'Prot', 'Carb', 'Gord'])
+
+    # 3. Grava Excel
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df_resumo.to_excel(writer, sheet_name='1. Resumo Diário', index=False)
+        df_detalhado.to_excel(writer, sheet_name='2. Diário Detalhado', index=False)
+        df_medidas.to_excel(writer, sheet_name='3. Medidas', index=False)
+        df_pressao.to_excel(writer, sheet_name='4. Pressão', index=False)
+        
+    return output.getvalue()
+
+# ============================================================================
+# 7. INTERFACE
 # ============================================================================
 st.title("🦁 Leo Tracker Pro")
-
 data_hoje = get_now_br().date()
 df_hoje = executar_sql("SELECT * FROM public.consumo WHERE data = :d", {'d': data_hoje}, is_select=True)
 
@@ -198,7 +229,7 @@ peso_atual_sidebar = float(ultimo_peso_df.iloc[0]['peso_kg']) if not ultimo_peso
 st.sidebar.metric("Peso Atual", f"{peso_atual_sidebar} kg", f"Meta: {METAS['peso_alvo']} kg")
 st.sidebar.progress(min(max(0.0, (150 - peso_atual_sidebar) / (150 - METAS['peso_alvo'])), 1.0))
 
-# Métricas Topo (Blindadas)
+# Métricas Topo
 k_hoje = float(df_hoje['kcal'].sum()) if not df_hoje.empty else 0.0
 p_hoje = float(df_hoje['proteina'].sum()) if not df_hoje.empty else 0.0
 c_hoje = float(df_hoje['carbo'].sum()) if not df_hoje.empty else 0.0
@@ -215,9 +246,8 @@ st.divider()
 # ABAS
 tab_daily, tab_hist, tab_medidas, tab_rel, tab_admin = st.tabs(["📝 Diário", "📜 Histórico", "❤️ Saúde", "📄 Relatórios", "⚙️ Configurações"])
 
-# --- ABA 1: DIÁRIO ---
+# --- ABA DIÁRIO ---
 with tab_daily:
-    # 1. PESO RÁPIDO
     with st.container():
         st.markdown("##### ⚖️ Peso de Hoje")
         with st.form("form_peso_diario_top"):
@@ -226,12 +256,9 @@ with tab_daily:
             p_val = cp2.number_input("Peso (kg)", 40.0, 200.0, step=0.1, value=peso_atual_sidebar, label_visibility="collapsed")
             if cp3.form_submit_button("💾 Salvar Peso", use_container_width=True):
                 ok = executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (:d, :p)", {'d': d_peso, 'p': p_val})
-                if ok:
-                    st.cache_resource.clear()
-                    st.rerun()
+                if ok: st.cache_resource.clear(); st.rerun()
     st.divider()
 
-    # 2. IA DE COMIDA
     st.write("### 🍎 O que você comeu?")
     texto_input = st.text_area("Descrição", height=100, label_visibility="collapsed", placeholder="Ex: 2 ovos mexidos e café preto")
     if st.button("🚀 Processar Alimentação (IA)"):
@@ -242,39 +269,14 @@ with tab_daily:
                 if ok_ia:
                     st.success(res.get('analise'))
                     for item in res.get('alimentos', []):
-                        k_calc = (item.get('p',0)*4 + item.get('c',0)*4 + item.get('g',0)*9)
-                        k_final = max(k_calc, float(item.get('kcal', 0)))
-                        
-                        params = {
-                            'dt': item.get('data') or data_hoje, 
-                            'ali': item.get('alimento'), 'qtd': item.get('quantidade_g'), 
-                            'kc': k_final, 'pr': item.get('p'), 'ca': item.get('c'), 'go': item.get('g'), 'gl': item.get('gluten')
-                        }
-                        ok_db = executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (:dt, :ali, :qtd, :kc, :pr, :ca, :go, :gl)", params)
-                        if not ok_db: st.stop()
-                    
-                    st.cache_resource.clear()
-                    st.rerun()
-                else:
-                    # Exibe o erro de forma clara
-                    st.error(f"Falha na IA: {res}")
+                        k_final = max((item.get('p',0)*4 + item.get('c',0)*4 + item.get('g',0)*9), float(item.get('kcal', 0)))
+                        params = {'dt': item.get('data') or data_hoje, 'ali': item.get('alimento'), 'qtd': item.get('quantidade_g'), 'kc': k_final, 'pr': item.get('p'), 'ca': item.get('c'), 'go': item.get('g'), 'gl': item.get('gluten')}
+                        executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (:dt, :ali, :qtd, :kc, :pr, :ca, :go, :gl)", params)
+                    st.cache_resource.clear(); st.rerun()
+                else: st.error(f"Falha na IA: {res}")
 
-    # 3. JSON MANUAL (Backup)
     with st.expander("Importação JSON Manual"):
-        st.info("Copie este prompt para o Gemini junto com a foto:")
-        st.code(f"""
-Aja como nutricionista. Analise a imagem e retorne APENAS este JSON cru (sem markdown):
-[
-  {{
-    "data": "{data_hoje.strftime('%Y-%m-%d')}",
-    "alimento": "Nome",
-    "quantidade_g": 0,
-    "kcal": 0,
-    "p": 0, "c": 0, "g": 0,
-    "gluten": "Não contém"
-  }}
-]
-        """, language="json")
+        st.info("Prompt Gemini...")
         json_manual = st.text_area("JSON", label_visibility="collapsed")
         if st.button("Salvar JSON"):
             try:
@@ -284,37 +286,31 @@ Aja como nutricionista. Analise a imagem e retorne APENAS este JSON cru (sem mar
                 lista = json.loads(cleaned)
                 for item in (lista if isinstance(lista, list) else [lista]):
                     dt = item.get('data') if item.get('data') else data_hoje
-                    k_calc = (float(item.get('p',0))*4 + float(item.get('c',0))*4 + float(item.get('g',0))*9)
-                    k_final = max(k_calc, float(item.get('kcal', 0)))
-                    params = {
-                        'dt': dt, 'ali': item.get('alimento'), 'qtd': item.get('quantidade_g'), 
-                        'kcal': k_final, 'prot': item.get('p'), 'carb': item.get('c'), 'gord': item.get('g'), 'glut': item.get('gluten')
-                    }
+                    k_final = max((float(item.get('p',0))*4 + float(item.get('c',0))*4 + float(item.get('g',0))*9), float(item.get('kcal', 0)))
+                    params = {'dt': dt, 'ali': item.get('alimento'), 'qtd': item.get('quantidade_g'), 'kcal': k_final, 'prot': item.get('p'), 'carb': item.get('c'), 'gord': item.get('g'), 'glut': item.get('gluten')}
                     executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (:dt, :ali, :qtd, :kcal, :prot, :carb, :gord, :glut)", params)
-                st.cache_resource.clear()
-                st.rerun()
-            except Exception as e: st.error(f"Erro no JSON: {e}")
+                st.cache_resource.clear(); st.rerun()
+            except Exception as e: st.error(f"Erro: {e}")
 
-    # 4. LISTA DO DIA
     st.subheader("Hoje")
     if not df_hoje.empty:
         for i, row in df_hoje.iterrows():
             c1, c2, c3 = st.columns([3, 2, 0.5])
             c1.markdown(f"**{row['alimento']}**")
             c2.caption(f"{int(row['kcal'])} kcal | P:{int(row['proteina'])} G:{int(row['gordura'])}")
-            if c3.button("❌", key=f"del_d_{row['id']}"):
+            if c3.button("❌", key=f"d_{row['id']}"):
                 executar_sql("DELETE FROM public.consumo WHERE id=:id", {'id': row['id']})
-                st.cache_resource.clear()
-                st.rerun()
+                st.cache_resource.clear(); st.rerun()
             st.markdown("---")
     else: st.info("Nada registrado hoje.")
 
+# --- ABA HISTÓRICO ---
 with tab_hist:
     st.header("Histórico Completo")
     df_all = executar_sql("SELECT * FROM public.consumo ORDER BY data DESC LIMIT 50", is_select=True)
-    if not df_all.empty:
-        st.dataframe(df_all)
+    if not df_all.empty: st.dataframe(df_all)
 
+# --- ABA SAÚDE ---
 with tab_medidas:
     st.subheader("🫀 Pressão Arterial")
     with st.form("bp_form"):
@@ -341,19 +337,37 @@ with tab_medidas:
             executar_sql(sql_med, params)
             executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (:dt, :w)", {'dt': d_med, 'w': p_input})
             executar_sql("UPDATE public.perfil SET ultima_cintura=:wa WHERE id=1", {'wa': waist})
-            st.cache_resource.clear()
-            st.rerun()
+            st.cache_resource.clear(); st.rerun()
 
+# --- ABA RELATÓRIOS (NOVA LÓGICA) ---
 with tab_rel:
-    st.header("Relatórios")
-    if st.button("Gerar Relatório"): st.info("Funcionalidade pronta.")
+    st.header("📄 Relatório para Nutricionista")
+    st.markdown("Selecione o período para gerar o arquivo Excel com: **Resumo Diário (Peso x Macros)**, **Diário Detalhado**, **Medidas** e **Pressão**.")
+    
+    col_d1, col_d2 = st.columns(2)
+    dt_ini = col_d1.date_input("Data Inicial", value=data_hoje - timedelta(days=30))
+    dt_fim = col_d2.date_input("Data Final", value=data_hoje)
+    
+    if st.button("📊 Baixar Relatório Completo (.xlsx)"):
+        try:
+            excel_data = gerar_excel_nutri(dt_ini, dt_fim)
+            st.download_button(
+                label="📥 Clique para Download",
+                data=excel_data,
+                file_name=f"Relatorio_Nutri_Leo_{dt_ini}_{dt_fim}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            st.success("Arquivo gerado com sucesso!")
+        except Exception as e:
+            st.error(f"Erro ao gerar Excel: {e}")
 
+# --- ABA CONFIG ---
 with tab_admin:
-    st.header("⚙️ Configurações & Metas")
+    st.header("⚙️ Configurações")
     with st.form("form_admin_simple"):
         n_peso = st.number_input("Peso Alvo (kg)", value=METAS['peso_alvo'])
         if st.form_submit_button("Salvar"):
              executar_sql("UPDATE public.perfil SET meta_peso_alvo=:p WHERE id=1", {'p': n_peso})
              st.rerun()
 
-st.caption("Leo Tracker Pro v6.1 | Groq Fix + List Update")
+st.caption("Leo Tracker Pro v6.2 | Excel Nutri Reports")
