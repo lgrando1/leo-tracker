@@ -104,9 +104,12 @@ def get_metas_do_banco():
         if not df.empty:
             row = df.iloc[0]
             return {
-                "kcal": int(row['meta_kcal']), "prot": int(row['meta_proteina']),
-                "carb": int(row.get('meta_carbo', 164)), "gord": int(row.get('meta_gordura', 67)),
-                "peso_alvo": float(row.get('meta_peso_alvo', 120.0)), "ritmo": float(row.get('ritmo_semanal', 0.8)),
+                "kcal": int(row.get('meta_kcal', 1638)), 
+                "prot": int(row.get('meta_proteina', 108)),
+                "carb": int(row.get('meta_carbo', 164)), 
+                "gord": int(row.get('meta_gordura', 67)),
+                "peso_alvo": float(row.get('meta_peso_alvo', 120.0)), 
+                "ritmo": float(row.get('ritmo_semanal', 0.8)),
                 "altura": int(row.get('altura_cm', 178)),
                 "idade": int(row.get('idade', 41)),
                 "genero": row.get('genero', 'Masculino'),
@@ -166,52 +169,37 @@ def processar_texto_ia(texto_usuario, api_key):
         return False, f"Erro: {str(e)}"
 
 # ============================================================================
-# 6. GERADOR DE EXCEL (DEDUPLICADO)
+# 6. GERADOR DE EXCEL
 # ============================================================================
 def gerar_excel_nutri(dt_ini, dt_fim):
     output = io.BytesIO()
-    
-    # 1. Busca Dados Brutos
     params = {'d1': dt_ini, 'd2': dt_fim}
-    
-    # Consumo Detalhado
     df_detalhado = executar_sql("SELECT data, alimento, quantidade, kcal, proteina, carbo, gordura FROM public.consumo WHERE data >= :d1 AND data <= :d2 ORDER BY data DESC", params, is_select=True)
-    
-    # Peso (Pode conter duplicatas do mesmo dia)
     df_peso = executar_sql("SELECT data, peso_kg FROM public.peso WHERE data >= :d1 AND data <= :d2 ORDER BY data ASC", params, is_select=True)
-    
-    # Medidas e Pressão
     df_medidas = executar_sql("SELECT log_date as data, weight_kg as peso, waist_cm as cintura, body_fat_est as bf_estimado, notes FROM public.body_measurements WHERE log_date >= :d1 AND log_date <= :d2 ORDER BY log_date DESC", params, is_select=True)
     df_pressao = executar_sql("SELECT measurement_time as data_hora, systolic, diastolic, pulse FROM public.blood_pressure WHERE measurement_time >= :d1 AND measurement_time <= :d2 ORDER BY measurement_time DESC", params, is_select=True)
 
-    # 2. Prepara Macros (Agrupa comida por dia)
     if not df_detalhado.empty:
         df_macros = df_detalhado.groupby('data')[['kcal', 'proteina', 'carbo', 'gordura']].sum().reset_index()
     else:
         df_macros = pd.DataFrame(columns=['data', 'kcal', 'proteina', 'carbo', 'gordura'])
     
-    # 3. Tratamento de Datas e Deduplicação de Peso (A CORREÇÃO)
     if not df_macros.empty:
         df_macros['data'] = pd.to_datetime(df_macros['data']).dt.normalize()
         
     if not df_peso.empty:
         df_peso['data'] = pd.to_datetime(df_peso['data']).dt.normalize()
-        # Remove duplicatas: Mantém apenas o ÚLTIMO peso registrado naquele dia
         df_peso = df_peso.drop_duplicates(subset='data', keep='last')
     
-    # 4. Merge (Agora seguro sem repetições)
     if not df_macros.empty or not df_peso.empty:
         df_resumo = pd.merge(df_macros, df_peso, on='data', how='outer').sort_values('data', ascending=False)
         df_resumo = df_resumo[['data', 'peso_kg', 'kcal', 'proteina', 'carbo', 'gordura']]
         df_resumo.columns = ['Data', 'Peso (kg)', 'Calorias (kcal)', 'Proteína (g)', 'Carbo (g)', 'Gordura (g)']
-        # Opcional: Remover linhas onde data é NaT
         df_resumo = df_resumo.dropna(subset=['Data'])
-        # Formatar Data visualmente
         df_resumo['Data'] = df_resumo['Data'].dt.strftime('%d/%m/%Y')
     else:
         df_resumo = pd.DataFrame(columns=['Data', 'Peso', 'Kcal', 'Prot', 'Carb', 'Gord'])
 
-    # 5. Grava Excel
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df_resumo.to_excel(writer, sheet_name='1. Resumo Diário', index=False)
         df_detalhado.to_excel(writer, sheet_name='2. Diário Detalhado', index=False)
@@ -280,23 +268,6 @@ with tab_daily:
                     st.cache_resource.clear(); st.rerun()
                 else: st.error(f"Falha na IA: {res}")
 
-    with st.expander("Importação JSON Manual"):
-        st.info("Prompt Gemini...")
-        json_manual = st.text_area("JSON", label_visibility="collapsed")
-        if st.button("Salvar JSON"):
-            try:
-                cleaned = json_manual.replace('```json', '').replace('```', '')
-                start, end = cleaned.find('['), cleaned.rfind(']')
-                if start != -1 and end != -1: cleaned = cleaned[start:end+1]
-                lista = json.loads(cleaned)
-                for item in (lista if isinstance(lista, list) else [lista]):
-                    dt = item.get('data') if item.get('data') else data_hoje
-                    k_final = max((float(item.get('p',0))*4 + float(item.get('c',0))*4 + float(item.get('g',0))*9), float(item.get('kcal', 0)))
-                    params = {'dt': dt, 'ali': item.get('alimento'), 'qtd': item.get('quantidade_g'), 'kcal': k_final, 'prot': item.get('p'), 'carb': item.get('c'), 'gord': item.get('g'), 'glut': item.get('gluten')}
-                    executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (:dt, :ali, :qtd, :kcal, :prot, :carb, :gord, :glut)", params)
-                st.cache_resource.clear(); st.rerun()
-            except Exception as e: st.error(f"Erro: {e}")
-
     st.subheader("Hoje")
     if not df_hoje.empty:
         for i, row in df_hoje.iterrows():
@@ -347,32 +318,45 @@ with tab_medidas:
 # --- ABA RELATÓRIOS ---
 with tab_rel:
     st.header("📄 Relatório para Nutricionista")
-    st.markdown("Selecione o período para gerar o arquivo Excel.")
-    
     col_d1, col_d2 = st.columns(2)
     dt_ini = col_d1.date_input("Data Inicial", value=data_hoje - timedelta(days=30))
     dt_fim = col_d2.date_input("Data Final", value=data_hoje)
-    
     if st.button("📊 Baixar Relatório Completo (.xlsx)"):
         try:
             excel_data = gerar_excel_nutri(dt_ini, dt_fim)
-            st.download_button(
-                label="📥 Clique para Download",
-                data=excel_data,
-                file_name=f"Relatorio_Nutri_Leo_{dt_ini}_{dt_fim}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            st.success("Arquivo gerado com sucesso!")
-        except Exception as e:
-            st.error(f"Erro ao gerar Excel: {e}")
+            st.download_button(label="📥 Clique para Download", data=excel_data, file_name=f"Relatorio_Nutri_Leo_{dt_ini}_{dt_fim}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        except Exception as e: st.error(f"Erro ao gerar Excel: {e}")
 
-# --- ABA CONFIG ---
+# --- ABA CONFIGURAÇÕES (RESTAURADA) ---
 with tab_admin:
-    st.header("⚙️ Configurações")
-    with st.form("form_admin_simple"):
-        n_peso = st.number_input("Peso Alvo (kg)", value=METAS['peso_alvo'])
-        if st.form_submit_button("Salvar"):
-             executar_sql("UPDATE public.perfil SET meta_peso_alvo=:p WHERE id=1", {'p': n_peso})
-             st.rerun()
+    st.header("⚙️ Configurações & Metas")
+    with st.form("form_metas_completo"):
+        st.subheader("🎯 Metas de Nutrição")
+        c_k1, c_k2 = st.columns(2)
+        n_kcal = c_k1.number_input("Meta Diária Calorias (kcal)", value=METAS['kcal'])
+        n_prot = c_k2.number_input("Meta Diária Proteína (g)", value=METAS['prot'])
+        
+        c_k3, c_k4 = st.columns(2)
+        n_carb = c_k3.number_input("Meta Diária Carbo (g)", value=METAS['carb'])
+        n_gord = c_k4.number_input("Meta Diária Gordura (g)", value=METAS['gord'])
+        
+        st.divider()
+        st.subheader("📉 Metas de Peso")
+        c_p1, c_p2 = st.columns(2)
+        n_peso_alvo = c_p1.number_input("Peso Alvo Final (kg)", value=METAS['peso_alvo'])
+        n_ritmo = c_p2.number_input("Ritmo de Perda (kg/semana)", value=METAS['ritmo'], step=0.1)
+        
+        if st.form_submit_button("💾 Salvar Todas as Metas"):
+            sql_upd = """
+                UPDATE public.perfil SET 
+                meta_kcal=:mk, meta_proteina=:mp, meta_carbo=:mc, 
+                meta_gordura=:mg, meta_peso_alvo=:mpa, ritmo_semanal=:rit 
+                WHERE id=1
+            """
+            params_upd = {'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 'mpa': n_peso_alvo, 'rit': n_ritmo}
+            if executar_sql(sql_upd, params_upd):
+                st.success("Metas atualizadas com sucesso!")
+                st.cache_resource.clear()
+                st.rerun()
 
-st.caption("Leo Tracker Pro v6.3 | Excel Deduplicated")
+st.caption("Leo Tracker Pro v6.4 | Full Config Restored")
