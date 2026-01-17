@@ -106,7 +106,7 @@ c5.metric("⚖️ Peso", f"{PESO_ATUAL}kg", f"Alvo: {p['meta_peso_alvo']}")
 st.divider()
 
 # ============================================================================
-# NOVO: 🎯 PROJEÇÃO VS REALIDADE (DATA BASE 31/12/2025)
+# 🎯 PROJEÇÃO VS REALIDADE (DATA BASE 31/12/2025)
 # ============================================================================
 st.subheader("🎯 Projeção vs. Realidade")
 if not df_peso.empty:
@@ -254,9 +254,38 @@ st.divider()
 
 # NUTRIÇÃO
 st.subheader("🍽️ Comportamento Alimentar")
+
+# --- NOVO: GRÁFICO VOLUME VS CALORIAS ---
 if not df_hist.empty:
+    st.markdown("##### ⚖️ Volume de Comida (g) vs. Energia (kcal)")
+    # Gráfico de eixo duplo
+    fig_vol = make_subplots(specs=[[{"secondary_y": True}]])
+
+    # Barras de Calorias
+    fig_vol.add_trace(
+        go.Bar(x=df_hist['data'], y=df_hist['tkcal'], name="Calorias (kcal)", marker_color='#e74c3c', opacity=0.7),
+        secondary_y=False
+    )
+
+    # Linha de Quantidade (g)
+    fig_vol.add_trace(
+        go.Scatter(x=df_hist['data'], y=df_hist['tqtd'], name="Volume (g)", mode='lines+markers', line=dict(color='#3498db', width=3)),
+        secondary_y=True
+    )
+
+    fig_vol.update_layout(
+        height=350,
+        margin=dict(l=10,r=10,t=20,b=10),
+        legend=dict(orientation="h", y=1.1),
+        yaxis=dict(title="Energia (kcal)", showgrid=False),
+        yaxis2=dict(title="Volume (g)", showgrid=False)
+    )
+    st.plotly_chart(fig_vol, use_container_width=True)
+
+    # MACROS E PIZZA (CÓDIGO ORIGINAL MANTIDO)
     c_n1, c_n2 = st.columns([2, 1])
     with c_n1:
+        st.markdown("##### Distribuição de Macros")
         df_macros = df_hist.copy()
         df_macros['tot'] = (df_macros['tprot']*4 + df_macros['tcarb']*4 + df_macros['tgord']*9)
         df_macros['tot'] = df_macros['tot'].replace(0, 1)
@@ -267,9 +296,10 @@ if not df_hist.empty:
         fig_stack.update_layout(barmode='stack', height=350, margin=dict(l=10,r=10,t=20,b=10), yaxis=dict(range=[0, 100]))
         st.plotly_chart(fig_stack, use_container_width=True)
     with c_n2:
+        st.markdown("##### Hoje")
         if k_act > 0:
             fig_pie = go.Figure(data=[go.Pie(labels=['P','C','G'], values=[p_act*4, c_act*4, g_act*9], hole=.4, marker=dict(colors=['#3366CC','#FF9900','#DC3912']))])
             fig_pie.update_layout(height=350, showlegend=False, margin=dict(l=10,r=10,t=20,b=10))
             st.plotly_chart(fig_pie, use_container_width=True)
 
-st.caption("Leo Tracker Dash v3.0 | Projeção Base 31/12/25")
+st.caption("Leo Tracker Dash v3.1 | Vol x Kcal Added")
