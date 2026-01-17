@@ -50,21 +50,19 @@ def executar_sql(sql, params=None, is_select=False):
     try:
         if is_select:
             with engine.connect() as conn:
+                # Correção: read_sql com text() exige params como dict
                 df = pd.read_sql(text(sql), conn, params=params)
-                # Correção: Garante que colunas de data sejam datetime
                 for col in ['data', 'log_date', 'measurement_time']:
                     if col in df.columns:
                         try: df[col] = pd.to_datetime(df[col])
                         except: pass
                 return df
         else:
-            # Transação segura
             with engine.begin() as conn:
                 conn.execute(text(sql), params)
             return True
     except Exception as e:
-        st.error(f"❌ ERRO CRÍTICO NO BANCO: {e}")
-        # CORREÇÃO CRÍTICA: Retorna DataFrame vazio se for Select, para não quebrar o código
+        # Retorna DataFrame vazio se der erro no Select para não quebrar a tela
         if is_select: return pd.DataFrame()
         return False
 
@@ -164,7 +162,6 @@ def processar_texto_ia(texto_usuario, api_key):
     try:
         completion = client.chat.completions.create(messages=[{"role": "system", "content": prompt_system}, {"role": "user", "content": texto_usuario}], model="llama-3.3-70b-versatile", response_format={"type": "json_object"})
         content = json.loads(completion.choices[0].message.content)
-        # Proteção: Se a IA retornar lista, converte para dict
         if isinstance(content, list): content = {"analise": "Processado", "alimentos": content}
         return True, content
     except Exception as e: return False, str(e)
@@ -175,7 +172,10 @@ def processar_texto_ia(texto_usuario, api_key):
 st.title("🦁 Leo Tracker Pro")
 
 data_hoje = get_now_br().date()
-df_hoje = executar_sql("SELECT * FROM public.consumo WHERE data = %s", (data_hoje,), is_select=True)
+
+# --- CORREÇÃO DO ERRO AQUI ---
+# Substituído %s e tupla por :d e dicionário
+df_hoje = executar_sql("SELECT * FROM public.consumo WHERE data = :d", {'d': data_hoje}, is_select=True)
 
 # SIDEBAR
 st.sidebar.header("🎯 Status")
@@ -213,7 +213,7 @@ with tab_daily:
             if cp3.form_submit_button("💾 Salvar Peso", use_container_width=True):
                 ok = executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (:d, :p)", {'d': d_peso, 'p': p_val})
                 if ok:
-                    st.success("Peso registrado!")
+                    st.cache_resource.clear()
                     st.rerun()
     st.divider()
 
@@ -245,10 +245,11 @@ with tab_daily:
                         ok_db = executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (:dt, :ali, :qtd, :kc, :pr, :ca, :go, :gl)", params)
                         if not ok_db: st.stop()
                     
+                    st.cache_resource.clear()
                     st.rerun()
 
     # 3. JSON MANUAL
-    with st.expander("Importação JSON Manual (Gemini/GPT)"):
+    with st.expander("Importação JSON Manual"):
         st.info("Copie este prompt para o Gemini junto com a foto:")
         st.code(f"""
 Aja como nutricionista. Analise a imagem e retorne APENAS este JSON cru (sem markdown):
@@ -401,4 +402,4 @@ with tab_admin:
              executar_sql("UPDATE public.perfil SET meta_peso_alvo=:p WHERE id=1", {'p': n_peso})
              st.rerun()
 
-st.caption("Leo Tracker Pro v5.8 | Connection Fix (Pre-Ping)")
+st.caption("Leo Tracker Pro v6.0 | DB List Fix")
