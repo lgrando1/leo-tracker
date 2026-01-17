@@ -223,40 +223,41 @@ st.divider()
 st.subheader("🍽️ Comportamento Alimentar")
 
 if not df_hist.empty:
-    st.markdown("##### ⚖️ Volume de Comida (g) vs. Energia (kcal)")
+    st.markdown("##### ⚖️ Energia (Linha) vs. Volume (Barras)")
+    # Eixo Secundário ativado: Barras no Secundário (Volume), Linhas no Primário (Calorias)
     fig_vol = make_subplots(specs=[[{"secondary_y": True}]])
 
-    # Barras de Calorias
-    fig_vol.add_trace(go.Bar(x=df_hist['data'], y=df_hist['tkcal'], name="Calorias (kcal)", marker_color='#e74c3c', opacity=0.7), secondary_y=False)
-    # Linha de Volume
-    fig_vol.add_trace(go.Scatter(x=df_hist['data'], y=df_hist['tqtd'], name="Volume (g)", mode='lines+markers', line=dict(color='#3498db', width=3)), secondary_y=True)
-    
-    # 1. LINHA DE META (MARCELA)
-    fig_vol.add_hline(y=p['meta_kcal'], line_dash="dash", line_color="#27ae60", annotation_text=f"Meta Marcela ({p['meta_kcal']} kcal)", annotation_position="top left", secondary_y=False)
+    # 1. VOLUME (Barras - Eixo Secundário/Direita)
+    # Adicionado primeiro para ficar ao fundo
+    fig_vol.add_trace(
+        go.Bar(x=df_hist['data'], y=df_hist['tqtd'], name="Volume (g)", marker_color='#3498db', opacity=0.3),
+        secondary_y=True
+    )
 
-    # 2. LINHA DINÂMICA DE GET (Gasto Energético do Dia)
+    # 2. CALORIAS (Linha - Eixo Primário/Esquerda)
+    fig_vol.add_trace(
+        go.Scatter(x=df_hist['data'], y=df_hist['tkcal'], name="Calorias (kcal)", mode='lines+markers', line=dict(color='#e74c3c', width=3)),
+        secondary_y=False
+    )
+    
+    # 3. LINHAS DE REFERÊNCIA (Ligadas ao eixo Primário de Calorias)
+    # Meta Marcela
+    fig_vol.add_hline(y=p['meta_kcal'], line_dash="dash", line_color="#27ae60", annotation_text=f"Meta ({p['meta_kcal']})", annotation_position="bottom right", secondary_y=False)
+
+    # GET Dinâmico
     try:
-        # Prepara dados para o GET
         df_chart = df_hist.copy()
         df_chart['data_dt'] = pd.to_datetime(df_chart['data']).dt.date
-        
         if not df_peso.empty:
             df_peso_chart = df_peso.copy()
             df_peso_chart['data_dt'] = pd.to_datetime(df_peso_chart['data']).dt.date
-            # Garante apenas um peso por dia para o merge
             df_peso_chart = df_peso_chart.sort_values('data').drop_duplicates(subset='data_dt', keep='last')
-            
-            # Merge para trazer o peso para cada dia do histórico
             df_chart = pd.merge(df_chart, df_peso_chart[['data_dt', 'peso_kg']], on='data_dt', how='left')
-            # Preenche dias sem peso com o último peso conhecido (Forward Fill)
             df_chart['peso_kg'] = df_chart['peso_kg'].ffill().fillna(PESO_ATUAL)
-            
-            # Calcula GET
             idade, altura = int(p.get('idade', 41)), int(p.get('altura_cm', 178))
             df_chart['get_dia'] = ((10 * df_chart['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * 1.09 * 1.2
             
-            # Adiciona a linha ao gráfico
-            fig_vol.add_trace(go.Scatter(x=df_chart['data'], y=df_chart['get_dia'], name="Gasto Real (GET)", mode='lines', line=dict(color='#f39c12', width=2, dash='dot')), secondary_y=False)
+            fig_vol.add_trace(go.Scatter(x=df_chart['data'], y=df_chart['get_dia'], name="GET (Gasto Real)", mode='lines', line=dict(color='#f39c12', width=2, dash='dot')), secondary_y=False)
     except: pass
 
     fig_vol.update_layout(height=350, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1), yaxis=dict(title="Energia (kcal)", showgrid=False), yaxis2=dict(title="Volume (g)", showgrid=False))
@@ -280,4 +281,4 @@ if not df_hist.empty:
             fig_pie.update_layout(height=350, showlegend=False, margin=dict(l=10,r=10,t=20,b=10))
             st.plotly_chart(fig_pie, use_container_width=True)
 
-st.caption("Leo Tracker Dash v3.3 | Dynamic GET Line")
+st.caption("Leo Tracker Dash v3.4 | Inverted View")
