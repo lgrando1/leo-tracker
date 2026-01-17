@@ -166,7 +166,7 @@ def processar_texto_ia(texto_usuario, api_key):
         return False, f"Erro: {str(e)}"
 
 # ============================================================================
-# 6. GERADOR DE EXCEL (NOVO)
+# 6. GERADOR DE EXCEL (DEDUPLICADO)
 # ============================================================================
 def gerar_excel_nutri(dt_ini, dt_fim):
     output = io.BytesIO()
@@ -177,36 +177,41 @@ def gerar_excel_nutri(dt_ini, dt_fim):
     # Consumo Detalhado
     df_detalhado = executar_sql("SELECT data, alimento, quantidade, kcal, proteina, carbo, gordura FROM public.consumo WHERE data >= :d1 AND data <= :d2 ORDER BY data DESC", params, is_select=True)
     
-    # Peso
-    df_peso = executar_sql("SELECT data, peso_kg FROM public.peso WHERE data >= :d1 AND data <= :d2 ORDER BY data DESC", params, is_select=True)
+    # Peso (Pode conter duplicatas do mesmo dia)
+    df_peso = executar_sql("SELECT data, peso_kg FROM public.peso WHERE data >= :d1 AND data <= :d2 ORDER BY data ASC", params, is_select=True)
     
-    # Medidas
+    # Medidas e Pressão
     df_medidas = executar_sql("SELECT log_date as data, weight_kg as peso, waist_cm as cintura, body_fat_est as bf_estimado, notes FROM public.body_measurements WHERE log_date >= :d1 AND log_date <= :d2 ORDER BY log_date DESC", params, is_select=True)
-    
-    # Pressão
     df_pressao = executar_sql("SELECT measurement_time as data_hora, systolic, diastolic, pulse FROM public.blood_pressure WHERE measurement_time >= :d1 AND measurement_time <= :d2 ORDER BY measurement_time DESC", params, is_select=True)
 
-    # 2. Cria Aba Resumo (Merge de Macros + Peso do dia)
-    # Agrupa consumo por dia
+    # 2. Prepara Macros (Agrupa comida por dia)
     if not df_detalhado.empty:
         df_macros = df_detalhado.groupby('data')[['kcal', 'proteina', 'carbo', 'gordura']].sum().reset_index()
     else:
         df_macros = pd.DataFrame(columns=['data', 'kcal', 'proteina', 'carbo', 'gordura'])
     
-    # Garante datas compatíveis para merge
-    if not df_peso.empty: df_peso['data'] = pd.to_datetime(df_peso['data'])
-    if not df_macros.empty: df_macros['data'] = pd.to_datetime(df_macros['data'])
+    # 3. Tratamento de Datas e Deduplicação de Peso (A CORREÇÃO)
+    if not df_macros.empty:
+        df_macros['data'] = pd.to_datetime(df_macros['data']).dt.normalize()
+        
+    if not df_peso.empty:
+        df_peso['data'] = pd.to_datetime(df_peso['data']).dt.normalize()
+        # Remove duplicatas: Mantém apenas o ÚLTIMO peso registrado naquele dia
+        df_peso = df_peso.drop_duplicates(subset='data', keep='last')
     
-    # Merge
+    # 4. Merge (Agora seguro sem repetições)
     if not df_macros.empty or not df_peso.empty:
         df_resumo = pd.merge(df_macros, df_peso, on='data', how='outer').sort_values('data', ascending=False)
-        # Formata colunas para ficar bonito
         df_resumo = df_resumo[['data', 'peso_kg', 'kcal', 'proteina', 'carbo', 'gordura']]
         df_resumo.columns = ['Data', 'Peso (kg)', 'Calorias (kcal)', 'Proteína (g)', 'Carbo (g)', 'Gordura (g)']
+        # Opcional: Remover linhas onde data é NaT
+        df_resumo = df_resumo.dropna(subset=['Data'])
+        # Formatar Data visualmente
+        df_resumo['Data'] = df_resumo['Data'].dt.strftime('%d/%m/%Y')
     else:
         df_resumo = pd.DataFrame(columns=['Data', 'Peso', 'Kcal', 'Prot', 'Carb', 'Gord'])
 
-    # 3. Grava Excel
+    # 5. Grava Excel
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df_resumo.to_excel(writer, sheet_name='1. Resumo Diário', index=False)
         df_detalhado.to_excel(writer, sheet_name='2. Diário Detalhado', index=False)
@@ -339,10 +344,10 @@ with tab_medidas:
             executar_sql("UPDATE public.perfil SET ultima_cintura=:wa WHERE id=1", {'wa': waist})
             st.cache_resource.clear(); st.rerun()
 
-# --- ABA RELATÓRIOS (NOVA LÓGICA) ---
+# --- ABA RELATÓRIOS ---
 with tab_rel:
     st.header("📄 Relatório para Nutricionista")
-    st.markdown("Selecione o período para gerar o arquivo Excel com: **Resumo Diário (Peso x Macros)**, **Diário Detalhado**, **Medidas** e **Pressão**.")
+    st.markdown("Selecione o período para gerar o arquivo Excel.")
     
     col_d1, col_d2 = st.columns(2)
     dt_ini = col_d1.date_input("Data Inicial", value=data_hoje - timedelta(days=30))
@@ -370,4 +375,4 @@ with tab_admin:
              executar_sql("UPDATE public.perfil SET meta_peso_alvo=:p WHERE id=1", {'p': n_peso})
              st.rerun()
 
-st.caption("Leo Tracker Pro v6.2 | Excel Nutri Reports")
+st.caption("Leo Tracker Pro v6.3 | Excel Deduplicated")
