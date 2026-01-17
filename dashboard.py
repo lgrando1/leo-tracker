@@ -219,7 +219,7 @@ with col_right:
 
 st.divider()
 
-# NUTRIÇÃO (COM GRÁFICO DE LINHA DE META)
+# NUTRIÇÃO
 st.subheader("🍽️ Comportamento Alimentar")
 
 if not df_hist.empty:
@@ -231,8 +231,33 @@ if not df_hist.empty:
     # Linha de Volume
     fig_vol.add_trace(go.Scatter(x=df_hist['data'], y=df_hist['tqtd'], name="Volume (g)", mode='lines+markers', line=dict(color='#3498db', width=3)), secondary_y=True)
     
-    # --- NOVA LINHA DE META DA MARCELA ---
+    # 1. LINHA DE META (MARCELA)
     fig_vol.add_hline(y=p['meta_kcal'], line_dash="dash", line_color="#27ae60", annotation_text=f"Meta Marcela ({p['meta_kcal']} kcal)", annotation_position="top left", secondary_y=False)
+
+    # 2. LINHA DINÂMICA DE GET (Gasto Energético do Dia)
+    try:
+        # Prepara dados para o GET
+        df_chart = df_hist.copy()
+        df_chart['data_dt'] = pd.to_datetime(df_chart['data']).dt.date
+        
+        if not df_peso.empty:
+            df_peso_chart = df_peso.copy()
+            df_peso_chart['data_dt'] = pd.to_datetime(df_peso_chart['data']).dt.date
+            # Garante apenas um peso por dia para o merge
+            df_peso_chart = df_peso_chart.sort_values('data').drop_duplicates(subset='data_dt', keep='last')
+            
+            # Merge para trazer o peso para cada dia do histórico
+            df_chart = pd.merge(df_chart, df_peso_chart[['data_dt', 'peso_kg']], on='data_dt', how='left')
+            # Preenche dias sem peso com o último peso conhecido (Forward Fill)
+            df_chart['peso_kg'] = df_chart['peso_kg'].ffill().fillna(PESO_ATUAL)
+            
+            # Calcula GET
+            idade, altura = int(p.get('idade', 41)), int(p.get('altura_cm', 178))
+            df_chart['get_dia'] = ((10 * df_chart['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * 1.09 * 1.2
+            
+            # Adiciona a linha ao gráfico
+            fig_vol.add_trace(go.Scatter(x=df_chart['data'], y=df_chart['get_dia'], name="Gasto Real (GET)", mode='lines', line=dict(color='#f39c12', width=2, dash='dot')), secondary_y=False)
+    except: pass
 
     fig_vol.update_layout(height=350, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1), yaxis=dict(title="Energia (kcal)", showgrid=False), yaxis2=dict(title="Volume (g)", showgrid=False))
     st.plotly_chart(fig_vol, use_container_width=True)
@@ -255,4 +280,4 @@ if not df_hist.empty:
             fig_pie.update_layout(height=350, showlegend=False, margin=dict(l=10,r=10,t=20,b=10))
             st.plotly_chart(fig_pie, use_container_width=True)
 
-st.caption("Leo Tracker Dash v3.2 | Meta Line Added")
+st.caption("Leo Tracker Dash v3.3 | Dynamic GET Line")
