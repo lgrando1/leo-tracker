@@ -22,7 +22,7 @@ def check_password():
         st.session_state["password_correct"] = False
     if st.session_state["password_correct"]: return True
     
-    st.title("🦁 Leo Tracker Pro v6.3")
+    st.title("🦁 Leo Tracker Pro v6.4")
     password = st.text_input("Senha de Acesso:", type="password")
     if st.button("Entrar"):
         if password == st.secrets.get("PASSWORD", "admin"): 
@@ -59,7 +59,8 @@ def executar_sql(sql, params=None, is_select=False):
                 conn.execute(text(sql), params)
             return True
     except Exception as e:
-        st.error(f"❌ ERRO SQL: {e}")
+        # Log discreto para não quebrar a UI
+        print(f"❌ ERRO SQL: {e}")
         return False
 
 # ============================================================================
@@ -78,7 +79,7 @@ def inicializar_banco():
         );
     """)
     res = executar_sql("SELECT count(*) as c FROM public.perfil", is_select=True)
-    if res.iloc[0]['c'] == 0:
+    if isinstance(res, pd.DataFrame) and not res.empty and res.iloc[0]['c'] == 0:
         executar_sql("INSERT INTO public.perfil (id, meta_kcal, meta_proteina, meta_carbo, meta_gordura, ritmo_semanal, meta_peso_alvo) VALUES (1, 1638, 108, 164, 67, 0.8, 120.0)")
 
     executar_sql("""
@@ -97,9 +98,10 @@ def inicializar_banco():
     """)
 
 def get_metas_do_banco():
+    default_metas = {"kcal": 1638, "prot": 108, "carb": 164, "gord": 67, "peso_alvo": 120.0, "ritmo": 0.8, "altura": 178, "idade": 41, "genero": "Masculino", "last_waist": 133.0, "last_neck": 53.0, "last_hip": 122.0}
     try:
         df = executar_sql("SELECT * FROM public.perfil WHERE id = 1", is_select=True)
-        if not df.empty:
+        if isinstance(df, pd.DataFrame) and not df.empty:
             row = df.iloc[0]
             return {
                 "kcal": int(row.get('meta_kcal', 1638)), "prot": int(row.get('meta_proteina', 108)),
@@ -112,7 +114,7 @@ def get_metas_do_banco():
                 "last_hip": float(row.get('ultimo_quadril') or 122.0)
             }
     except: pass
-    return {"kcal": 1638, "prot": 108, "carb": 164, "gord": 67, "peso_alvo": 120.0, "ritmo": 0.8, "altura": 178, "idade": 41, "genero": "Masculino", "last_waist": 133.0, "last_neck": 53.0, "last_hip": 122.0}
+    return default_metas
 
 inicializar_banco()
 METAS = get_metas_do_banco()
@@ -137,7 +139,13 @@ def processar_texto_ia(texto_usuario, api_key):
     """
     try:
         completion = client.chat.completions.create(messages=[{"role": "system", "content": prompt_system}, {"role": "user", "content": texto_usuario}], model="llama-3.3-70b-versatile", response_format={"type": "json_object"})
-        return True, json.loads(completion.choices[0].message.content)
+        content = json.loads(completion.choices[0].message.content)
+        
+        # Proteção: Se a IA retornar lista em vez de dict, corrigir
+        if isinstance(content, list):
+            content = {"analise": "Processado (Lista)", "alimentos": content}
+            
+        return True, content
     except Exception as e: return False, str(e)
 
 # ============================================================================
@@ -152,7 +160,7 @@ def gerar_pdf_relatorio(dias=7):
     dt_inicio = (get_now_br() - timedelta(days=dias)).date()
     df_con = executar_sql(f"SELECT data, sum(kcal) as k, sum(proteina) as p, sum(carbo) as c, sum(gordura) as g FROM public.consumo WHERE data >= '{dt_inicio}' GROUP BY data ORDER BY data", is_select=True)
     
-    if not df_con.empty:
+    if isinstance(df_con, pd.DataFrame) and not df_con.empty:
         pdf.ln(5)
         pdf.set_font("Arial", 'B', 12)
         pdf.cell(0, 10, "Media de Consumo:", 0, 1)
@@ -185,9 +193,9 @@ def gerar_excel_completo():
     df_peso = executar_sql("SELECT * FROM public.peso ORDER BY data DESC", is_select=True)
     df_medidas = executar_sql("SELECT * FROM public.body_measurements ORDER BY log_date DESC", is_select=True)
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df_consumo.to_excel(writer, sheet_name='Diario Alimentar', index=False)
-        df_peso.to_excel(writer, sheet_name='Historico Peso', index=False)
-        if not df_medidas.empty: df_medidas.to_excel(writer, sheet_name='Medidas Corporais', index=False)
+        if isinstance(df_consumo, pd.DataFrame): df_consumo.to_excel(writer, sheet_name='Diario Alimentar', index=False)
+        if isinstance(df_peso, pd.DataFrame): df_peso.to_excel(writer, sheet_name='Historico Peso', index=False)
+        if isinstance(df_medidas, pd.DataFrame): df_medidas.to_excel(writer, sheet_name='Medidas Corporais', index=False)
     return output.getvalue()
 
 # ============================================================================
@@ -197,18 +205,24 @@ st.title("🦁 Leo Tracker Pro")
 data_hoje = get_now_br().date()
 df_hoje = executar_sql("SELECT * FROM public.consumo WHERE data = %s", (data_hoje,), is_select=True)
 
-# SIDEBAR
+# SIDEBAR (Blindada)
 st.sidebar.header("🎯 Status")
 ultimo_peso_df = executar_sql("SELECT peso_kg FROM public.peso ORDER BY data DESC LIMIT 1", is_select=True)
-peso_atual_sidebar = float(ultimo_peso_df.iloc[0]['peso_kg']) if not ultimo_peso_df.empty else 140.0
-st.sidebar.metric("Peso Atual", f"{peso_atual_sidebar} kg", f"Meta: {METAS['peso_alvo']} kg")
-st.sidebar.progress(min((150 - peso_atual_sidebar) / (150 - METAS['peso_alvo']), 1.0))
+peso_atual_sidebar = 140.0
+if isinstance(ultimo_peso_df, pd.DataFrame) and not ultimo_peso_df.empty:
+    peso_atual_sidebar = float(ultimo_peso_df.iloc[0]['peso_kg'])
 
-# Métricas Topo
-k_hoje = float(df_hoje['kcal'].sum()) if not df_hoje.empty else 0.0
-p_hoje = float(df_hoje['proteina'].sum()) if not df_hoje.empty else 0.0
-c_hoje = float(df_hoje['carbo'].sum()) if not df_hoje.empty else 0.0
-g_hoje = float(df_hoje['gordura'].sum()) if not df_hoje.empty else 0.0
+st.sidebar.metric("Peso Atual", f"{peso_atual_sidebar} kg", f"Meta: {METAS['peso_alvo']} kg")
+st.sidebar.progress(min(max(0.0, (150 - peso_atual_sidebar) / (150 - METAS['peso_alvo'])), 1.0))
+
+# Métricas Topo (Blindadas)
+k_hoje, p_hoje, c_hoje, g_hoje = 0.0, 0.0, 0.0, 0.0
+if isinstance(df_hoje, pd.DataFrame) and not df_hoje.empty:
+    k_hoje = float(df_hoje['kcal'].sum())
+    p_hoje = float(df_hoje['proteina'].sum())
+    c_hoje = float(df_hoje['carbo'].sum())
+    g_hoje = float(df_hoje['gordura'].sum())
+
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("🔥 Calorias", f"{int(k_hoje)}", f"Meta: {METAS['kcal']}")
 c2.metric("🥩 Proteína", f"{int(p_hoje)}g", f"Meta: {METAS['prot']}g")
@@ -248,22 +262,24 @@ with tab_daily:
                     st.cache_data.clear(); st.rerun()
 
     st.subheader("Hoje")
-    if not df_hoje.empty:
+    if isinstance(df_hoje, pd.DataFrame) and not df_hoje.empty:
         for i, row in df_hoje.iterrows():
             c1, c2, c3 = st.columns([3, 2, 0.5])
             c1.markdown(f"**{row['alimento']}**")
-            # CORREÇÃO AQUI: Faltava o parêntese em row['carbo']
+            # --- CORREÇÃO DE SINTAXE AQUI ---
             c2.caption(f"{int(row['kcal'])} kcal | P:{int(row['proteina'])} C:{int(row['carbo'])} G:{int(row['gordura'])}")
             if c3.button("🗑️", key=f"del_{row['id']}"):
                 executar_sql("DELETE FROM public.consumo WHERE id=:id", {'id': row['id']})
                 st.cache_data.clear(); st.rerun()
             st.markdown("---")
+    else:
+        st.info("Nenhum registro hoje.")
 
 # --- 2. GRÁFICO PESO ---
 with tab_graph:
     st.header("📉 Evolução vs Meta")
     df_peso = executar_sql("SELECT data, peso_kg FROM public.peso ORDER BY data ASC", is_select=True)
-    if not df_peso.empty:
+    if isinstance(df_peso, pd.DataFrame) and not df_peso.empty:
         df_peso['data'] = pd.to_datetime(df_peso['data'])
         start_date = df_peso.iloc[0]['data']
         start_weight = df_peso.iloc[0]['peso_kg']
@@ -290,7 +306,7 @@ with tab_logs:
             ORDER BY data DESC
         """
         df_resumo = executar_sql(sql_resumo, is_select=True)
-        st.dataframe(df_resumo, use_container_width=True)
+        if isinstance(df_resumo, pd.DataFrame): st.dataframe(df_resumo, use_container_width=True)
 
     with tab_detalhado:
         sql_full = """
@@ -300,7 +316,7 @@ with tab_logs:
             LIMIT 200
         """
         df_full = executar_sql(sql_full, is_select=True)
-        st.dataframe(df_full, use_container_width=True)
+        if isinstance(df_full, pd.DataFrame): st.dataframe(df_full, use_container_width=True)
 
 # --- 4. SAÚDE ---
 with tab_health:
@@ -317,7 +333,7 @@ with tab_health:
                 if ok: st.success("Salvo!"); st.cache_data.clear(); st.rerun()
         st.write("Histórico (Últimos 10)")
         df_bp = executar_sql("SELECT measurement_time as data, systolic, diastolic, pulse FROM public.blood_pressure ORDER BY measurement_time DESC LIMIT 10", is_select=True)
-        if not df_bp.empty: st.dataframe(df_bp, hide_index=True)
+        if isinstance(df_bp, pd.DataFrame) and not df_bp.empty: st.dataframe(df_bp, hide_index=True)
 
     with c_h2:
         st.subheader("📏 Avaliação Corporal")
@@ -335,7 +351,7 @@ with tab_health:
                  st.success("Salvo!"); st.cache_data.clear(); st.rerun()
         st.write("Histórico (Últimos 5)")
         df_med = executar_sql("SELECT log_date as data, waist_cm as cintura, body_fat_est as bf FROM public.body_measurements ORDER BY log_date DESC LIMIT 5", is_select=True)
-        if not df_med.empty: st.dataframe(df_med, hide_index=True)
+        if isinstance(df_med, pd.DataFrame) and not df_med.empty: st.dataframe(df_med, hide_index=True)
 
 # --- 5. EXPORT & CONFIG ---
 with tab_config:
@@ -343,8 +359,10 @@ with tab_config:
     st.subheader("📄 Exportar")
     c_btn1, c_btn2 = st.columns(2)
     if c_btn1.button("📄 Gerar PDF (7 dias)"):
-        pdf_bytes = gerar_pdf_relatorio(7)
-        st.download_button("📥 Baixar PDF", pdf_bytes, f"Relatorio_{data_hoje}.pdf", "application/pdf")
+        try:
+            pdf_bytes = gerar_pdf_relatorio(7)
+            st.download_button("📥 Baixar PDF", pdf_bytes, f"Relatorio_{data_hoje}.pdf", "application/pdf")
+        except Exception as e: st.error(f"Erro ao gerar PDF: {e}")
     if c_btn2.button("📊 Excel Completo (Backup)"):
         try:
             excel_bytes = gerar_excel_completo()
@@ -366,4 +384,4 @@ with tab_config:
             executar_sql("UPDATE public.perfil SET meta_kcal=:mk, meta_proteina=:mp, meta_carbo=:mc, meta_gordura=:mg, meta_peso_alvo=:mpa, ritmo_semanal=:rit WHERE id=1", {'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 'mpa': n_peso_alvo, 'rit': n_ritmo})
             st.success("Atualizado!"); st.cache_data.clear(); st.rerun()
 
-st.caption("Leo Tracker Pro v6.3 | Final Fix 🦁")
+st.caption("Leo Tracker Pro v6.4 | Stable Edition 🦁")
