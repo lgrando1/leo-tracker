@@ -4,7 +4,7 @@ from sqlalchemy import create_engine, text
 from datetime import datetime, timedelta
 import json
 import pytz
-from groq import Groq 
+from groq import Groq
 import io
 from fpdf import FPDF
 import math
