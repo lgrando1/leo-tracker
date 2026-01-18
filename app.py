@@ -348,6 +348,20 @@ with tab_dash:
     """, {"d": DATA_INICIO_D}, is_select=True)
     df_peso_d = executar_sql("SELECT * FROM public.peso ORDER BY data ASC", is_select=True)
 
+    # 1.1 PRÉ-CÁLCULO DE DADOS COMBINADOS (PARA USO NOS GRÁFICOS)
+    if not df_hist_d.empty and not df_peso_d.empty:
+        df_hist_d['data_dt'] = pd.to_datetime(df_hist_d['data']).dt.date
+        df_peso_d['data_dt'] = pd.to_datetime(df_peso_d['data']).dt.date
+        df_merged = pd.merge(df_hist_d, df_peso_d[['data_dt', 'peso_kg']], on='data_dt', how='left').ffill()
+        if df_merged['peso_kg'].isnull().any():
+             df_merged['peso_kg'] = df_merged['peso_kg'].fillna(method='bfill').fillna(peso_atual_sidebar)
+        
+        idade, altura = METAS['idade'], METAS['altura']
+        # GET Diário (Mifflin * TEF * 1.2)
+        df_merged['get_dia'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * 1.09 * 1.2
+    else:
+        df_merged = pd.DataFrame()
+
     # Variáveis
     META_AGUA = round((peso_atual_sidebar * 35) / 1000, 1)
     last_sys, last_dia, last_pulse = "--", "--", "--"
@@ -410,20 +424,12 @@ with tab_dash:
 
     with c_a2:
         st.subheader("🏦 Banco de Gordura")
-        if not df_hist_d.empty and not df_peso_d.empty:
-            try:
-                df_hist_d['data_dt'] = pd.to_datetime(df_hist_d['data']).dt.date
-                df_peso_d['data_dt'] = pd.to_datetime(df_peso_d['data']).dt.date
-                df_merged = pd.merge(df_hist_d, df_peso_d[['data_dt', 'peso_kg']], on='data_dt', how='left').ffill()
-                
-                idade, altura = METAS['idade'], METAS['altura']
-                df_merged['get_dia'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * 1.09 * 1.2
-                deficit_total = (df_merged['get_dia'] - df_merged['tkcal']).sum()
-                kg_gordura = deficit_total / 7700
-                
-                st.metric("Déficit Total (kcal)", f"{int(deficit_total)}")
-                st.metric("Gordura Eliminada (Teórica)", f"{kg_gordura:.2f} kg")
-            except: st.info("Dados insuficientes.")
+        if not df_merged.empty:
+            deficit_total = (df_merged['get_dia'] - df_merged['tkcal']).sum()
+            kg_gordura = deficit_total / 7700
+            st.metric("Déficit Total (kcal)", f"{int(deficit_total)}")
+            st.metric("Gordura Eliminada (Teórica)", f"{kg_gordura:.2f} kg")
+        else: st.info("Dados insuficientes.")
 
     # 4. SAÚDE
     st.divider()
@@ -442,7 +448,40 @@ with tab_dash:
             fig_bp.update_layout(height=250, margin=dict(l=10,r=10,t=20,b=10), title="Pressão Arterial")
             st.plotly_chart(fig_bp, use_container_width=True)
 
-    # 5. NUTRIÇÃO (RESTAURADA)
+    # 5. NOVO GRÁFICO: ENERGIA VS VOLUME
+    st.divider()
+    st.subheader("⚖️ Energia (Linha) vs. Volume (Barras)")
+    if not df_merged.empty:
+        fig_ev = make_subplots(specs=[[{"secondary_y": True}]])
+        # Barras: Volume
+        fig_ev.add_trace(go.Bar(
+            x=df_merged['data'], y=df_merged['tqtd'], name='Volume (g)',
+            marker_color='#AED6F1', opacity=0.6
+        ), secondary_y=True)
+        # Linha: Calorias
+        fig_ev.add_trace(go.Scatter(
+            x=df_merged['data'], y=df_merged['tkcal'], name='Calorias (kcal)',
+            mode='lines+markers', line=dict(color='#C0392B', width=3)
+        ), secondary_y=False)
+        # Linha: GET
+        fig_ev.add_trace(go.Scatter(
+            x=df_merged['data'], y=df_merged['get_dia'], name='GET (Gasto Real)',
+            mode='lines', line=dict(color='#F39C12', dash='dot', width=2)
+        ), secondary_y=False)
+        # Meta Fixa
+        fig_ev.add_hline(y=METAS['kcal'], line_dash="dash", line_color="#27AE60", annotation_text=f"Meta ({METAS['kcal']})", annotation_position="bottom right")
+
+        fig_ev.update_layout(
+            height=400, 
+            margin=dict(l=10,r=10,t=30,b=10),
+            legend=dict(orientation="h", y=1.1),
+            hovermode="x unified"
+        )
+        fig_ev.update_yaxes(title_text="Energia (kcal)", secondary_y=False)
+        fig_ev.update_yaxes(title_text="Volume (g)", secondary_y=True, showgrid=False)
+        st.plotly_chart(fig_ev, use_container_width=True)
+
+    # 6. NUTRIÇÃO
     st.divider()
     st.subheader("🍽️ Comportamento Alimentar")
     if not df_hist_d.empty:
@@ -487,4 +526,4 @@ with tab_admin:
             executar_sql("UPDATE public.perfil SET meta_kcal=:mk, meta_proteina=:mp, meta_carbo=:mc, meta_gordura=:mg, meta_peso_alvo=:mpa, ritmo_semanal=:rit WHERE id=1", {'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 'mpa': n_peso_alvo, 'rit': n_ritmo})
             st.cache_resource.clear(); st.rerun()
 
-st.caption("Leo Tracker Pro v7.1 | Merge Completed + Charts Restored")
+st.caption("Leo Tracker Pro v7.2 | Chart Energy vs Volume Added")
