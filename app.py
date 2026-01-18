@@ -504,6 +504,51 @@ with tab_dash:
             else:
                 st.info("Registre alimentos hoje para ver o gráfico.")
 
+# Coloque dentro da aba Dashboard, na seção de Analytics
+st.markdown("##### 🌡️ Eficiência Termodinâmica")
+
+if not df_hist.empty and not df_peso_all.empty:
+    # 1. Preparar Dados
+    df_eff = pd.merge(df_hist, df_peso_all[['data', 'peso_kg']], on='data', how='inner').sort_values('data')
+    
+    if not df_eff.empty:
+        # Peso Inicial (Start) vs Atual
+        peso_start = df_eff.iloc[0]['peso_kg']
+        peso_curr = df_eff.iloc[-1]['peso_kg']
+        perda_real = peso_start - peso_curr
+        
+        # 2. Calcular Deficit Acumulado (Integral)
+        # Usando Mifflin-St Jeor para GET
+        df_eff['get'] = ((10 * df_eff['peso_kg']) + (6.25 * METAS['altura']) - (5 * METAS['idade']) + 5) * 1.2 # Fator atividade leve
+        df_eff['deficit'] = df_eff['get'] - df_eff['kcal']
+        deficit_total = df_eff['deficit'].sum()
+        perda_teorica = deficit_total / 7700
+        
+        # 3. Cálculo do Ratio
+        if perda_teorica > 0:
+            ratio = perda_real / perda_teorica
+        else:
+            ratio = 1.0 # Evitar divisão por zero
+
+        # 4. Display Visual
+        col_t1, col_t2 = st.columns(2)
+        col_t1.metric("Perda Real", f"{perda_real:.1f} kg", f"Teórica: {perda_teorica:.1f} kg")
+        
+        if ratio > 1.1:
+            status = "🔥 Acelerado (Hiper-respondendo)"
+            cor = "normal" # Verde/Bom
+        elif ratio < 0.9:
+            status = "❄️ Conservador (Retenção/Adaptação)"
+            cor = "inverse" # Vermelho/Atenção
+        else:
+            status = "✅ Nominal (Padrão Físico)"
+            cor = "off"
+
+        col_t2.metric("Fator Termodinâmico", f"{ratio:.2f}x", status, delta_color=cor)
+        
+        st.caption(f"Nota: Se o fator for **1.20x**, você está perdendo 20% mais peso do que o cálculo calórico prevê (ótimo sinal de metabolismo alto/desinchaço).")
+
+
 # --- ABA RELATÓRIOS ---
 with tab_rel:
     st.header("📄 Relatórios")
