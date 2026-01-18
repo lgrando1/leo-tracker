@@ -15,7 +15,7 @@ from plotly.subplots import make_subplots
 # ============================================================================
 st.set_page_config(page_title="Leo Tracker Pro", page_icon="🦁", layout="wide")
 
-# CSS Global (Herdado do Dashboard para melhor visual)
+# CSS Global
 st.markdown("""
     <style>
     div[data-testid="stMetric"] { background-color: #f0f2f6; padding: 10px; border-radius: 10px; border: 1px solid #e0e0e0; }
@@ -138,11 +138,10 @@ def calc_bf_weltman_obese(waist, weight_kg, height_cm, gender):
     except: return 0.0
 
 # ============================================================================
-# 5. GROQ IA (COM VERIFICAÇÃO MATEMÁTICA)
+# 5. GROQ IA
 # ============================================================================
 def processar_texto_ia(texto_usuario, api_key):
     client = Groq(api_key=api_key)
-    # Prompt Refinado para evitar alucinações matemáticas
     prompt_system = f"""
     Aja como Nutricionista Matemático. Hoje: {get_now_br().strftime('%Y-%m-%d')}.
     
@@ -245,7 +244,7 @@ c4.metric("🥑 Gordura", f"{int(g_hoje)}g", f"Meta: {METAS['gord']}g")
 st.progress(min(k_hoje/METAS['kcal'], 1.0))
 st.divider()
 
-# ABAS - ATUALIZADO COM "DASH PRO"
+# ABAS
 tab_daily, tab_hist, tab_medidas, tab_dash, tab_rel, tab_admin = st.tabs(["📝 Diário", "📜 Histórico", "❤️ Saúde", "📊 Dash Pro", "📄 Relatórios", "⚙️ Configurações"])
 
 # --- ABA DIÁRIO ---
@@ -276,7 +275,6 @@ with tab_daily:
                         executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (:dt, :ali, :qtd, :kc, :pr, :ca, :go, :gl)", params)
                     st.cache_resource.clear(); st.rerun()
 
-    # --- RESTAURAÇÃO: ENTRADA VIA JSON MANUAL ---
     with st.expander("📥 Importação JSON Manual (Gemini/GPT)"):
         st.info("Cole aqui o JSON gerado externamente:")
         json_manual = st.text_area("JSON", label_visibility="collapsed", height=150)
@@ -335,11 +333,11 @@ with tab_medidas:
             executar_sql("UPDATE public.perfil SET ultima_cintura=:wa WHERE id=1", {'wa': waist})
             st.cache_resource.clear(); st.rerun()
 
-# --- ABA DASH PRO (INTEGRAÇÃO DASHBOARD.PY) ---
+# --- ABA DASH PRO ---
 with tab_dash:
     st.markdown("### 🧬 Leo's Analytics Hub")
     
-    # 1. FETCH DADOS ESPECÍFICOS PARA O DASH
+    # 1. FETCH DADOS
     df_medidas_d = executar_sql("SELECT * FROM public.body_measurements ORDER BY log_date ASC", is_select=True)
     df_bp_d = executar_sql("SELECT * FROM public.blood_pressure ORDER BY measurement_time ASC", is_select=True)
     DATA_INICIO_D = pd.to_datetime("2025-12-30").date()
@@ -350,7 +348,7 @@ with tab_dash:
     """, {"d": DATA_INICIO_D}, is_select=True)
     df_peso_d = executar_sql("SELECT * FROM public.peso ORDER BY data ASC", is_select=True)
 
-    # Variáveis Auxiliares
+    # Variáveis
     META_AGUA = round((peso_atual_sidebar * 35) / 1000, 1)
     last_sys, last_dia, last_pulse = "--", "--", "--"
     if not df_bp_d.empty:
@@ -358,13 +356,13 @@ with tab_dash:
         last_sys, last_dia = last_bp['systolic'], last_bp['diastolic']
         last_pulse = last_bp.get('pulse', "--")
 
-    # Métricas Extras (Água e BP)
+    # Métricas
     cd1, cd2 = st.columns(2)
     cd1.metric("💧 Meta de Água", f"{META_AGUA}L")
     cd2.metric("❤️ Última Pressão", f"{last_sys}x{last_dia}", f"Pulso: {last_pulse}")
     st.divider()
 
-    # LÓGICA DE PROJEÇÃO (31/12/2025)
+    # 2. PROJEÇÃO
     st.subheader("🎯 Projeção vs. Realidade")
     if not df_peso_d.empty:
         df_peso_d['data_dt'] = pd.to_datetime(df_peso_d['data']).dt.date
@@ -397,7 +395,7 @@ with tab_dash:
                 semanas_fim = meta_atingir / METAS['ritmo'] if METAS['ritmo'] > 0 else 999
                 st.metric("Chegada Estimada", (data_hoje + timedelta(weeks=semanas_fim)).strftime('%d/%m/%y'))
 
-    # BANCO DE GORDURA
+    # 3. BANCO DE GORDURA
     st.divider()
     c_a1, c_a2 = st.columns([2, 1])
     with c_a1:
@@ -419,16 +417,15 @@ with tab_dash:
                 df_merged = pd.merge(df_hist_d, df_peso_d[['data_dt', 'peso_kg']], on='data_dt', how='left').ffill()
                 
                 idade, altura = METAS['idade'], METAS['altura']
-                # Cálculo GET (Mifflin-St Jeor) com fator 1.2 (Sedentário) + TEF (1.09)
                 df_merged['get_dia'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * 1.09 * 1.2
                 deficit_total = (df_merged['get_dia'] - df_merged['tkcal']).sum()
                 kg_gordura = deficit_total / 7700
                 
                 st.metric("Déficit Total (kcal)", f"{int(deficit_total)}")
                 st.metric("Gordura Eliminada (Teórica)", f"{kg_gordura:.2f} kg")
-            except: st.info("Dados insuficientes para cálculo bancário.")
+            except: st.info("Dados insuficientes.")
 
-    # SAÚDE E COMPOSIÇÃO
+    # 4. SAÚDE
     st.divider()
     st.subheader("🧬 Evolução de Gordura & Pressão")
     col_left, col_right = st.columns(2)
@@ -444,6 +441,29 @@ with tab_dash:
             fig_bp.add_trace(go.Scatter(x=df_bp_d['measurement_time'], y=df_bp_d['diastolic'], name="Dia", line=dict(color='blue')))
             fig_bp.update_layout(height=250, margin=dict(l=10,r=10,t=20,b=10), title="Pressão Arterial")
             st.plotly_chart(fig_bp, use_container_width=True)
+
+    # 5. NUTRIÇÃO (RESTAURADA)
+    st.divider()
+    st.subheader("🍽️ Comportamento Alimentar")
+    if not df_hist_d.empty:
+        c_n1, c_n2 = st.columns([2, 1])
+        with c_n1:
+            df_macros = df_hist_d.copy()
+            df_macros['tot'] = (df_macros['tprot']*4 + df_macros['tcarb']*4 + df_macros['tgord']*9)
+            df_macros['tot'] = df_macros['tot'].replace(0, 1)
+            fig_stack = go.Figure()
+            fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tprot']*4/df_macros['tot'])*100, name='Prot', marker_color='#3366CC'))
+            fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tgord']*9/df_macros['tot'])*100, name='Gord', marker_color='#DC3912'))
+            fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tcarb']*4/df_macros['tot'])*100, name='Carb', marker_color='#FF9900'))
+            fig_stack.update_layout(barmode='stack', height=350, margin=dict(l=10,r=10,t=20,b=10), yaxis=dict(range=[0, 100]), title="Distribuição de Macros (%)")
+            st.plotly_chart(fig_stack, use_container_width=True)
+        with c_n2:
+            if k_hoje > 0:
+                fig_pie = go.Figure(data=[go.Pie(labels=['P','C','G'], values=[p_hoje*4, c_hoje*4, g_hoje*9], hole=.4, marker=dict(colors=['#3366CC','#FF9900','#DC3912']))])
+                fig_pie.update_layout(height=350, showlegend=False, margin=dict(l=10,r=10,t=20,b=10), title="Macros Hoje (Kcal)")
+                st.plotly_chart(fig_pie, use_container_width=True)
+            else:
+                st.info("Registre alimentos hoje para ver o gráfico.")
 
 # --- ABA RELATÓRIOS ---
 with tab_rel:
@@ -467,4 +487,4 @@ with tab_admin:
             executar_sql("UPDATE public.perfil SET meta_kcal=:mk, meta_proteina=:mp, meta_carbo=:mc, meta_gordura=:mg, meta_peso_alvo=:mpa, ritmo_semanal=:rit WHERE id=1", {'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 'mpa': n_peso_alvo, 'rit': n_ritmo})
             st.cache_resource.clear(); st.rerun()
 
-st.caption("Leo Tracker Pro v7.0 | Merge Complete")
+st.caption("Leo Tracker Pro v7.1 | Merge Completed + Charts Restored")
