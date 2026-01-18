@@ -504,49 +504,62 @@ with tab_dash:
             else:
                 st.info("Registre alimentos hoje para ver o gráfico.")
 
-# Coloque dentro da aba Dashboard, na seção de Analytics
-st.markdown("##### 🌡️ Eficiência Termodinâmica")
+    # ========================================================
+    # 🌡️ ANÁLISE TERMODINÂMICA (CORRIGIDO)
+    # ========================================================
+    st.markdown("##### 🌡️ Eficiência Termodinâmica")
 
-if not df_hist.empty and not df_peso_all.empty:
-    # 1. Preparar Dados
-    df_eff = pd.merge(df_hist, df_peso_all[['data', 'peso_kg']], on='data', how='inner').sort_values('data')
-    
-    if not df_eff.empty:
-        # Peso Inicial (Start) vs Atual
-        peso_start = df_eff.iloc[0]['peso_kg']
-        peso_curr = df_eff.iloc[-1]['peso_kg']
-        perda_real = peso_start - peso_curr
+    # A variável correta no código v7.0 é 'df_hist_dash'
+    if not df_hist_dash.empty and not df_peso_all.empty:
+        # Criamos cópias para não bagunçar o dataframe original
+        df_h_eff = df_hist_dash.copy()
+        df_p_eff = df_peso_all.copy()
         
-        # 2. Calcular Deficit Acumulado (Integral)
-        # Usando Mifflin-St Jeor para GET
-        df_eff['get'] = ((10 * df_eff['peso_kg']) + (6.25 * METAS['altura']) - (5 * METAS['idade']) + 5) * 1.2 # Fator atividade leve
-        df_eff['deficit'] = df_eff['get'] - df_eff['kcal']
-        deficit_total = df_eff['deficit'].sum()
-        perda_teorica = deficit_total / 7700
+        # Normalizamos as datas para garantir que o merge funcione
+        df_h_eff['data_dt'] = pd.to_datetime(df_h_eff['data']).dt.date
+        df_p_eff['data_dt'] = pd.to_datetime(df_p_eff['data']).dt.date
         
-        # 3. Cálculo do Ratio
-        if perda_teorica > 0:
-            ratio = perda_real / perda_teorica
-        else:
-            ratio = 1.0 # Evitar divisão por zero
+        # Cruzamos Consumo x Peso no mesmo dia
+        df_eff = pd.merge(df_h_eff, df_p_eff[['data_dt', 'peso_kg']], on='data_dt', how='inner').sort_values('data_dt')
+        
+        if not df_eff.empty:
+            # 1. Perda Real (Diferença na Balança do primeiro para o último registro coincidente)
+            peso_start = df_eff.iloc[0]['peso_kg']
+            peso_curr = df_eff.iloc[-1]['peso_kg']
+            perda_real = peso_start - peso_curr
+            
+            # 2. Perda Teórica (Déficit Acumulado / 7700)
+            # GET Mifflin-St Jeor com fator 1.2 (Sedentário/Escritório)
+            df_eff['get_teorico'] = ((10 * df_eff['peso_kg']) + (6.25 * p['altura_cm']) - (5 * p['idade']) + 5) * 1.2
+            df_eff['deficit_dia'] = df_eff['get_teorico'] - df_eff['tkcal']
+            deficit_acumulado = df_eff['deficit_dia'].sum()
+            perda_teorica = deficit_acumulado / 7700
+            
+            # 3. Cálculo do Fator (Eficiência)
+            if perda_teorica > 0.1: # Evita divisão por zero ou números muito pequenos
+                fator_termo = perda_real / perda_teorica
+            else:
+                fator_termo = 1.0
 
-        # 4. Display Visual
-        col_t1, col_t2 = st.columns(2)
-        col_t1.metric("Perda Real", f"{perda_real:.1f} kg", f"Teórica: {perda_teorica:.1f} kg")
-        
-        if ratio > 1.1:
-            status = "🔥 Acelerado (Hiper-respondendo)"
-            cor = "normal" # Verde/Bom
-        elif ratio < 0.9:
-            status = "❄️ Conservador (Retenção/Adaptação)"
-            cor = "inverse" # Vermelho/Atenção
-        else:
-            status = "✅ Nominal (Padrão Físico)"
-            cor = "off"
+            # 4. Exibição Visual
+            ct1, ct2 = st.columns(2)
+            ct1.metric("Perda Real (Periodo)", f"{perda_real:.1f} kg", f"Teórica (Física): {perda_teorica:.1f} kg")
+            
+            if fator_termo > 1.15:
+                status_termo = "🔥 Turbo (Metabolismo Alto)"
+                cor_termo = "normal"
+            elif fator_termo < 0.85:
+                status_termo = "❄️ Econômico (Retenção/Adaptação)"
+                cor_termo = "inverse"
+            else:
+                status_termo = "✅ Nominal (Padrão)"
+                cor_termo = "off"
+                
+            ct2.metric("Fator Termodinâmico", f"{fator_termo:.2f}x", status_termo, delta_color=cor_termo)
+            st.caption(f"Explicação: O fator **{fator_termo:.2f}x** significa que para cada 1kg que a matemática diz que você deveria perder, seu corpo está eliminando **{fator_termo:.2f}kg**. (Baseado nos dias onde houve registro de peso E alimentação).")
+    else:
+        st.info("Aguardando mais dados coincidentes (Peso + Alimentação no mesmo dia) para calcular a termodinâmica.")
 
-        col_t2.metric("Fator Termodinâmico", f"{ratio:.2f}x", status, delta_color=cor)
-        
-        st.caption(f"Nota: Se o fator for **1.20x**, você está perdendo 20% mais peso do que o cálculo calórico prevê (ótimo sinal de metabolismo alto/desinchaço).")
 
 
 # --- ABA RELATÓRIOS ---
