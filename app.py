@@ -30,7 +30,7 @@ def check_password():
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
     if st.session_state["password_correct"]: return True
-    
+
     st.title("🦁 Leo Tracker Pro")
     password = st.text_input("Senha de Acesso:", type="password")
     if st.button("Entrar"):
@@ -128,6 +128,8 @@ def get_metas_do_banco():
 
 inicializar_banco()
 METAS = get_metas_do_banco()
+# Alias para compatibilidade com códigos que usam 'p'
+p = METAS 
 
 # CÁLCULOS
 def calc_bf_weltman_obese(waist, weight_kg, height_cm, gender):
@@ -161,21 +163,21 @@ def processar_texto_ia(texto_usuario, api_key):
     """
     try:
         completion = client.chat.completions.create(messages=[{"role": "system", "content": prompt_system}, {"role": "user", "content": texto_usuario}], model="llama-3.3-70b-versatile", response_format={"type": "json_object"})
-        
+
         raw_content = completion.choices[0].message.content
         cleaned_content = raw_content.replace("```json", "").replace("```", "").strip()
-        
+
         start_idx = cleaned_content.find('{')
         end_idx = cleaned_content.rfind('}')
         if start_idx != -1 and end_idx != -1:
              cleaned_content = cleaned_content[start_idx:end_idx+1]
-        
+
         content = json.loads(cleaned_content)
-        
+
         if isinstance(content, list): content = {"analise": "Processado", "alimentos": content}
-        
+
         return True, content
-        
+
     except Exception as e:
         return False, f"Erro: {str(e)}"
 
@@ -194,12 +196,12 @@ def gerar_excel_nutri(dt_ini, dt_fim):
         df_macros = df_detalhado.groupby('data')[['kcal', 'proteina', 'carbo', 'gordura']].sum().reset_index()
     else:
         df_macros = pd.DataFrame(columns=['data', 'kcal', 'proteina', 'carbo', 'gordura'])
-    
+
     if not df_macros.empty: df_macros['data'] = pd.to_datetime(df_macros['data']).dt.normalize()
     if not df_peso.empty:
         df_peso['data'] = pd.to_datetime(df_peso['data']).dt.normalize()
         df_peso = df_peso.drop_duplicates(subset='data', keep='last')
-    
+
     if not df_macros.empty or not df_peso.empty:
         df_resumo = pd.merge(df_macros, df_peso, on='data', how='outer').sort_values('data', ascending=False)
         df_resumo = df_resumo[['data', 'peso_kg', 'kcal', 'proteina', 'carbo', 'gordura']]
@@ -245,99 +247,13 @@ st.progress(min(k_hoje/METAS['kcal'], 1.0))
 st.divider()
 
 # ABAS
-tab_daily, tab_hist, tab_medidas, tab_dash, tab_rel, tab_admin = st.tabs(["📝 Diário", "📜 Histórico", "❤️ Saúde", "📊 Dash Pro", "📄 Relatórios", "⚙️ Configurações"])
-
-# --- ABA DIÁRIO ---
-with tab_daily:
-    with st.container():
-        st.markdown("##### ⚖️ Peso de Hoje")
-        with st.form("form_peso_diario_top"):
-            cp1, cp2, cp3 = st.columns([1, 1, 2])
-            d_peso = cp1.date_input("Data", value=data_hoje, label_visibility="collapsed")
-            p_val = cp2.number_input("Peso (kg)", 40.0, 200.0, step=0.1, value=peso_atual_sidebar, label_visibility="collapsed")
-            if cp3.form_submit_button("💾 Salvar Peso", use_container_width=True):
-                ok = executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (:d, :p)", {'d': d_peso, 'p': p_val})
-                if ok: st.cache_resource.clear(); st.rerun()
-    st.divider()
-
-    st.write("### 🍎 O que você comeu?")
-    texto_input = st.text_area("Descrição", height=100, label_visibility="collapsed", placeholder="Ex: 2 ovos mexidos e café preto")
-    if st.button("🚀 Processar Alimentação (IA)"):
-        api_key = st.secrets.get("GROQ_API_KEY")
-        if texto_input and api_key:
-            with st.spinner("Auditando..."):
-                ok_ia, res = processar_texto_ia(texto_input, api_key)
-                if ok_ia:
-                    st.success(res.get('analise'))
-                    for item in res.get('alimentos', []):
-                        k_final = max((item.get('p',0)*4 + item.get('c',0)*4 + item.get('g',0)*9), float(item.get('kcal', 0)))
-                        params = {'dt': item.get('data') or data_hoje, 'ali': item.get('alimento'), 'qtd': item.get('quantidade_g'), 'kc': k_final, 'pr': item.get('p'), 'ca': item.get('c'), 'go': item.get('g'), 'gl': item.get('gluten')}
-                        executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (:dt, :ali, :qtd, :kc, :pr, :ca, :go, :gl)", params)
-                    st.cache_resource.clear(); st.rerun()
-
-    with st.expander("📥 Importação JSON Manual (Gemini/GPT)"):
-        st.info("Cole aqui o JSON gerado externamente:")
-        json_manual = st.text_area("JSON", label_visibility="collapsed", height=150)
-        if st.button("Salvar JSON Manual"):
-            try:
-                cleaned = json_manual.replace('```json', '').replace('```', '')
-                start, end = cleaned.find('['), cleaned.rfind(']')
-                if start != -1 and end != -1: cleaned = cleaned[start:end+1]
-                lista = json.loads(cleaned)
-                for item in (lista if isinstance(lista, list) else [lista]):
-                    dt = item.get('data') if item.get('data') else data_hoje
-                    k_final = max((float(item.get('p',0))*4 + float(item.get('c',0))*4 + float(item.get('g',0))*9), float(item.get('kcal', 0)))
-                    params = {'dt': dt, 'ali': item.get('alimento'), 'qtd': item.get('quantidade_g'), 'kcal': k_final, 'prot': item.get('p'), 'carb': item.get('c'), 'gord': item.get('g'), 'glut': item.get('gluten')}
-                    executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (:dt, :ali, :qtd, :kcal, :prot, :carb, :gord, :glut)", params)
-                st.success("Importado!"); st.cache_resource.clear(); st.rerun()
-            except Exception as e: st.error(f"Erro no JSON: {e}")
-
-    st.subheader("Hoje")
-    if not df_hoje.empty:
-        for i, row in df_hoje.iterrows():
-            c1, c2, c3 = st.columns([3, 2, 0.5])
-            c1.markdown(f"**{row['alimento']}**")
-            c2.caption(f"{int(row['kcal'])} kcal | P:{int(row['proteina'])} G:{int(row['gordura'])}")
-            if c3.button("❌", key=f"d_{row['id']}"):
-                executar_sql("DELETE FROM public.consumo WHERE id=:id", {'id': row['id']})
-                st.cache_resource.clear(); st.rerun()
-            st.markdown("---")
-    else: st.info("Nada registrado hoje.")
-
-# --- ABA HISTÓRICO ---
-with tab_hist:
-    st.header("Histórico Completo")
-    df_all = executar_sql("SELECT * FROM public.consumo ORDER BY data DESC LIMIT 50", is_select=True)
-    if not df_all.empty: st.dataframe(df_all)
-
-# --- ABA SAÚDE ---
-with tab_medidas:
-    st.subheader("🫀 Pressão Arterial")
-    with st.form("bp_form"):
-        c1, c2, c3 = st.columns(3)
-        sys = c1.number_input("Sistólica", 90, 200, 120); dia = c2.number_input("Diastólica", 50, 130, 80); pul = c3.number_input("Pulso", 40, 200, 75)
-        if st.form_submit_button("Salvar Pressão"):
-            ok = executar_sql("INSERT INTO public.blood_pressure (systolic, diastolic, pulse, notes) VALUES (:s, :d, :p, 'App')", {'s': sys, 'd': dia, 'p': pul})
-            if ok: st.rerun()
-    st.divider(); st.subheader("📏 Avaliação Corporal")
-    with st.form("medidas_form"):
-        d_med = st.date_input("Data", value=data_hoje)
-        p_input = st.number_input("Peso Atual (kg)", 40.0, 200.0, step=0.1, value=peso_atual_sidebar)
-        waist = st.number_input("Cintura (cm)", 50.0, 200.0, step=0.5, value=METAS['last_waist'])
-        bf_weltman = calc_bf_weltman_obese(waist, p_input, METAS['altura'], METAS['genero'])
-        st.info(f"🧬 **BF Weltman: {bf_weltman:.1f}%**")
-        if st.form_submit_button("Salvar Avaliação"):
-            params = {'dt': d_med, 'w': p_input, 'wa': waist, 'ne': METAS['last_neck'], 'hi': METAS['last_hip'], 'bf_est': bf_weltman, 'f_pec': 0, 'f_abd': 0, 'f_thi': 0, 'f_tri': 0, 'bf_pol': 0, 'bf_wel': bf_weltman, 'nt': 'Weltman Simples'}
-            executar_sql("INSERT INTO public.body_measurements (log_date, weight_kg, waist_cm, neck_cm, hip_cm, body_fat_est, fold_chest, fold_abdominal, fold_thigh, fold_triceps, body_fat_pollock, body_fat_weltman, notes) VALUES (:dt, :w, :wa, :ne, :hi, :bf_est, :f_pec, :f_abd, :f_thi, :f_tri, :bf_pol, :bf_wel, :nt)", params)
-            executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (:dt, :w)", {'dt': d_med, 'w': p_input})
-            executar_sql("UPDATE public.perfil SET ultima_cintura=:wa WHERE id=1", {'wa': waist})
-            st.cache_resource.clear(); st.rerun()
+tab_dash, tab_daily, tab_hist, tab_medidas, tab_rel, tab_admin = st.tabs(["📊 Dash Pro", "📝 Diário", "📜 Histórico", "❤️ Saúde", "📄 Relatórios", "⚙️ Configurações"])
 
 # --- ABA DASH PRO ---
 with tab_dash:
     st.markdown("### 🧬 Leo's Analytics Hub")
-    
-    # 1. FETCH DADOS
+
+    # 1. FETCH DADOS (Variável renomeada para df_hist_d)
     df_medidas_d = executar_sql("SELECT * FROM public.body_measurements ORDER BY log_date ASC", is_select=True)
     df_bp_d = executar_sql("SELECT * FROM public.blood_pressure ORDER BY measurement_time ASC", is_select=True)
     DATA_INICIO_D = pd.to_datetime("2025-12-30").date()
@@ -348,16 +264,16 @@ with tab_dash:
     """, {"d": DATA_INICIO_D}, is_select=True)
     df_peso_d = executar_sql("SELECT * FROM public.peso ORDER BY data ASC", is_select=True)
 
-    # 1.1 PRÉ-CÁLCULO DE DADOS COMBINADOS (PARA USO NOS GRÁFICOS)
+    # 1.1 PRÉ-CÁLCULO DE DADOS COMBINADOS
     if not df_hist_d.empty and not df_peso_d.empty:
         df_hist_d['data_dt'] = pd.to_datetime(df_hist_d['data']).dt.date
         df_peso_d['data_dt'] = pd.to_datetime(df_peso_d['data']).dt.date
         df_merged = pd.merge(df_hist_d, df_peso_d[['data_dt', 'peso_kg']], on='data_dt', how='left').ffill()
         if df_merged['peso_kg'].isnull().any():
              df_merged['peso_kg'] = df_merged['peso_kg'].fillna(method='bfill').fillna(peso_atual_sidebar)
-        
+
         idade, altura = METAS['idade'], METAS['altura']
-        # GET Diário (Mifflin * TEF * 1.2)
+        # GET Diário
         df_merged['get_dia'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * 1.09 * 1.2
     else:
         df_merged = pd.DataFrame()
@@ -382,17 +298,17 @@ with tab_dash:
         df_peso_d['data_dt'] = pd.to_datetime(df_peso_d['data']).dt.date
         BASE_DATE = pd.to_datetime("2025-12-31").date()
         df_base = df_peso_d[df_peso_d['data_dt'] >= BASE_DATE].sort_values('data_dt')
-        
+
         if not df_base.empty:
             peso_inicial = float(df_base.iloc[0]['peso_kg'])
             datas_proj = pd.date_range(start=BASE_DATE, end=data_hoje)
             ritmo_diario = METAS['ritmo'] / 7
             pesos_estimados = [peso_inicial - (i * ritmo_diario) for i in range(len(datas_proj))]
-            
+
             peso_esperado_hoje = peso_inicial - ((data_hoje - BASE_DATE).days * ritmo_diario)
             diferenca_peso = peso_atual_sidebar - peso_esperado_hoje
             dias_diff = diferenca_peso / ritmo_diario if ritmo_diario > 0 else 0
-            
+
             col_g, col_s = st.columns([2, 1])
             with col_g:
                 fig_proj = go.Figure()
@@ -400,7 +316,7 @@ with tab_dash:
                 fig_proj.add_trace(go.Scatter(x=df_base['data_dt'], y=df_base['peso_kg'], mode='lines+markers', name='Real', line=dict(color='#FF4B4B', width=3)))
                 fig_proj.update_layout(height=350, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1))
                 st.plotly_chart(fig_proj, use_container_width=True)
-            
+
             with col_s:
                 st.metric("Peso Esperado Hoje", f"{peso_esperado_hoje:.1f} kg")
                 status = "Adiantado" if dias_diff <= 0 else "Atrasado"
@@ -505,36 +421,37 @@ with tab_dash:
                 st.info("Registre alimentos hoje para ver o gráfico.")
 
     # ========================================================
-    # 🌡️ ANÁLISE TERMODINÂMICA (CORRIGIDO)
+    # 🌡️ ANÁLISE TERMODINÂMICA (CORRIGIDO v2)
     # ========================================================
     st.markdown("##### 🌡️ Eficiência Termodinâmica")
 
-    # A variável correta no código v7.0 é 'df_hist_dash'
-    if not df_hist_dash.empty and not df_peso_all.empty:
+    # Usamos df_hist_d e df_peso_d aqui (variáveis locais do dash)
+    if not df_hist_d.empty and not df_peso_d.empty:
         # Criamos cópias para não bagunçar o dataframe original
-        df_h_eff = df_hist_dash.copy()
-        df_p_eff = df_peso_all.copy()
-        
+        df_h_eff = df_hist_d.copy()
+        df_p_eff = df_peso_d.copy()
+
         # Normalizamos as datas para garantir que o merge funcione
         df_h_eff['data_dt'] = pd.to_datetime(df_h_eff['data']).dt.date
         df_p_eff['data_dt'] = pd.to_datetime(df_p_eff['data']).dt.date
-        
+
         # Cruzamos Consumo x Peso no mesmo dia
         df_eff = pd.merge(df_h_eff, df_p_eff[['data_dt', 'peso_kg']], on='data_dt', how='inner').sort_values('data_dt')
-        
+
         if not df_eff.empty:
             # 1. Perda Real (Diferença na Balança do primeiro para o último registro coincidente)
             peso_start = df_eff.iloc[0]['peso_kg']
             peso_curr = df_eff.iloc[-1]['peso_kg']
             perda_real = peso_start - peso_curr
-            
+
             # 2. Perda Teórica (Déficit Acumulado / 7700)
             # GET Mifflin-St Jeor com fator 1.2 (Sedentário/Escritório)
-            df_eff['get_teorico'] = ((10 * df_eff['peso_kg']) + (6.25 * p['altura_cm']) - (5 * p['idade']) + 5) * 1.2
+            # Usando 'METAS' que é o alias de 'p'
+            df_eff['get_teorico'] = ((10 * df_eff['peso_kg']) + (6.25 * METAS['altura']) - (5 * METAS['idade']) + 5) * 1.2
             df_eff['deficit_dia'] = df_eff['get_teorico'] - df_eff['tkcal']
             deficit_acumulado = df_eff['deficit_dia'].sum()
             perda_teorica = deficit_acumulado / 7700
-            
+
             # 3. Cálculo do Fator (Eficiência)
             if perda_teorica > 0.1: # Evita divisão por zero ou números muito pequenos
                 fator_termo = perda_real / perda_teorica
@@ -544,7 +461,7 @@ with tab_dash:
             # 4. Exibição Visual
             ct1, ct2 = st.columns(2)
             ct1.metric("Perda Real (Periodo)", f"{perda_real:.1f} kg", f"Teórica (Física): {perda_teorica:.1f} kg")
-            
+
             if fator_termo > 1.15:
                 status_termo = "🔥 Turbo (Metabolismo Alto)"
                 cor_termo = "normal"
@@ -554,14 +471,97 @@ with tab_dash:
             else:
                 status_termo = "✅ Nominal (Padrão)"
                 cor_termo = "off"
-                
+
             ct2.metric("Fator Termodinâmico", f"{fator_termo:.2f}x", status_termo, delta_color=cor_termo)
             st.caption(f"Explicação: O fator **{fator_termo:.2f}x** significa que para cada 1kg que a matemática diz que você deveria perder, seu corpo está eliminando **{fator_termo:.2f}kg**. (Baseado nos dias onde houve registro de peso E alimentação).")
     else:
         st.info("Aguardando mais dados coincidentes (Peso + Alimentação no mesmo dia) para calcular a termodinâmica.")
 
+# --- ABA DIÁRIO (MANTIDA) ---
+with tab_daily:
+    with st.container():
+        st.markdown("##### ⚖️ Peso de Hoje")
+        with st.form("form_peso_diario_top"):
+            cp1, cp2, cp3 = st.columns([1, 1, 2])
+            d_peso = cp1.date_input("Data", value=data_hoje, label_visibility="collapsed")
+            p_val = cp2.number_input("Peso (kg)", 40.0, 200.0, step=0.1, value=peso_atual_sidebar, label_visibility="collapsed")
+            if cp3.form_submit_button("💾 Salvar Peso", use_container_width=True):
+                ok = executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (:d, :p)", {'d': d_peso, 'p': p_val})
+                if ok: st.cache_resource.clear(); st.rerun()
+    st.divider()
 
+    st.write("### 🍎 O que você comeu?")
+    texto_input = st.text_area("Descrição", height=100, label_visibility="collapsed", placeholder="Ex: 2 ovos mexidos e café preto")
+    if st.button("🚀 Processar Alimentação (IA)"):
+        api_key = st.secrets.get("GROQ_API_KEY")
+        if texto_input and api_key:
+            with st.spinner("Auditando..."):
+                ok_ia, res = processar_texto_ia(texto_input, api_key)
+                if ok_ia:
+                    st.success(res.get('analise'))
+                    for item in res.get('alimentos', []):
+                        k_final = max((item.get('p',0)*4 + item.get('c',0)*4 + item.get('g',0)*9), float(item.get('kcal', 0)))
+                        params = {'dt': item.get('data') or data_hoje, 'ali': item.get('alimento'), 'qtd': item.get('quantidade_g'), 'kc': k_final, 'pr': item.get('p'), 'ca': item.get('c'), 'go': item.get('g'), 'gl': item.get('gluten')}
+                        executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (:dt, :ali, :qtd, :kc, :pr, :ca, :go, :gl)", params)
+                    st.cache_resource.clear(); st.rerun()
 
+    with st.expander("📥 Importação JSON Manual (Gemini/GPT)"):
+        st.info("Cole aqui o JSON gerado externamente:")
+        json_manual = st.text_area("JSON", label_visibility="collapsed", height=150)
+        if st.button("Salvar JSON Manual"):
+            try:
+                cleaned = json_manual.replace('```json', '').replace('```', '')
+                start, end = cleaned.find('['), cleaned.rfind(']')
+                if start != -1 and end != -1: cleaned = cleaned[start:end+1]
+                lista = json.loads(cleaned)
+                for item in (lista if isinstance(lista, list) else [lista]):
+                    dt = item.get('data') if item.get('data') else data_hoje
+                    k_final = max((float(item.get('p',0))*4 + float(item.get('c',0))*4 + float(item.get('g',0))*9), float(item.get('kcal', 0)))
+                    params = {'dt': dt, 'ali': item.get('alimento'), 'qtd': item.get('quantidade_g'), 'kcal': k_final, 'prot': item.get('p'), 'carb': item.get('c'), 'gord': item.get('g'), 'glut': item.get('gluten')}
+                    executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (:dt, :ali, :qtd, :kcal, :prot, :carb, :gord, :glut)", params)
+                st.success("Importado!"); st.cache_resource.clear(); st.rerun()
+            except Exception as e: st.error(f"Erro no JSON: {e}")
+
+    st.subheader("Hoje")
+    if not df_hoje.empty:
+        for i, row in df_hoje.iterrows():
+            c1, c2, c3 = st.columns([3, 2, 0.5])
+            c1.markdown(f"**{row['alimento']}**")
+            c2.caption(f"{int(row['kcal'])} kcal | P:{int(row['proteina'])} G:{int(row['gordura'])}")
+            if c3.button("❌", key=f"d_{row['id']}"):
+                executar_sql("DELETE FROM public.consumo WHERE id=:id", {'id': row['id']})
+                st.cache_resource.clear(); st.rerun()
+            st.markdown("---")
+    else: st.info("Nada registrado hoje.")
+
+# --- ABA HISTÓRICO ---
+with tab_hist:
+    st.header("Histórico Completo")
+    df_all = executar_sql("SELECT * FROM public.consumo ORDER BY data DESC LIMIT 50", is_select=True)
+    if not df_all.empty: st.dataframe(df_all)
+
+# --- ABA SAÚDE ---
+with tab_medidas:
+    st.subheader("🫀 Pressão Arterial")
+    with st.form("bp_form"):
+        c1, c2, c3 = st.columns(3)
+        sys = c1.number_input("Sistólica", 90, 200, 120); dia = c2.number_input("Diastólica", 50, 130, 80); pul = c3.number_input("Pulso", 40, 200, 75)
+        if st.form_submit_button("Salvar Pressão"):
+            ok = executar_sql("INSERT INTO public.blood_pressure (systolic, diastolic, pulse, notes) VALUES (:s, :d, :p, 'App')", {'s': sys, 'd': dia, 'p': pul})
+            if ok: st.rerun()
+    st.divider(); st.subheader("📏 Avaliação Corporal")
+    with st.form("medidas_form"):
+        d_med = st.date_input("Data", value=data_hoje)
+        p_input = st.number_input("Peso Atual (kg)", 40.0, 200.0, step=0.1, value=peso_atual_sidebar)
+        waist = st.number_input("Cintura (cm)", 50.0, 200.0, step=0.5, value=METAS['last_waist'])
+        bf_weltman = calc_bf_weltman_obese(waist, p_input, METAS['altura'], METAS['genero'])
+        st.info(f"🧬 **BF Weltman: {bf_weltman:.1f}%**")
+        if st.form_submit_button("Salvar Avaliação"):
+            params = {'dt': d_med, 'w': p_input, 'wa': waist, 'ne': METAS['last_neck'], 'hi': METAS['last_hip'], 'bf_est': bf_weltman, 'f_pec': 0, 'f_abd': 0, 'f_thi': 0, 'f_tri': 0, 'bf_pol': 0, 'bf_wel': bf_weltman, 'nt': 'Weltman Simples'}
+            executar_sql("INSERT INTO public.body_measurements (log_date, weight_kg, waist_cm, neck_cm, hip_cm, body_fat_est, fold_chest, fold_abdominal, fold_thigh, fold_triceps, body_fat_pollock, body_fat_weltman, notes) VALUES (:dt, :w, :wa, :ne, :hi, :bf_est, :f_pec, :f_abd, :f_thi, :f_tri, :bf_pol, :bf_wel, :nt)", params)
+            executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (:dt, :w)", {'dt': d_med, 'w': p_input})
+            executar_sql("UPDATE public.perfil SET ultima_cintura=:wa WHERE id=1", {'wa': waist})
+            st.cache_resource.clear(); st.rerun()
 
 # --- ABA RELATÓRIOS ---
 with tab_rel:
@@ -585,4 +585,4 @@ with tab_admin:
             executar_sql("UPDATE public.perfil SET meta_kcal=:mk, meta_proteina=:mp, meta_carbo=:mc, meta_gordura=:mg, meta_peso_alvo=:mpa, ritmo_semanal=:rit WHERE id=1", {'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 'mpa': n_peso_alvo, 'rit': n_ritmo})
             st.cache_resource.clear(); st.rerun()
 
-st.caption("Leo Tracker Pro v7.2 | Chart Energy vs Volume Added")
+st.caption("Leo Tracker Pro v7.5 | Bugfix Termodinâmica")
