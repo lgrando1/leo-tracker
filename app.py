@@ -562,6 +562,7 @@ with tab_dash:
 
 
 
+
 # --- ABA RELATÓRIOS ---
 with tab_rel:
     st.header("📄 Relatórios")
