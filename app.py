@@ -88,7 +88,6 @@ def inicializar_banco():
             meta_kcal REAL, meta_proteina REAL, meta_carbo REAL, meta_gordura REAL, meta_peso_alvo REAL
         );
     """)
-    # ATUALIZAÇÃO v8.3: Adiciona coluna fator_atividade se não existir
     try: executar_sql("ALTER TABLE public.perfil ADD COLUMN IF NOT EXISTS fator_atividade REAL DEFAULT 1.2;")
     except: pass
     
@@ -124,7 +123,7 @@ def get_metas_do_banco():
                 "peso_alvo": float(row.get('meta_peso_alvo', 120.0)), "ritmo": float(row.get('ritmo_semanal', 0.8)),
                 "altura": int(row.get('altura_cm', 178)), "idade": int(row.get('idade', 41)),
                 "genero": row.get('genero', 'Masculino'),
-                "fator": float(row.get('fator_atividade') or 1.2), # NOVO
+                "fator": float(row.get('fator_atividade') or 1.2),
                 "last_waist": float(row.get('ultima_cintura') or 133.0),
                 "last_neck": float(row.get('ultimo_pescoco') or 53.0),
                 "last_hip": float(row.get('ultimo_quadril') or 122.0)
@@ -281,7 +280,7 @@ with tab_dash:
             df_merged['t_min'] = 0; df_merged['t_passos'] = 0; df_merged['t_cal_out'] = 0
 
         idade, altura = METAS['idade'], METAS['altura']
-        fator_uso = METAS['fator'] # USANDO O FATOR CONFIGURÁVEL
+        fator_uso = METAS['fator'] 
         
         df_merged['get_basal_neat'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * fator_uso
         df_merged['get_total'] = df_merged['get_basal_neat'] + df_merged['t_cal_out']
@@ -372,26 +371,38 @@ with tab_dash:
             st.plotly_chart(fig_vol, use_container_width=True)
 
     st.divider()
-    c_t1, c_t2 = st.columns(2)
-    with c_t1:
-        st.subheader("🏦 Banco de Gordura")
-        if not df_merged.empty:
-            deficit_total = df_merged['deficit_real'].sum()
-            kg_gordura = deficit_total / 7700
-            st.metric("Déficit Acumulado", f"{int(deficit_total)} kcal")
-            st.metric("Gordura Eliminada (Teórica)", f"{kg_gordura:.2f} kg")
+    st.subheader("🏦 Banco de Gordura & Termodinâmica")
+    c_t1, c_t2, c_t3 = st.columns(3)
+    if not df_merged.empty:
+        deficit_total = df_merged['deficit_real'].sum()
+        kg_gordura = deficit_total / 7700
+        
+        # CÁLCULO TERMODINÂMICA RESTAURADO
+        peso_start = df_merged.iloc[0]['peso_kg']
+        peso_curr = df_merged.iloc[-1]['peso_kg']
+        perda_real = peso_start - peso_curr
+        perda_teorica = deficit_total / 7700
+        fator_termo = perda_real / perda_teorica if perda_teorica > 0.1 else 1.0
+
+        c_t1.metric("Déficit Acumulado", f"{int(deficit_total)} kcal")
+        c_t2.metric("Perda Real / Teórica", f"{perda_real:.1f}kg / {perda_teorica:.1f}kg")
+        
+        if fator_termo > 1.15: st_termo, cor_termo = "🔥 Turbo", "normal"
+        elif fator_termo < 0.85: st_termo, cor_termo = "❄️ Lento", "inverse"
+        else: st_termo, cor_termo = "✅ Normal", "off"
+        c_t3.metric("Índice Termodinâmico", f"{fator_termo:.2f}x", st_termo, delta_color=cor_termo)
     
-    with c_t2:
-         st.subheader("🍽️ Macros (%)")
-         if not df_hist_d.empty:
-            df_macros = df_hist_d.copy()
-            df_macros['tot'] = (df_macros['tprot']*4 + df_macros['tcarb']*4 + df_macros['tgord']*9).replace(0, 1)
-            fig_stack = go.Figure()
-            fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tprot']*4/df_macros['tot'])*100, name='P', marker_color='#3366CC'))
-            fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tgord']*9/df_macros['tot'])*100, name='G', marker_color='#DC3912'))
-            fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tcarb']*4/df_macros['tot'])*100, name='C', marker_color='#FF9900'))
-            fig_stack.update_layout(barmode='stack', height=250, margin=dict(l=10,r=10,t=20,b=10), yaxis=dict(range=[0, 100]))
-            st.plotly_chart(fig_stack, use_container_width=True)
+    st.divider()
+    st.subheader("🍽️ Macros (%)")
+    if not df_hist_d.empty:
+        df_macros = df_hist_d.copy()
+        df_macros['tot'] = (df_macros['tprot']*4 + df_macros['tcarb']*4 + df_macros['tgord']*9).replace(0, 1)
+        fig_stack = go.Figure()
+        fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tprot']*4/df_macros['tot'])*100, name='P', marker_color='#3366CC'))
+        fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tgord']*9/df_macros['tot'])*100, name='G', marker_color='#DC3912'))
+        fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tcarb']*4/df_macros['tot'])*100, name='C', marker_color='#FF9900'))
+        fig_stack.update_layout(barmode='stack', height=250, margin=dict(l=10,r=10,t=20,b=10), yaxis=dict(range=[0, 100]))
+        st.plotly_chart(fig_stack, use_container_width=True)
 
 # --- ABA DIÁRIO ---
 with tab_daily:
@@ -555,4 +566,4 @@ with tab_admin:
             executar_sql("UPDATE public.perfil SET meta_kcal=:mk, meta_proteina=:mp, meta_carbo=:mc, meta_gordura=:mg, meta_peso_alvo=:mpa, ritmo_semanal=:rit, fator_atividade=:fat WHERE id=1", {'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 'mpa': n_peso_alvo, 'rit': n_ritmo, 'fat': n_fator})
             st.cache_resource.clear(); st.rerun()
 
-st.caption("Leo Tracker Pro v8.3 | Fator Atividade Dinâmico 🏃‍♂️")
+st.caption("Leo Tracker Pro v8.4 | DashPro Completo (Termodinâmica + Iron N1 + Fator Ativ) 🚀")
