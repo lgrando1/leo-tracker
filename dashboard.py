@@ -104,7 +104,6 @@ if not df_hist.empty and not df_peso.empty:
     
     # Cálculos Avançados
     idade, altura = int(p.get('idade', 41)), int(p.get('altura_cm', 178))
-    # GET Basal Ajustado + Treino Extra
     df_merged['get_basal'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * fator_atividade
     df_merged['get_total'] = df_merged['get_basal'] + df_merged['t_cal_out']
     df_merged['deficit_real'] = df_merged['get_total'] - df_merged['tkcal']
@@ -130,7 +129,6 @@ c3.metric("🥩 Proteína (Hoje)", f"{int(p_act)}g", f"Meta: {p['meta_proteina']
 c4.metric("💧 Água", f"{meta_agua}L", "Minímo")
 c5.metric("🏃‍♂️ Treino (Hoje)", f"{treino_min} min", f"{treino_passos} passos")
 
-# Pressão
 last_bp_txt = "--"
 if not df_bp.empty:
     last = df_bp.iloc[-1]
@@ -146,13 +144,9 @@ with c_main1:
     st.markdown("##### 🧪 Densidade Energética: Volume vs. Calorias")
     if not df_merged.empty:
         fig_vol = make_subplots(specs=[[{"secondary_y": True}]])
-        # Barras: Volume (Fundo)
         fig_vol.add_trace(go.Bar(x=df_merged['data'], y=df_merged['tqtd'], name="Volume (g)", marker_color='#AED6F1', opacity=0.5), secondary_y=True)
-        # Linha: Calorias (Frente)
         fig_vol.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['tkcal'], name="Calorias In", mode='lines+markers', line=dict(color='#C0392B', width=3)), secondary_y=False)
-        # Linha: Gasto Total
         fig_vol.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['get_total'], name="Gasto Total (Out)", mode='lines', line=dict(color='#27AE60', width=2, dash='dot')), secondary_y=False)
-        
         fig_vol.update_layout(height=350, margin=dict(l=10,r=10,t=30,b=10), legend=dict(orientation="h", y=1.1), template="plotly_white")
         fig_vol.update_yaxes(title_text="Kcal", secondary_y=False, showgrid=True)
         fig_vol.update_yaxes(title_text="Gramas", secondary_y=True, showgrid=False)
@@ -164,8 +158,6 @@ with c_main2:
     if not df_merged.empty:
         deficit_total = df_merged['deficit_real'].sum()
         kg_gordura = deficit_total / 7700
-        
-        # Eficiência Metabólica
         peso_start = df_merged.iloc[0]['peso_kg']
         peso_curr = df_merged.iloc[-1]['peso_kg']
         perda_real = peso_start - peso_curr
@@ -174,7 +166,6 @@ with c_main2:
 
         st.metric("Déficit Acumulado", f"{int(deficit_total)} kcal")
         st.metric("Gordura Eliminada (Teórica)", f"{kg_gordura:.2f} kg")
-        
         if fator_termo > 1.15: lbl, clr = "🔥 Turbo", "normal"
         elif fator_termo < 0.85: lbl, clr = "❄️ Lento", "inverse"
         else: lbl, clr = "✅ Normal", "off"
@@ -192,13 +183,11 @@ with c_p1:
         df_peso['data_dt'] = pd.to_datetime(df_peso['data']).dt.date
         BASE_DATE = pd.to_datetime("2025-12-31").date()
         df_base = df_peso[df_peso['data_dt'] >= BASE_DATE].sort_values('data_dt')
-        
         if not df_base.empty:
             peso_inicial = float(df_base.iloc[0]['peso_kg'])
-            datas_proj = pd.date_range(start=BASE_DATE, end=hoje + timedelta(days=14)) # +14 dias futuro
+            datas_proj = pd.date_range(start=BASE_DATE, end=hoje + timedelta(days=14))
             ritmo_diario = float(p['ritmo_semanal']) / 7
             pesos_estimados = [peso_inicial - (i * ritmo_diario) for i in range(len(datas_proj))]
-            
             fig_proj = go.Figure()
             fig_proj.add_trace(go.Scatter(x=datas_proj, y=pesos_estimados, mode='lines', name='Meta Ideal', line=dict(color='#29B5E8', dash='dash')))
             fig_proj.add_trace(go.Scatter(x=df_base['data_dt'], y=df_base['peso_kg'], mode='lines+markers', name='Realizado', line=dict(color='#FF4B4B', width=3)))
@@ -216,33 +205,48 @@ with c_p2:
 
 st.divider()
 
-# --- ROW 4: SAÚDE ---
-st.markdown("##### 🧬 Indicadores de Saúde")
-col_s1, col_s2, col_s3 = st.columns(3)
+# ============================================================================
+# 5. ANÁLISE ESTATÍSTICA (EDA) - NOVA SEÇÃO
+# ============================================================================
+st.markdown("### 📊 Análise de Tendências (Médias Móveis)")
 
-with col_s1:
-    if not df_medidas.empty:
-        fig_bf = go.Figure(go.Scatter(x=df_medidas['log_date'], y=df_medidas['body_fat_est'], mode='lines+markers', name="BF%", line=dict(color='#e67e22')))
-        fig_bf.update_layout(title="Gordura Corporal (%)", height=250, margin=dict(l=10,r=10,t=30,b=10))
-        st.plotly_chart(fig_bf, use_container_width=True)
+if not df_merged.empty:
+    # Preparar Dados para EDA
+    # Garantir que temos apenas colunas numéricas e preencher NaN
+    cols_eda = ['peso_kg', 'tkcal', 'tprot', 'tcarb', 'tgord', 't_min', 't_passos', 'deficit_real']
+    df_eda = df_merged[['data', *cols_eda]].copy().sort_values('data')
+    df_eda = df_eda.fillna(0)
 
-with col_s2:
-    if not df_bp.empty:
-        fig_bp = go.Figure()
-        fig_bp.add_trace(go.Scatter(x=df_bp['measurement_time'], y=df_bp['systolic'], name="Sys", line=dict(color='#c0392b')))
-        fig_bp.add_trace(go.Scatter(x=df_bp['measurement_time'], y=df_bp['diastolic'], name="Dia", line=dict(color='#2980b9')))
-        fig_bp.update_layout(title="Pressão Arterial", height=250, margin=dict(l=10,r=10,t=30,b=10))
-        st.plotly_chart(fig_bp, use_container_width=True)
+    def calc_mean(df, days, col):
+        return df.tail(days)[col].mean()
 
-with col_s3:
-    if not df_hist.empty:
-        df_macros = df_hist.copy()
-        df_macros['tot'] = (df_macros['tprot']*4 + df_macros['tcarb']*4 + df_macros['tgord']*9).replace(0, 1)
-        fig_stack = go.Figure()
-        fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tprot']*4/df_macros['tot'])*100, name='P', marker_color='#3366CC'))
-        fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tgord']*9/df_macros['tot'])*100, name='G', marker_color='#DC3912'))
-        fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tcarb']*4/df_macros['tot'])*100, name='C', marker_color='#FF9900'))
-        fig_stack.update_layout(title="Distribuição Macros (%)", barmode='stack', height=250, margin=dict(l=10,r=10,t=30,b=10), yaxis=dict(range=[0, 100]), showlegend=False)
-        st.plotly_chart(fig_stack, use_container_width=True)
+    # Construir Tabela Resumo
+    metrics_list = [
+        ("⚖️ Peso Médio (kg)", 'peso_kg'),
+        ("🔥 Calorias (kcal)", 'tkcal'),
+        ("🥩 Proteína (g)", 'tprot'),
+        ("🍞 Carbo (g)", 'tcarb'),
+        ("🥑 Gordura (g)", 'tgord'),
+        ("⏱️ Treino (min)", 't_min'),
+        ("👣 Passos", 't_passos'),
+        ("📉 Déficit Diário", 'deficit_real')
+    ]
 
-st.caption("Leo Tracker Smart View v4.0 | Read-Only Mode")
+    eda_data = []
+    for label, col in metrics_list:
+        row = {
+            "Indicador": label,
+            "3 Dias": f"{calc_mean(df_eda, 3, col):.1f}",
+            "7 Dias": f"{calc_mean(df_eda, 7, col):.1f}",
+            "30 Dias": f"{calc_mean(df_eda, 30, col):.1f}",
+            "Total (Global)": f"{df_eda[col].mean():.1f}"
+        }
+        eda_data.append(row)
+
+    df_eda_display = pd.DataFrame(eda_data)
+    st.table(df_eda_display)
+
+else:
+    st.info("Dados insuficientes para gerar estatísticas.")
+
+st.caption("Leo Tracker Smart View v4.1 | EDA Enabled")
