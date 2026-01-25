@@ -104,6 +104,7 @@ if not df_hist.empty and not df_peso.empty:
     
     # Cálculos Avançados
     idade, altura = int(p.get('idade', 41)), int(p.get('altura_cm', 178))
+    # GET (Mifflin-St Jeor)
     df_merged['get_basal'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * fator_atividade
     df_merged['get_total'] = df_merged['get_basal'] + df_merged['t_cal_out']
     df_merged['deficit_real'] = df_merged['get_total'] - df_merged['tkcal']
@@ -123,11 +124,11 @@ treino_min = int(df_hoje_treino['duracao_min'].sum()) if not df_hoje_treino.empt
 treino_passos = int(df_hoje_treino['passos'].sum()) if not df_hoje_treino.empty else 0
 
 c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("⚖️ Peso Atual", f"{peso_atual} kg", f"Meta: {p['meta_peso_alvo']}")
-c2.metric("🔥 Calorias (Hoje)", f"{int(k_act)}", f"Meta: {p['meta_kcal']}")
-c3.metric("🥩 Proteína (Hoje)", f"{int(p_act)}g", f"Meta: {p['meta_proteina']}")
-c4.metric("💧 Água", f"{meta_agua}L", "Minímo")
-c5.metric("🏃‍♂️ Treino (Hoje)", f"{treino_min} min", f"{treino_passos} passos")
+c1.metric("⚖️ Peso Atual", f"{peso_atual} kg", f"Meta: {p['meta_peso_alvo']}", help="Última pesagem registrada no banco de dados.")
+c2.metric("🔥 Calorias (Hoje)", f"{int(k_act)}", f"Meta: {p['meta_kcal']}", help="Soma dos alimentos registrados hoje via IA.")
+c3.metric("🥩 Proteína (Hoje)", f"{int(p_act)}g", f"Meta: {p['meta_proteina']}", help="Total de proteínas (animal + vegetal).")
+c4.metric("💧 Água", f"{meta_agua}L", "Minímo", help="Cálculo: 35ml x Peso Atual.")
+c5.metric("🏃‍♂️ Treino (Hoje)", f"{treino_min} min", f"{treino_passos} passos", help="Dados importados do Iron N1 (Caminhada/Musculação).")
 
 last_bp_txt = "--"
 if not df_bp.empty:
@@ -141,7 +142,7 @@ st.divider()
 c_main1, c_main2 = st.columns([2, 1])
 
 with c_main1:
-    st.markdown("##### 🧪 Densidade Energética: Volume vs. Calorias")
+    st.markdown("##### 🧪 Densidade Energética: Volume vs. Calorias", help="Compara o peso da comida (g) com a energia (kcal). Barras altas com linha baixa indicam alta saciedade.")
     if not df_merged.empty:
         fig_vol = make_subplots(specs=[[{"secondary_y": True}]])
         fig_vol.add_trace(go.Bar(x=df_merged['data'], y=df_merged['tqtd'], name="Volume (g)", marker_color='#AED6F1', opacity=0.5), secondary_y=True)
@@ -155,7 +156,7 @@ with c_main1:
     else: st.info("Aguardando dados...")
 
 with c_main2:
-    st.markdown("##### 🏦 Termodinâmica")
+    st.markdown("##### 🏦 Termodinâmica & Déficit", help="Compara a perda de peso real na balança com a perda matemática baseada no déficit calórico.")
     if not df_merged.empty:
         deficit_total = df_merged['deficit_real'].sum()
         kg_gordura = deficit_total / 7700
@@ -166,11 +167,11 @@ with c_main2:
         fator_termo = perda_real / perda_teorica if perda_teorica > 0.1 else 1.0
 
         st.metric("Déficit Acumulado", f"{int(deficit_total)} kcal")
-        st.metric("Gordura Eliminada (Teórica)", f"{kg_gordura:.2f} kg")
+        st.metric("Gordura Eliminada (Teórica)", f"{kg_gordura:.2f} kg", help="Baseado em 7700kcal = 1kg de gordura")
         if fator_termo > 1.15: lbl, clr = "🔥 Turbo", "normal"
         elif fator_termo < 0.85: lbl, clr = "❄️ Lento", "inverse"
         else: lbl, clr = "✅ Normal", "off"
-        st.metric("Índice Termodinâmico", f"{fator_termo:.2f}x", lbl, delta_color=clr)
+        st.metric("Índice Termodinâmico", f"{fator_termo:.2f}x", lbl, delta_color=clr, help=">1.0: Perdendo mais que o previsto. <1.0: Perdendo menos (possível retenção ou adaptação).")
         st.caption(f"*Baseado no fator de atividade: {fator_atividade}x*")
 
 st.divider()
@@ -179,7 +180,7 @@ st.divider()
 c_p1, c_p2 = st.columns([2, 1])
 
 with c_p1:
-    st.markdown("##### 🎯 Projeção de Peso")
+    st.markdown("##### 🎯 Projeção de Peso", help="Linha tracejada indica a meta de perda semanal. Linha sólida é o peso real.")
     if not df_peso.empty:
         df_peso['data_dt'] = pd.to_datetime(df_peso['data']).dt.date
         BASE_DATE = pd.to_datetime("2025-12-31").date()
@@ -247,10 +248,8 @@ if not df_merged.empty:
     cols_eda = ['peso_kg', 'tkcal', 'tprot', 'tcarb', 'tgord', 't_min', 't_passos', 'deficit_real']
     df_eda = df_merged[['data', *cols_eda]].copy().sort_values('data').fillna(0)
 
-    def calc_mean(df, days, col):
-        return df.tail(days)[col].mean()
+    def calc_mean(df, days, col): return df.tail(days)[col].mean()
 
-    # Tabela com Mínimo e Máximo
     metrics_list = [
         ("⚖️ Peso Médio (kg)", 'peso_kg'),
         ("🔥 Calorias (kcal)", 'tkcal'),
@@ -270,14 +269,13 @@ if not df_merged.empty:
             "7 Dias": f"{calc_mean(df_eda, 7, col):.1f}",
             "30 Dias": f"{calc_mean(df_eda, 30, col):.1f}",
             "Média (Total)": f"{df_eda[col].mean():.1f}",
-            "Mínimo (Total)": f"{df_eda[col].min():.1f}", # NOVO
-            "Máximo (Total)": f"{df_eda[col].max():.1f}"  # NOVO
+            "Mínimo": f"{df_eda[col].min():.1f}",
+            "Máximo": f"{df_eda[col].max():.1f}"
         }
         eda_data.append(row)
 
     st.table(pd.DataFrame(eda_data))
 
-    # NOVO GRÁFICO: EVOLUÇÃO DE MACROS (GRAMAS)
     st.markdown("##### 📈 Evolução de Macronutrientes (Gramas)")
     fig_macros_grams = go.Figure()
     fig_macros_grams.add_trace(go.Scatter(x=df_eda['data'], y=df_eda['tprot'], name='Proteína (g)', mode='lines+markers', line=dict(color='#3366CC', width=3)))
@@ -286,7 +284,30 @@ if not df_merged.empty:
     fig_macros_grams.update_layout(height=350, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1), template="plotly_white", yaxis_title="Gramas")
     st.plotly_chart(fig_macros_grams, use_container_width=True)
 
-else:
-    st.info("Dados insuficientes para gerar estatísticas.")
+# ============================================================================
+# 6. GLOSSÁRIO E METODOLOGIA (NOVO)
+# ============================================================================
+with st.expander("📚 Metodologia e Glossário Técnico (Clique para abrir)", expanded=False):
+    st.markdown("""
+    ### 1. Estimativa de Gasto Energético (GET)
+    * **Fórmula Base:** Equação de Mifflin-St Jeor (Padrão ouro para obesidade/perda de peso).
+    * **Ajuste:** Multiplicado pelo **Fator de Atividade** (Configurado para 1.2 - Sedentário/Escritório).
+    * **Gasto Ativo:** Adicionamos as calorias do exercício registradas no **Iron N1** (Caminhada/Musculação) sobre o basal.
+    
+    ### 2. Termodinâmica e Déficit
+    * **Déficit Real:** Diferença entre o Gasto Total Estimado e as Calorias Ingeridas.
+    * **Perda Teórica:** Déficit Acumulado / 7700 (Considerando que 1kg de gordura ≈ 7700kcal).
+    * **Índice Termodinâmico:** Razão entre a perda na balança e a perda teórica.
+        * *> 1.0:* Perda acelerada (metabolismo alto ou desidratação).
+        * *< 1.0:* Perda lenta (possível retenção hídrica, erro de contagem ou adaptação metabólica).
+    
+    ### 3. Densidade Calórica
+    * Analisa a relação entre **Volume de Comida (g)** e **Calorias (kcal)**.
+    * **Objetivo:** Manter barras de volume altas e linha de calorias baixa (Saciedade).
+    
+    ### 4. Projeção Linear
+    * Calculada com base na meta de **0.8kg/semana**.
+    * A linha tracejada mostra o caminho ideal até a meta.
+    """)
 
-st.caption("Leo Tracker Smart View v4.2 | EDA + Min/Max + Macro Chart")
+st.caption("Leo Tracker Smart View v4.3 | Presentation Mode")
