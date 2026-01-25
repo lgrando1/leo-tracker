@@ -144,7 +144,6 @@ def get_metas_do_banco():
 
 inicializar_banco()
 METAS = get_metas_do_banco()
-# Alias para compatibilidade com códigos que usam 'p'
 p = METAS 
 
 # CÁLCULOS
@@ -179,59 +178,73 @@ def processar_texto_ia(texto_usuario, api_key):
     """
     try:
         completion = client.chat.completions.create(messages=[{"role": "system", "content": prompt_system}, {"role": "user", "content": texto_usuario}], model="llama-3.3-70b-versatile", response_format={"type": "json_object"})
-
         raw_content = completion.choices[0].message.content
         cleaned_content = raw_content.replace("```json", "").replace("```", "").strip()
-
-        start_idx = cleaned_content.find('{')
-        end_idx = cleaned_content.rfind('}')
-        if start_idx != -1 and end_idx != -1:
-             cleaned_content = cleaned_content[start_idx:end_idx+1]
-
+        start_idx = cleaned_content.find('{'); end_idx = cleaned_content.rfind('}')
+        if start_idx != -1 and end_idx != -1: cleaned_content = cleaned_content[start_idx:end_idx+1]
         content = json.loads(cleaned_content)
-
         if isinstance(content, list): content = {"analise": "Processado", "alimentos": content}
-
         return True, content
-
-    except Exception as e:
-        return False, f"Erro: {str(e)}"
+    except Exception as e: return False, f"Erro: {str(e)}"
 
 # ============================================================================
-# 6. GERADOR DE EXCEL
+# 6. GERADOR DE EXCEL (ATUALIZADO COM TREINOS)
 # ============================================================================
 def gerar_excel_nutri(dt_ini, dt_fim):
     output = io.BytesIO()
     params = {'d1': dt_ini, 'd2': dt_fim}
+    
+    # 1. Fetch de todas as tabelas
     df_detalhado = executar_sql("SELECT data, alimento, quantidade, kcal, proteina, carbo, gordura FROM public.consumo WHERE data >= :d1 AND data <= :d2 ORDER BY data DESC", params, is_select=True)
     df_peso = executar_sql("SELECT data, peso_kg FROM public.peso WHERE data >= :d1 AND data <= :d2 ORDER BY data ASC", params, is_select=True)
     df_medidas = executar_sql("SELECT log_date as data, weight_kg as peso, waist_cm as cintura, body_fat_est as bf_estimado, notes FROM public.body_measurements WHERE log_date >= :d1 AND log_date <= :d2 ORDER BY log_date DESC", params, is_select=True)
     df_pressao = executar_sql("SELECT measurement_time as data_hora, systolic, diastolic, pulse FROM public.blood_pressure WHERE measurement_time >= :d1 AND measurement_time <= :d2 ORDER BY measurement_time DESC", params, is_select=True)
-    df_treinos = executar_sql("SELECT data, tipo, duracao_min, passos, distancia_km, calorias, bpm_medio FROM public.exercicios WHERE data >= :d1 AND data <= :d2 ORDER BY data DESC", params, is_select=True)
+    df_treinos_raw = executar_sql("SELECT data, tipo, duracao_min, passos, distancia_km, calorias, bpm_medio FROM public.exercicios WHERE data >= :d1 AND data <= :d2 ORDER BY data DESC", params, is_select=True)
 
+    # 2. Agregação de Consumo
     if not df_detalhado.empty:
         df_macros = df_detalhado.groupby('data')[['kcal', 'proteina', 'carbo', 'gordura']].sum().reset_index()
     else:
         df_macros = pd.DataFrame(columns=['data', 'kcal', 'proteina', 'carbo', 'gordura'])
 
+    # 3. Agregação de Treinos (Para o Resumo)
+    if not df_treinos_raw.empty:
+        df_treinos_agg = df_treinos_raw.groupby('data')[['duracao_min', 'passos', 'calorias']].sum().reset_index()
+        df_treinos_agg.columns = ['data', 'treino_min', 'treino_passos', 'treino_kcal']
+    else:
+        df_treinos_agg = pd.DataFrame(columns=['data', 'treino_min', 'treino_passos', 'treino_kcal'])
+
+    # 4. Normalização de datas
     if not df_macros.empty: df_macros['data'] = pd.to_datetime(df_macros['data']).dt.normalize()
     if not df_peso.empty:
         df_peso['data'] = pd.to_datetime(df_peso['data']).dt.normalize()
         df_peso = df_peso.drop_duplicates(subset='data', keep='last')
+    if not df_treinos_agg.empty: df_treinos_agg['data'] = pd.to_datetime(df_treinos_agg['data']).dt.normalize()
 
+    # 5. Merge Completo (Macros + Peso + Treino)
     if not df_macros.empty or not df_peso.empty:
-        df_resumo = pd.merge(df_macros, df_peso, on='data', how='outer').sort_values('data', ascending=False)
-        df_resumo = df_resumo[['data', 'peso_kg', 'kcal', 'proteina', 'carbo', 'gordura']]
-        df_resumo.columns = ['Data', 'Peso (kg)', 'Calorias (kcal)', 'Proteína (g)', 'Carbo (g)', 'Gordura (g)']
+        df_resumo = pd.merge(df_macros, df_peso, on='data', how='outer')
+        df_resumo = pd.merge(df_resumo, df_treinos_agg, on='data', how='left') # Merge com treinos
+        
+        df_resumo = df_resumo.sort_values('data', ascending=False)
+        # Seleção e renomeação
+        cols_order = ['data', 'peso_kg', 'kcal', 'proteina', 'carbo', 'gordura', 'treino_min', 'treino_passos', 'treino_kcal']
+        # Garante que as colunas existem (caso o merge tenha falhado por falta de dados)
+        for c in cols_order: 
+            if c not in df_resumo.columns: df_resumo[c] = 0
+            
+        df_resumo = df_resumo[cols_order]
+        df_resumo.columns = ['Data', 'Peso (kg)', 'Comida (kcal)', 'Prot (g)', 'Carb (g)', 'Gord (g)', 'Treino (min)', 'Passos', 'Gasto Treino (kcal)']
+        
         df_resumo = df_resumo.dropna(subset=['Data'])
         df_resumo['Data'] = df_resumo['Data'].dt.strftime('%d/%m/%Y')
     else:
-        df_resumo = pd.DataFrame(columns=['Data', 'Peso', 'Kcal', 'Prot', 'Carb', 'Gord'])
+        df_resumo = pd.DataFrame(columns=['Data', 'Peso', 'Kcal', '...'])
 
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df_resumo.to_excel(writer, sheet_name='1. Resumo Diário', index=False)
-        df_detalhado.to_excel(writer, sheet_name='2. Diário Detalhado', index=False)
-        df_treinos.to_excel(writer, sheet_name='3. Treinos', index=False)
+        df_resumo.to_excel(writer, sheet_name='1. Resumo Completo', index=False)
+        df_detalhado.to_excel(writer, sheet_name='2. Alimentação Detalhada', index=False)
+        df_treinos_raw.to_excel(writer, sheet_name='3. Treinos Brutos', index=False)
         df_medidas.to_excel(writer, sheet_name='4. Medidas', index=False)
         df_pressao.to_excel(writer, sheet_name='5. Pressão', index=False)
     return output.getvalue()
@@ -264,39 +277,54 @@ c4.metric("🥑 Gordura", f"{int(g_hoje)}g", f"Meta: {METAS['gord']}g")
 st.progress(min(k_hoje/METAS['kcal'], 1.0))
 st.divider()
 
-# ABAS - Adicionada aba Treino
+# ABAS
 tab_dash, tab_daily, tab_treino, tab_hist, tab_medidas, tab_rel, tab_admin = st.tabs(["📊 Dash Pro", "📝 Diário", "🏃‍♂️ Treino", "📜 Histórico", "❤️ Saúde", "📄 Relatórios", "⚙️ Configurações"])
 
-# --- ABA DASH PRO ---
+# --- ABA DASH PRO (ATUALIZADA) ---
 with tab_dash:
     st.markdown("### 🧬 Leo's Analytics Hub")
 
-    # 1. FETCH DADOS (Variável renomeada para df_hist_d)
-    df_medidas_d = executar_sql("SELECT * FROM public.body_measurements ORDER BY log_date ASC", is_select=True)
-    df_bp_d = executar_sql("SELECT * FROM public.blood_pressure ORDER BY measurement_time ASC", is_select=True)
+    # 1. FETCH DADOS
     DATA_INICIO_D = pd.to_datetime("2025-12-30").date()
-    df_hist_d = executar_sql("""
-       SELECT data, SUM(kcal) as tkcal, SUM(proteina) as tprot, SUM(carbo) as tcarb, 
-              SUM(gordura) as tgord, SUM(quantidade) as tqtd
-       FROM public.consumo WHERE data >= :d GROUP BY data ORDER BY data ASC
-    """, {"d": DATA_INICIO_D}, is_select=True)
+    # Dados de Consumo
+    df_hist_d = executar_sql("SELECT data, SUM(kcal) as tkcal, SUM(proteina) as tprot, SUM(carbo) as tcarb, SUM(gordura) as tgord, SUM(quantidade) as tqtd FROM public.consumo WHERE data >= :d GROUP BY data ORDER BY data ASC", {"d": DATA_INICIO_D}, is_select=True)
+    # Dados de Peso
     df_peso_d = executar_sql("SELECT * FROM public.peso ORDER BY data ASC", is_select=True)
+    # Dados de Treino (NOVO)
+    df_treino_d = executar_sql("SELECT data, SUM(duracao_min) as t_min, SUM(passos) as t_passos, SUM(calorias) as t_cal_out FROM public.exercicios WHERE data >= :d GROUP BY data ORDER BY data ASC", {"d": DATA_INICIO_D}, is_select=True)
+    # Dados de Pressão
+    df_bp_d = executar_sql("SELECT * FROM public.blood_pressure ORDER BY measurement_time ASC", is_select=True)
+    # Dados Medidas
+    df_medidas_d = executar_sql("SELECT * FROM public.body_measurements ORDER BY log_date ASC", is_select=True)
 
     # 1.1 PRÉ-CÁLCULO DE DADOS COMBINADOS
     if not df_hist_d.empty and not df_peso_d.empty:
         df_hist_d['data_dt'] = pd.to_datetime(df_hist_d['data']).dt.date
         df_peso_d['data_dt'] = pd.to_datetime(df_peso_d['data']).dt.date
+        
+        # Merge Consumo + Peso
         df_merged = pd.merge(df_hist_d, df_peso_d[['data_dt', 'peso_kg']], on='data_dt', how='left').ffill()
         if df_merged['peso_kg'].isnull().any():
              df_merged['peso_kg'] = df_merged['peso_kg'].fillna(method='bfill').fillna(peso_atual_sidebar)
 
+        # Merge Treino
+        if not df_treino_d.empty:
+            df_treino_d['data_dt'] = pd.to_datetime(df_treino_d['data']).dt.date
+            df_merged = pd.merge(df_merged, df_treino_d[['data_dt', 't_min', 't_passos', 't_cal_out']], on='data_dt', how='left')
+            df_merged[['t_min', 't_passos', 't_cal_out']] = df_merged[['t_min', 't_passos', 't_cal_out']].fillna(0)
+        else:
+            df_merged['t_min'] = 0; df_merged['t_passos'] = 0; df_merged['t_cal_out'] = 0
+
         idade, altura = METAS['idade'], METAS['altura']
-        # GET Diário
-        df_merged['get_dia'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * 1.09 * 1.2
+        # GET Diário (Mifflin-St Jeor Sedentário) + Gasto de Treino
+        # Nota: O fator 1.2 já cobre NEAT básico. Adicionamos o treino EXTRA.
+        df_merged['get_basal_neat'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * 1.2
+        df_merged['get_total'] = df_merged['get_basal_neat'] + df_merged['t_cal_out']
+        df_merged['deficit_real'] = df_merged['get_total'] - df_merged['tkcal']
     else:
         df_merged = pd.DataFrame()
 
-    # Variáveis
+    # Variáveis Topo
     META_AGUA = round((peso_atual_sidebar * 35) / 1000, 1)
     last_sys, last_dia, last_pulse = "--", "--", "--"
     if not df_bp_d.empty:
@@ -305,184 +333,86 @@ with tab_dash:
         last_pulse = last_bp.get('pulse', "--")
 
     # Métricas
-    cd1, cd2 = st.columns(2)
-    cd1.metric("💧 Meta de Água", f"{META_AGUA}L")
-    cd2.metric("❤️ Última Pressão", f"{last_sys}x{last_dia}", f"Pulso: {last_pulse}")
+    cd1, cd2, cd3 = st.columns(3)
+    cd1.metric("💧 Meta Água", f"{META_AGUA}L")
+    cd2.metric("❤️ Pressão", f"{last_sys}x{last_dia}", f"Pulso: {last_pulse}")
+    
+    # Métrica de Atividade Recente (Média 7d)
+    if not df_merged.empty and 't_passos' in df_merged.columns:
+        avg_passos = df_merged['t_passos'].tail(7).mean()
+        avg_min = df_merged['t_min'].tail(7).mean()
+        cd3.metric("🏃‍♂️ Média 7d", f"{int(avg_passos)} passos", f"{int(avg_min)} min/dia")
+    else:
+        cd3.metric("🏃‍♂️ Atividade", "--", "--")
+        
     st.divider()
 
-    # 2. PROJEÇÃO
-    st.subheader("🎯 Projeção vs. Realidade")
-    if not df_peso_d.empty:
-        df_peso_d['data_dt'] = pd.to_datetime(df_peso_d['data']).dt.date
-        BASE_DATE = pd.to_datetime("2025-12-31").date()
-        df_base = df_peso_d[df_peso_d['data_dt'] >= BASE_DATE].sort_values('data_dt')
+    # 2. NOVO GRÁFICO: BALANÇO ENERGÉTICO
+    st.subheader("🔥 Balanço Energético (Real vs Estimado)")
+    if not df_merged.empty:
+        fig_bal = go.Figure()
+        # Área de Gasto Total (Basal + Treino)
+        fig_bal.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['get_total'], fill='tozeroy', mode='none', name='Gasto Total (Basal+Treino)', fillcolor='rgba(46, 204, 113, 0.2)'))
+        # Linha de Consumo (Comida)
+        fig_bal.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['tkcal'], mode='lines+markers', name='Consumo (Comida)', line=dict(color='#e74c3c', width=3)))
+        # Barras de Déficit (Abaixo)
+        fig_bal.add_trace(go.Bar(x=df_merged['data'], y=df_merged['deficit_real'], name='Déficit Real', marker_color='#3498db', opacity=0.6))
+        
+        fig_bal.update_layout(height=400, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1), title="Área Verde = Gasto | Linha Vermelha = Comida | Azul = Déficit")
+        st.plotly_chart(fig_bal, use_container_width=True)
 
-        if not df_base.empty:
-            peso_inicial = float(df_base.iloc[0]['peso_kg'])
-            datas_proj = pd.date_range(start=BASE_DATE, end=data_hoje)
-            ritmo_diario = METAS['ritmo'] / 7
-            pesos_estimados = [peso_inicial - (i * ritmo_diario) for i in range(len(datas_proj))]
+    # 3. GRÁFICO DE PESO (PROJEÇÃO)
+    c_p1, c_p2 = st.columns([2, 1])
+    with c_p1:
+        st.subheader("🎯 Projeção vs. Realidade")
+        if not df_peso_d.empty:
+            df_peso_d['data_dt'] = pd.to_datetime(df_peso_d['data']).dt.date
+            BASE_DATE = pd.to_datetime("2025-12-31").date()
+            df_base = df_peso_d[df_peso_d['data_dt'] >= BASE_DATE].sort_values('data_dt')
 
-            peso_esperado_hoje = peso_inicial - ((data_hoje - BASE_DATE).days * ritmo_diario)
-            diferenca_peso = peso_atual_sidebar - peso_esperado_hoje
-            dias_diff = diferenca_peso / ritmo_diario if ritmo_diario > 0 else 0
-
-            col_g, col_s = st.columns([2, 1])
-            with col_g:
+            if not df_base.empty:
+                peso_inicial = float(df_base.iloc[0]['peso_kg'])
+                datas_proj = pd.date_range(start=BASE_DATE, end=data_hoje)
+                ritmo_diario = METAS['ritmo'] / 7
+                pesos_estimados = [peso_inicial - (i * ritmo_diario) for i in range(len(datas_proj))]
+                
                 fig_proj = go.Figure()
                 fig_proj.add_trace(go.Scatter(x=datas_proj, y=pesos_estimados, mode='lines', name='Meta', line=dict(color='#29B5E8', dash='dash')))
                 fig_proj.add_trace(go.Scatter(x=df_base['data_dt'], y=df_base['peso_kg'], mode='lines+markers', name='Real', line=dict(color='#FF4B4B', width=3)))
-                fig_proj.update_layout(height=350, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1))
+                fig_proj.update_layout(height=300, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1))
                 st.plotly_chart(fig_proj, use_container_width=True)
 
-            with col_s:
-                st.metric("Peso Esperado Hoje", f"{peso_esperado_hoje:.1f} kg")
-                status = "Adiantado" if dias_diff <= 0 else "Atrasado"
-                st.metric("Status Cronograma", f"{abs(dias_diff):.1f} dias", status, delta_color="normal" if dias_diff <= 0 else "inverse")
-                meta_atingir = peso_atual_sidebar - METAS['peso_alvo']
-                semanas_fim = meta_atingir / METAS['ritmo'] if METAS['ritmo'] > 0 else 999
-                st.metric("Chegada Estimada", (data_hoje + timedelta(weeks=semanas_fim)).strftime('%d/%m/%y'))
+    with c_p2:
+        st.subheader("📊 Volume de Treino")
+        if not df_merged.empty and 't_passos' in df_merged.columns:
+            fig_vol = make_subplots(specs=[[{"secondary_y": True}]])
+            fig_vol.add_trace(go.Bar(x=df_merged['data'], y=df_merged['t_min'], name='Minutos', marker_color='#f1c40f'), secondary_y=False)
+            fig_vol.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['t_passos'], name='Passos', mode='lines+markers', line=dict(color='#8e44ad')), secondary_y=True)
+            fig_vol.update_layout(height=300, margin=dict(l=10,r=10,t=20,b=10), showlegend=False)
+            st.plotly_chart(fig_vol, use_container_width=True)
 
-    # 3. BANCO DE GORDURA
+    # 4. TERMODINÂMICA E MACROS
     st.divider()
-    c_a1, c_a2 = st.columns([2, 1])
-    with c_a1:
-        st.subheader("📉 Tendência de Peso (7d)")
-        if not df_peso_d.empty:
-            df_peso_d['media_movel'] = df_peso_d['peso_kg'].rolling(window=7, min_periods=1).mean()
-            fig_trend = go.Figure()
-            fig_trend.add_trace(go.Scatter(x=df_peso_d['data'], y=df_peso_d['peso_kg'], mode='markers', name='Pesagem', marker=dict(color='gray', opacity=0.4)))
-            fig_trend.add_trace(go.Scatter(x=df_peso_d['data'], y=df_peso_d['media_movel'], mode='lines', name='Média 7d', line=dict(color='#2ecc71', width=4)))
-            fig_trend.update_layout(height=300, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1))
-            st.plotly_chart(fig_trend, use_container_width=True)
-
-    with c_a2:
+    c_t1, c_t2 = st.columns(2)
+    with c_t1:
         st.subheader("🏦 Banco de Gordura")
         if not df_merged.empty:
-            deficit_total = (df_merged['get_dia'] - df_merged['tkcal']).sum()
+            deficit_total = df_merged['deficit_real'].sum()
             kg_gordura = deficit_total / 7700
-            st.metric("Déficit Total (kcal)", f"{int(deficit_total)}")
+            st.metric("Déficit Acumulado", f"{int(deficit_total)} kcal")
             st.metric("Gordura Eliminada (Teórica)", f"{kg_gordura:.2f} kg")
-        else: st.info("Dados insuficientes.")
-
-    # 4. SAÚDE
-    st.divider()
-    st.subheader("🧬 Evolução de Gordura & Pressão")
-    col_left, col_right = st.columns(2)
-    with col_left:
-        if not df_medidas_d.empty:
-            fig_bf = go.Figure(go.Scatter(x=df_medidas_d['log_date'], y=df_medidas_d['body_fat_est'], mode='lines+markers', line=dict(color='#e67e22'), name='BF%'))
-            fig_bf.update_layout(height=250, margin=dict(l=10,r=10,t=20,b=10), title="Body Fat %")
-            st.plotly_chart(fig_bf, use_container_width=True)
-    with col_right:
-        if not df_bp_d.empty:
-            fig_bp = go.Figure()
-            fig_bp.add_trace(go.Scatter(x=df_bp_d['measurement_time'], y=df_bp_d['systolic'], name="Sys", line=dict(color='red')))
-            fig_bp.add_trace(go.Scatter(x=df_bp_d['measurement_time'], y=df_bp_d['diastolic'], name="Dia", line=dict(color='blue')))
-            fig_bp.update_layout(height=250, margin=dict(l=10,r=10,t=20,b=10), title="Pressão Arterial")
-            st.plotly_chart(fig_bp, use_container_width=True)
-
-    # 5. NOVO GRÁFICO: ENERGIA VS VOLUME
-    st.divider()
-    st.subheader("⚖️ Energia (Linha) vs. Volume (Barras)")
-    if not df_merged.empty:
-        fig_ev = make_subplots(specs=[[{"secondary_y": True}]])
-        # Barras: Volume
-        fig_ev.add_trace(go.Bar(
-            x=df_merged['data'], y=df_merged['tqtd'], name='Volume (g)',
-            marker_color='#AED6F1', opacity=0.6
-        ), secondary_y=True)
-        # Linha: Calorias
-        fig_ev.add_trace(go.Scatter(
-            x=df_merged['data'], y=df_merged['tkcal'], name='Calorias (kcal)',
-            mode='lines+markers', line=dict(color='#C0392B', width=3)
-        ), secondary_y=False)
-        # Linha: GET
-        fig_ev.add_trace(go.Scatter(
-            x=df_merged['data'], y=df_merged['get_dia'], name='GET (Gasto Real)',
-            mode='lines', line=dict(color='#F39C12', dash='dot', width=2)
-        ), secondary_y=False)
-        # Meta Fixa
-        fig_ev.add_hline(y=METAS['kcal'], line_dash="dash", line_color="#27AE60", annotation_text=f"Meta ({METAS['kcal']})", annotation_position="bottom right")
-
-        fig_ev.update_layout(
-            height=400, 
-            margin=dict(l=10,r=10,t=30,b=10),
-            legend=dict(orientation="h", y=1.1),
-            hovermode="x unified"
-        )
-        fig_ev.update_yaxes(title_text="Energia (kcal)", secondary_y=False)
-        fig_ev.update_yaxes(title_text="Volume (g)", secondary_y=True, showgrid=False)
-        st.plotly_chart(fig_ev, use_container_width=True)
-
-    # 6. NUTRIÇÃO
-    st.divider()
-    st.subheader("🍽️ Comportamento Alimentar")
-    if not df_hist_d.empty:
-        c_n1, c_n2 = st.columns([2, 1])
-        with c_n1:
+    
+    with c_t2:
+         st.subheader("🍽️ Macros (%)")
+         if not df_hist_d.empty:
             df_macros = df_hist_d.copy()
-            df_macros['tot'] = (df_macros['tprot']*4 + df_macros['tcarb']*4 + df_macros['tgord']*9)
-            df_macros['tot'] = df_macros['tot'].replace(0, 1)
+            df_macros['tot'] = (df_macros['tprot']*4 + df_macros['tcarb']*4 + df_macros['tgord']*9).replace(0, 1)
             fig_stack = go.Figure()
-            fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tprot']*4/df_macros['tot'])*100, name='Prot', marker_color='#3366CC'))
-            fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tgord']*9/df_macros['tot'])*100, name='Gord', marker_color='#DC3912'))
-            fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tcarb']*4/df_macros['tot'])*100, name='Carb', marker_color='#FF9900'))
-            fig_stack.update_layout(barmode='stack', height=350, margin=dict(l=10,r=10,t=20,b=10), yaxis=dict(range=[0, 100]), title="Distribuição de Macros (%)")
+            fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tprot']*4/df_macros['tot'])*100, name='P', marker_color='#3366CC'))
+            fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tgord']*9/df_macros['tot'])*100, name='G', marker_color='#DC3912'))
+            fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tcarb']*4/df_macros['tot'])*100, name='C', marker_color='#FF9900'))
+            fig_stack.update_layout(barmode='stack', height=250, margin=dict(l=10,r=10,t=20,b=10), yaxis=dict(range=[0, 100]))
             st.plotly_chart(fig_stack, use_container_width=True)
-        with c_n2:
-            if k_hoje > 0:
-                fig_pie = go.Figure(data=[go.Pie(labels=['P','C','G'], values=[p_hoje*4, c_hoje*4, g_hoje*9], hole=.4, marker=dict(colors=['#3366CC','#FF9900','#DC3912']))])
-                fig_pie.update_layout(height=350, showlegend=False, margin=dict(l=10,r=10,t=20,b=10), title="Macros Hoje (Kcal)")
-                st.plotly_chart(fig_pie, use_container_width=True)
-            else:
-                st.info("Registre alimentos hoje para ver o gráfico.")
-
-    # ========================================================
-    # 🌡️ ANÁLISE TERMODINÂMICA
-    # ========================================================
-    st.markdown("##### 🌡️ Eficiência Termodinâmica")
-
-    if not df_hist_d.empty and not df_peso_d.empty:
-        df_h_eff = df_hist_d.copy()
-        df_p_eff = df_peso_d.copy()
-        df_h_eff['data_dt'] = pd.to_datetime(df_h_eff['data']).dt.date
-        df_p_eff['data_dt'] = pd.to_datetime(df_p_eff['data']).dt.date
-
-        df_eff = pd.merge(df_h_eff, df_p_eff[['data_dt', 'peso_kg']], on='data_dt', how='inner').sort_values('data_dt')
-
-        if not df_eff.empty:
-            peso_start = df_eff.iloc[0]['peso_kg']
-            peso_curr = df_eff.iloc[-1]['peso_kg']
-            perda_real = peso_start - peso_curr
-
-            df_eff['get_teorico'] = ((10 * df_eff['peso_kg']) + (6.25 * METAS['altura']) - (5 * METAS['idade']) + 5) * 1.2
-            df_eff['deficit_dia'] = df_eff['get_teorico'] - df_eff['tkcal']
-            deficit_acumulado = df_eff['deficit_dia'].sum()
-            perda_teorica = deficit_acumulado / 7700
-
-            if perda_teorica > 0.1:
-                fator_termo = perda_real / perda_teorica
-            else:
-                fator_termo = 1.0
-
-            ct1, ct2 = st.columns(2)
-            ct1.metric("Perda Real (Periodo)", f"{perda_real:.1f} kg", f"Teórica (Física): {perda_teorica:.1f} kg")
-
-            if fator_termo > 1.15:
-                status_termo = "🔥 Turbo (Metabolismo Alto)"
-                cor_termo = "normal"
-            elif fator_termo < 0.85:
-                status_termo = "❄️ Econômico (Retenção/Adaptação)"
-                cor_termo = "inverse"
-            else:
-                status_termo = "✅ Nominal (Padrão)"
-                cor_termo = "off"
-
-            ct2.metric("Fator Termodinâmico", f"{fator_termo:.2f}x", status_termo, delta_color=cor_termo)
-            st.caption(f"Explicação: O fator **{fator_termo:.2f}x** significa que para cada 1kg que a matemática diz que você deveria perder, seu corpo está eliminando **{fator_termo:.2f}kg**. (Baseado nos dias onde houve registro de peso E alimentação).")
-    else:
-        st.info("Aguardando mais dados coincidentes (Peso + Alimentação no mesmo dia) para calcular a termodinâmica.")
 
 # --- ABA DIÁRIO (MANTIDA) ---
 with tab_daily:
@@ -541,7 +471,7 @@ with tab_daily:
             st.markdown("---")
     else: st.info("Nada registrado hoje.")
 
-# --- NOVA ABA TREINO (IRON N1) ---
+# --- ABA TREINO (IRON N1) ---
 with tab_treino:
     st.markdown("### 🏃‍♂️ Monitoramento de Treino (Iron N1)")
     
@@ -552,7 +482,6 @@ with tab_treino:
     passos_hoje = int(df_treino_hoje['passos'].sum()) if not df_treino_hoje.empty else 0
     cal_hoje = int(df_treino_hoje['calorias'].sum()) if not df_treino_hoje.empty else 0
     
-    # Progresso da Meta 120-150 min
     pct_treino = min(min_hoje / 150.0, 1.0)
     st.metric("⏱️ Tempo Total Hoje", f"{min_hoje} min", f"Meta Mínima: 120 min")
     st.progress(pct_treino)
@@ -652,4 +581,4 @@ with tab_admin:
             executar_sql("UPDATE public.perfil SET meta_kcal=:mk, meta_proteina=:mp, meta_carbo=:mc, meta_gordura=:mg, meta_peso_alvo=:mpa, ritmo_semanal=:rit WHERE id=1", {'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 'mpa': n_peso_alvo, 'rit': n_ritmo})
             st.cache_resource.clear(); st.rerun()
 
-st.caption("Leo Tracker Pro v8.0 | Iron N1 Edition 🏃‍♂️")
+st.caption("Leo Tracker Pro v8.1 | DashPro + Iron N1 Integration 🚀")
