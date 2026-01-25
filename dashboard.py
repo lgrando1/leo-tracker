@@ -83,7 +83,7 @@ else:
 fator_atividade = float(p.get('fator_atividade') or 1.2)
 peso_atual = float(df_peso.iloc[-1]['peso_kg']) if not df_peso.empty else 140.0
 
-# --- MERGE INTELIGENTE (O CORAÇÃO DO SISTEMA) ---
+# --- MERGE INTELIGENTE ---
 df_merged = pd.DataFrame()
 if not df_hist.empty and not df_peso.empty:
     df_hist['data_dt'] = pd.to_datetime(df_hist['data']).dt.date
@@ -147,6 +147,7 @@ with c_main1:
         fig_vol.add_trace(go.Bar(x=df_merged['data'], y=df_merged['tqtd'], name="Volume (g)", marker_color='#AED6F1', opacity=0.5), secondary_y=True)
         fig_vol.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['tkcal'], name="Calorias In", mode='lines+markers', line=dict(color='#C0392B', width=3)), secondary_y=False)
         fig_vol.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['get_total'], name="Gasto Total (Out)", mode='lines', line=dict(color='#27AE60', width=2, dash='dot')), secondary_y=False)
+        
         fig_vol.update_layout(height=350, margin=dict(l=10,r=10,t=30,b=10), legend=dict(orientation="h", y=1.1), template="plotly_white")
         fig_vol.update_yaxes(title_text="Kcal", secondary_y=False, showgrid=True)
         fig_vol.update_yaxes(title_text="Gramas", secondary_y=True, showgrid=False)
@@ -183,6 +184,7 @@ with c_p1:
         df_peso['data_dt'] = pd.to_datetime(df_peso['data']).dt.date
         BASE_DATE = pd.to_datetime("2025-12-31").date()
         df_base = df_peso[df_peso['data_dt'] >= BASE_DATE].sort_values('data_dt')
+        
         if not df_base.empty:
             peso_inicial = float(df_base.iloc[0]['peso_kg'])
             datas_proj = pd.date_range(start=BASE_DATE, end=hoje + timedelta(days=14))
@@ -205,22 +207,50 @@ with c_p2:
 
 st.divider()
 
+# --- ROW 4: SAÚDE ---
+st.markdown("##### 🧬 Indicadores de Saúde")
+col_s1, col_s2, col_s3 = st.columns(3)
+
+with col_s1:
+    if not df_medidas.empty:
+        fig_bf = go.Figure(go.Scatter(x=df_medidas['log_date'], y=df_medidas['body_fat_est'], mode='lines+markers', name="BF%", line=dict(color='#e67e22')))
+        fig_bf.update_layout(title="Gordura Corporal (%)", height=250, margin=dict(l=10,r=10,t=30,b=10))
+        st.plotly_chart(fig_bf, use_container_width=True)
+
+with col_s2:
+    if not df_bp.empty:
+        fig_bp = go.Figure()
+        fig_bp.add_trace(go.Scatter(x=df_bp['measurement_time'], y=df_bp['systolic'], name="Sys", line=dict(color='#c0392b')))
+        fig_bp.add_trace(go.Scatter(x=df_bp['measurement_time'], y=df_bp['diastolic'], name="Dia", line=dict(color='#2980b9')))
+        fig_bp.update_layout(title="Pressão Arterial", height=250, margin=dict(l=10,r=10,t=30,b=10))
+        st.plotly_chart(fig_bp, use_container_width=True)
+
+with col_s3:
+    if not df_hist.empty:
+        df_macros = df_hist.copy()
+        df_macros['tot'] = (df_macros['tprot']*4 + df_macros['tcarb']*4 + df_macros['tgord']*9).replace(0, 1)
+        fig_stack = go.Figure()
+        fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tprot']*4/df_macros['tot'])*100, name='P', marker_color='#3366CC'))
+        fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tgord']*9/df_macros['tot'])*100, name='G', marker_color='#DC3912'))
+        fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tcarb']*4/df_macros['tot'])*100, name='C', marker_color='#FF9900'))
+        fig_stack.update_layout(title="Distribuição Macros (%)", barmode='stack', height=250, margin=dict(l=10,r=10,t=30,b=10), yaxis=dict(range=[0, 100]), showlegend=False)
+        st.plotly_chart(fig_stack, use_container_width=True)
+
+st.divider()
+
 # ============================================================================
-# 5. ANÁLISE ESTATÍSTICA (EDA) - NOVA SEÇÃO
+# 5. ANÁLISE ESTATÍSTICA (EDA)
 # ============================================================================
-st.markdown("### 📊 Análise de Tendências (Médias Móveis)")
+st.markdown("### 📊 Análise de Tendências (Médias Móveis & Extremos)")
 
 if not df_merged.empty:
-    # Preparar Dados para EDA
-    # Garantir que temos apenas colunas numéricas e preencher NaN
     cols_eda = ['peso_kg', 'tkcal', 'tprot', 'tcarb', 'tgord', 't_min', 't_passos', 'deficit_real']
-    df_eda = df_merged[['data', *cols_eda]].copy().sort_values('data')
-    df_eda = df_eda.fillna(0)
+    df_eda = df_merged[['data', *cols_eda]].copy().sort_values('data').fillna(0)
 
     def calc_mean(df, days, col):
         return df.tail(days)[col].mean()
 
-    # Construir Tabela Resumo
+    # Tabela com Mínimo e Máximo
     metrics_list = [
         ("⚖️ Peso Médio (kg)", 'peso_kg'),
         ("🔥 Calorias (kcal)", 'tkcal'),
@@ -239,14 +269,24 @@ if not df_merged.empty:
             "3 Dias": f"{calc_mean(df_eda, 3, col):.1f}",
             "7 Dias": f"{calc_mean(df_eda, 7, col):.1f}",
             "30 Dias": f"{calc_mean(df_eda, 30, col):.1f}",
-            "Total (Global)": f"{df_eda[col].mean():.1f}"
+            "Média (Total)": f"{df_eda[col].mean():.1f}",
+            "Mínimo (Total)": f"{df_eda[col].min():.1f}", # NOVO
+            "Máximo (Total)": f"{df_eda[col].max():.1f}"  # NOVO
         }
         eda_data.append(row)
 
-    df_eda_display = pd.DataFrame(eda_data)
-    st.table(df_eda_display)
+    st.table(pd.DataFrame(eda_data))
+
+    # NOVO GRÁFICO: EVOLUÇÃO DE MACROS (GRAMAS)
+    st.markdown("##### 📈 Evolução de Macronutrientes (Gramas)")
+    fig_macros_grams = go.Figure()
+    fig_macros_grams.add_trace(go.Scatter(x=df_eda['data'], y=df_eda['tprot'], name='Proteína (g)', mode='lines+markers', line=dict(color='#3366CC', width=3)))
+    fig_macros_grams.add_trace(go.Scatter(x=df_eda['data'], y=df_eda['tcarb'], name='Carbo (g)', mode='lines+markers', line=dict(color='#FF9900', width=2)))
+    fig_macros_grams.add_trace(go.Scatter(x=df_eda['data'], y=df_eda['tgord'], name='Gordura (g)', mode='lines+markers', line=dict(color='#DC3912', width=2)))
+    fig_macros_grams.update_layout(height=350, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1), template="plotly_white", yaxis_title="Gramas")
+    st.plotly_chart(fig_macros_grams, use_container_width=True)
 
 else:
     st.info("Dados insuficientes para gerar estatísticas.")
 
-st.caption("Leo Tracker Smart View v4.1 | EDA Enabled")
+st.caption("Leo Tracker Smart View v4.2 | EDA + Min/Max + Macro Chart")
