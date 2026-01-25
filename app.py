@@ -77,30 +77,21 @@ def executar_sql(sql, params=None, is_select=False):
 def inicializar_banco():
     executar_sql("CREATE TABLE IF NOT EXISTS public.consumo (id SERIAL PRIMARY KEY, data DATE, alimento TEXT, quantidade REAL, kcal REAL, proteina REAL, carbo REAL, gordura REAL, gluten TEXT DEFAULT 'Não informado');")
     executar_sql("CREATE TABLE IF NOT EXISTS public.peso (id SERIAL PRIMARY KEY, data DATE, peso_kg REAL);")
-    
-    # TABELA DE EXERCÍCIOS (Iron N1 Support)
     executar_sql("""
         CREATE TABLE IF NOT EXISTS public.exercicios (
-            id SERIAL PRIMARY KEY,
-            data DATE,
-            tipo TEXT,
-            duracao_min INT,
-            passos INT,
-            distancia_km REAL,
-            calorias REAL,
-            bpm_medio INT,
-            observacoes TEXT
+            id SERIAL PRIMARY KEY, data DATE, tipo TEXT, duracao_min INT, passos INT, distancia_km REAL, calorias REAL, bpm_medio INT, observacoes TEXT
         );
     """)
-
     executar_sql("""
         CREATE TABLE IF NOT EXISTS public.perfil (
-            id SERIAL PRIMARY KEY, 
-            genero TEXT, idade INT, altura_cm INT, atividade TEXT, 
-            objetivo TEXT, ritmo_semanal REAL, 
+            id SERIAL PRIMARY KEY, genero TEXT, idade INT, altura_cm INT, atividade TEXT, objetivo TEXT, ritmo_semanal REAL, 
             meta_kcal REAL, meta_proteina REAL, meta_carbo REAL, meta_gordura REAL, meta_peso_alvo REAL
         );
     """)
+    # ATUALIZAÇÃO v8.3: Adiciona coluna fator_atividade se não existir
+    try: executar_sql("ALTER TABLE public.perfil ADD COLUMN IF NOT EXISTS fator_atividade REAL DEFAULT 1.2;")
+    except: pass
+    
     for c in ['ultimo_pescoco', 'ultima_cintura', 'ultimo_quadril']:
         try: executar_sql(f"ALTER TABLE public.perfil ADD COLUMN IF NOT EXISTS {c} REAL;")
         except: pass
@@ -118,9 +109,7 @@ def inicializar_banco():
     """)
     executar_sql("""
         CREATE TABLE IF NOT EXISTS public.blood_pressure (
-            id SERIAL PRIMARY KEY,
-            measurement_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            systolic INT, diastolic INT, pulse INT, notes TEXT
+            id SERIAL PRIMARY KEY, measurement_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP, systolic INT, diastolic INT, pulse INT, notes TEXT
         );
     """)
 
@@ -135,12 +124,13 @@ def get_metas_do_banco():
                 "peso_alvo": float(row.get('meta_peso_alvo', 120.0)), "ritmo": float(row.get('ritmo_semanal', 0.8)),
                 "altura": int(row.get('altura_cm', 178)), "idade": int(row.get('idade', 41)),
                 "genero": row.get('genero', 'Masculino'),
+                "fator": float(row.get('fator_atividade') or 1.2), # NOVO
                 "last_waist": float(row.get('ultima_cintura') or 133.0),
                 "last_neck": float(row.get('ultimo_pescoco') or 53.0),
                 "last_hip": float(row.get('ultimo_quadril') or 122.0)
             }
     except: pass
-    return {"kcal": 1638, "prot": 108, "carb": 164, "gord": 67, "peso_alvo": 120.0, "ritmo": 0.8, "altura": 178, "idade": 41, "genero": "Masculino", "last_waist": 133.0, "last_neck": 53.0, "last_hip": 122.0}
+    return {"kcal": 1638, "prot": 108, "carb": 164, "gord": 67, "peso_alvo": 120.0, "ritmo": 0.8, "altura": 178, "idade": 41, "genero": "Masculino", "fator": 1.2, "last_waist": 133.0, "last_neck": 53.0, "last_hip": 122.0}
 
 inicializar_banco()
 METAS = get_metas_do_banco()
@@ -161,7 +151,6 @@ def processar_texto_ia(texto_usuario, api_key):
     client = Groq(api_key=api_key)
     prompt_system = f"""
     Aja como Nutricionista Matemático. Hoje: {get_now_br().strftime('%Y-%m-%d')}.
-    
     DIRETRIZES RÍGIDAS DE CÁLCULO:
     1. Identifique o alimento e sua densidade calórica padrão (kcal/g).
        - Vegetais: ~0.3 kcal/g
@@ -170,11 +159,9 @@ def processar_texto_ia(texto_usuario, api_key):
        - Bolos simples: ~3.0 kcal/g
        - Queijos/Gorduras: ~4.0 a 9.0 kcal/g
     2. MULTIPLIQUE a densidade pelo peso informado pelo usuário.
-       Exemplo: 49g de bolo * 3.0 = ~147 kcal. NUNCA retorne 277 kcal para 49g de bolo (isso seria 5.6 kcal/g, impossível).
     3. GORDURA OCULTA: Se for fritura/grelhado de restaurante, adicione +5g a +10g de gordura.
-    
     SAÍDA: Retorne APENAS um JSON válido.
-    Formato: {{ "analise": "Texto curto explicando o cálculo (ex: 'Densidade estimada 3kcal/g')", "alimentos": [ {{ "data": "YYYY-MM-DD", "alimento": "Nome", "quantidade_g": 0, "kcal": 0, "p": 0, "c": 0, "g": 0, "gluten": "txt" }} ] }}
+    Formato: {{ "analise": "Texto curto explicando o cálculo", "alimentos": [ {{ "data": "YYYY-MM-DD", "alimento": "Nome", "quantidade_g": 0, "kcal": 0, "p": 0, "c": 0, "g": 0, "gluten": "txt" }} ] }}
     """
     try:
         completion = client.chat.completions.create(messages=[{"role": "system", "content": prompt_system}, {"role": "user", "content": texto_usuario}], model="llama-3.3-70b-versatile", response_format={"type": "json_object"})
@@ -193,35 +180,27 @@ def processar_texto_ia(texto_usuario, api_key):
 def gerar_excel_nutri(dt_ini, dt_fim):
     output = io.BytesIO()
     params = {'d1': dt_ini, 'd2': dt_fim}
-    
-    # 1. Fetch de todas as tabelas
     df_detalhado = executar_sql("SELECT data, alimento, quantidade, kcal, proteina, carbo, gordura FROM public.consumo WHERE data >= :d1 AND data <= :d2 ORDER BY data DESC", params, is_select=True)
     df_peso = executar_sql("SELECT data, peso_kg FROM public.peso WHERE data >= :d1 AND data <= :d2 ORDER BY data ASC", params, is_select=True)
     df_medidas = executar_sql("SELECT log_date as data, weight_kg as peso, waist_cm as cintura, body_fat_est as bf_estimado, notes FROM public.body_measurements WHERE log_date >= :d1 AND log_date <= :d2 ORDER BY log_date DESC", params, is_select=True)
     df_pressao = executar_sql("SELECT measurement_time as data_hora, systolic, diastolic, pulse FROM public.blood_pressure WHERE measurement_time >= :d1 AND measurement_time <= :d2 ORDER BY measurement_time DESC", params, is_select=True)
     df_treinos_raw = executar_sql("SELECT data, tipo, duracao_min, passos, distancia_km, calorias, bpm_medio FROM public.exercicios WHERE data >= :d1 AND data <= :d2 ORDER BY data DESC", params, is_select=True)
 
-    # 2. Agregação de Consumo
     if not df_detalhado.empty:
         df_macros = df_detalhado.groupby('data')[['kcal', 'proteina', 'carbo', 'gordura']].sum().reset_index()
-    else:
-        df_macros = pd.DataFrame(columns=['data', 'kcal', 'proteina', 'carbo', 'gordura'])
+    else: df_macros = pd.DataFrame(columns=['data', 'kcal', 'proteina', 'carbo', 'gordura'])
 
-    # 3. Agregação de Treinos
     if not df_treinos_raw.empty:
         df_treinos_agg = df_treinos_raw.groupby('data')[['duracao_min', 'passos', 'calorias']].sum().reset_index()
         df_treinos_agg.columns = ['data', 'treino_min', 'treino_passos', 'treino_kcal']
-    else:
-        df_treinos_agg = pd.DataFrame(columns=['data', 'treino_min', 'treino_passos', 'treino_kcal'])
+    else: df_treinos_agg = pd.DataFrame(columns=['data', 'treino_min', 'treino_passos', 'treino_kcal'])
 
-    # 4. Normalização de datas
     if not df_macros.empty: df_macros['data'] = pd.to_datetime(df_macros['data']).dt.normalize()
     if not df_peso.empty:
         df_peso['data'] = pd.to_datetime(df_peso['data']).dt.normalize()
         df_peso = df_peso.drop_duplicates(subset='data', keep='last')
     if not df_treinos_agg.empty: df_treinos_agg['data'] = pd.to_datetime(df_treinos_agg['data']).dt.normalize()
 
-    # 5. Merge Completo
     if not df_macros.empty or not df_peso.empty:
         df_resumo = pd.merge(df_macros, df_peso, on='data', how='outer')
         df_resumo = pd.merge(df_resumo, df_treinos_agg, on='data', how='left')
@@ -233,8 +212,7 @@ def gerar_excel_nutri(dt_ini, dt_fim):
         df_resumo.columns = ['Data', 'Peso (kg)', 'Comida (kcal)', 'Prot (g)', 'Carb (g)', 'Gord (g)', 'Treino (min)', 'Passos', 'Gasto Treino (kcal)']
         df_resumo = df_resumo.dropna(subset=['Data'])
         df_resumo['Data'] = df_resumo['Data'].dt.strftime('%d/%m/%Y')
-    else:
-        df_resumo = pd.DataFrame(columns=['Data', 'Peso', 'Kcal', '...'])
+    else: df_resumo = pd.DataFrame(columns=['Data', 'Peso', 'Kcal', '...'])
 
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df_resumo.to_excel(writer, sheet_name='1. Resumo Completo', index=False)
@@ -256,9 +234,9 @@ st.sidebar.header("🎯 Status")
 ultimo_peso_df = executar_sql("SELECT peso_kg FROM public.peso ORDER BY data DESC LIMIT 1", is_select=True)
 peso_atual_sidebar = float(ultimo_peso_df.iloc[0]['peso_kg']) if not ultimo_peso_df.empty else 140.0
 st.sidebar.metric("Peso Atual", f"{peso_atual_sidebar} kg", f"Meta: {METAS['peso_alvo']} kg")
+st.sidebar.caption(f"Fator Ativ: {METAS['fator']}x")
 st.sidebar.progress(min(max(0.0, (150 - peso_atual_sidebar) / (150 - METAS['peso_alvo'])), 1.0))
 
-# Métricas Topo
 k_hoje = float(df_hoje['kcal'].sum()) if not df_hoje.empty else 0.0
 p_hoje = float(df_hoje['proteina'].sum()) if not df_hoje.empty else 0.0
 c_hoje = float(df_hoje['carbo'].sum()) if not df_hoje.empty else 0.0
@@ -275,7 +253,7 @@ st.divider()
 # ABAS
 tab_dash, tab_daily, tab_treino, tab_hist, tab_medidas, tab_rel, tab_admin = st.tabs(["📊 Dash Pro", "📝 Diário", "🏃‍♂️ Treino", "📜 Histórico", "❤️ Saúde", "📄 Relatórios", "⚙️ Configurações"])
 
-# --- ABA DASH PRO (COMPLETA) ---
+# --- ABA DASH PRO ---
 with tab_dash:
     st.markdown("### 🧬 Leo's Analytics Hub")
 
@@ -287,7 +265,6 @@ with tab_dash:
     df_bp_d = executar_sql("SELECT * FROM public.blood_pressure ORDER BY measurement_time ASC", is_select=True)
     df_medidas_d = executar_sql("SELECT * FROM public.body_measurements ORDER BY log_date ASC", is_select=True)
 
-    # 1.1 PRÉ-CÁLCULO DE DADOS COMBINADOS
     if not df_hist_d.empty and not df_peso_d.empty:
         df_hist_d['data_dt'] = pd.to_datetime(df_hist_d['data']).dt.date
         df_peso_d['data_dt'] = pd.to_datetime(df_peso_d['data']).dt.date
@@ -304,14 +281,13 @@ with tab_dash:
             df_merged['t_min'] = 0; df_merged['t_passos'] = 0; df_merged['t_cal_out'] = 0
 
         idade, altura = METAS['idade'], METAS['altura']
-        # GET Basal+Neat(1.2) + Treino Extra
-        df_merged['get_basal_neat'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * 1.2
+        fator_uso = METAS['fator'] # USANDO O FATOR CONFIGURÁVEL
+        
+        df_merged['get_basal_neat'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * fator_uso
         df_merged['get_total'] = df_merged['get_basal_neat'] + df_merged['t_cal_out']
         df_merged['deficit_real'] = df_merged['get_total'] - df_merged['tkcal']
-    else:
-        df_merged = pd.DataFrame()
+    else: df_merged = pd.DataFrame()
 
-    # Variáveis Topo
     META_AGUA = round((peso_atual_sidebar * 35) / 1000, 1)
     last_sys, last_dia, last_pulse = "--", "--", "--"
     if not df_bp_d.empty:
@@ -319,7 +295,6 @@ with tab_dash:
         last_sys, last_dia = last_bp['systolic'], last_bp['diastolic']
         last_pulse = last_bp.get('pulse', "--")
 
-    # Métricas
     cd1, cd2, cd3 = st.columns(3)
     cd1.metric("💧 Meta Água", f"{META_AGUA}L")
     cd2.metric("❤️ Pressão", f"{last_sys}x{last_dia}", f"Pulso: {last_pulse}")
@@ -328,22 +303,18 @@ with tab_dash:
         avg_passos = df_merged['t_passos'].tail(7).mean()
         avg_min = df_merged['t_min'].tail(7).mean()
         cd3.metric("🏃‍♂️ Média 7d", f"{int(avg_passos)} passos", f"{int(avg_min)} min/dia")
-    else:
-        cd3.metric("🏃‍♂️ Atividade", "--", "--")
-        
+    else: cd3.metric("🏃‍♂️ Atividade", "--", "--")
     st.divider()
 
-    # GRÁFICO 1: BALANÇO ENERGÉTICO (NOVO)
     st.subheader("🔥 Balanço Energético (Real vs Estimado)")
     if not df_merged.empty:
         fig_bal = go.Figure()
-        fig_bal.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['get_total'], fill='tozeroy', mode='none', name='Gasto Total (Basal+Treino)', fillcolor='rgba(46, 204, 113, 0.2)'))
-        fig_bal.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['tkcal'], mode='lines+markers', name='Consumo (Comida)', line=dict(color='#e74c3c', width=3)))
+        fig_bal.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['get_total'], fill='tozeroy', mode='none', name=f'Gasto (Fator {fator_uso}x + Treino)', fillcolor='rgba(46, 204, 113, 0.2)'))
+        fig_bal.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['tkcal'], mode='lines+markers', name='Consumo', line=dict(color='#e74c3c', width=3)))
         fig_bal.add_trace(go.Bar(x=df_merged['data'], y=df_merged['deficit_real'], name='Déficit Real', marker_color='#3498db', opacity=0.6))
         fig_bal.update_layout(height=350, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1))
         st.plotly_chart(fig_bal, use_container_width=True)
 
-    # GRÁFICO 2: ENERGIA VS VOLUME (RESTAURADO)
     st.subheader("⚖️ Energia (Linha) vs. Volume Comida (Barras)")
     if not df_merged.empty:
         fig_ev = make_subplots(specs=[[{"secondary_y": True}]])
@@ -355,7 +326,6 @@ with tab_dash:
         fig_ev.update_yaxes(title_text="Gramas", secondary_y=True, showgrid=False)
         st.plotly_chart(fig_ev, use_container_width=True)
 
-    # GRÁFICO 3: SAÚDE (BF E PRESSÃO - RESTAURADOS)
     st.divider()
     c_h1, c_h2 = st.columns(2)
     with c_h1:
@@ -373,7 +343,6 @@ with tab_dash:
             fig_bp.update_layout(height=250, margin=dict(l=10,r=10,t=20,b=10))
             st.plotly_chart(fig_bp, use_container_width=True)
 
-    # GRÁFICO 4: PROJEÇÃO E TREINO (NOVOS)
     st.divider()
     c_p1, c_p2 = st.columns([2, 1])
     with c_p1:
@@ -402,7 +371,6 @@ with tab_dash:
             fig_vol.update_layout(height=300, margin=dict(l=10,r=10,t=20,b=10), showlegend=False)
             st.plotly_chart(fig_vol, use_container_width=True)
 
-    # GRÁFICO 5: TERMODINÂMICA E MACROS (FIM)
     st.divider()
     c_t1, c_t2 = st.columns(2)
     with c_t1:
@@ -425,7 +393,7 @@ with tab_dash:
             fig_stack.update_layout(barmode='stack', height=250, margin=dict(l=10,r=10,t=20,b=10), yaxis=dict(range=[0, 100]))
             st.plotly_chart(fig_stack, use_container_width=True)
 
-# --- ABA DIÁRIO (MANTIDA) ---
+# --- ABA DIÁRIO ---
 with tab_daily:
     with st.container():
         st.markdown("##### ⚖️ Peso de Hoje")
@@ -453,7 +421,7 @@ with tab_daily:
                         executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (:dt, :ali, :qtd, :kc, :pr, :ca, :go, :gl)", params)
                     st.cache_resource.clear(); st.rerun()
 
-    with st.expander("📥 Importação JSON Manual (Gemini/GPT)"):
+    with st.expander("📥 Importação JSON Manual"):
         st.info("Cole aqui o JSON gerado externamente:")
         json_manual = st.text_area("JSON", label_visibility="collapsed", height=150)
         if st.button("Salvar JSON Manual"):
@@ -482,13 +450,11 @@ with tab_daily:
             st.markdown("---")
     else: st.info("Nada registrado hoje.")
 
-# --- ABA TREINO (IRON N1) ---
+# --- ABA TREINO ---
 with tab_treino:
     st.markdown("### 🏃‍♂️ Monitoramento de Treino (Iron N1)")
     
-    # 1. VISÃO GERAL DO DIA
     df_treino_hoje = executar_sql("SELECT * FROM public.exercicios WHERE data = :d ORDER BY id DESC", {'d': data_hoje}, is_select=True)
-    
     min_hoje = int(df_treino_hoje['duracao_min'].sum()) if not df_treino_hoje.empty else 0
     passos_hoje = int(df_treino_hoje['passos'].sum()) if not df_treino_hoje.empty else 0
     cal_hoje = int(df_treino_hoje['calorias'].sum()) if not df_treino_hoje.empty else 0
@@ -496,27 +462,21 @@ with tab_treino:
     pct_treino = min(min_hoje / 150.0, 1.0)
     st.metric("⏱️ Tempo Total Hoje", f"{min_hoje} min", f"Meta Mínima: 120 min")
     st.progress(pct_treino)
-    if min_hoje >= 120: st.success("✅ Meta de tempo batida!")
-    elif min_hoje >= 60: st.warning("⚠️ Metade do caminho!")
     
     col_t1, col_t2 = st.columns(2)
     col_t1.metric("👣 Passos (Iron N1)", f"{passos_hoje}")
     col_t2.metric("🔥 Gasto Estimado", f"{cal_hoje} kcal")
     
     st.divider()
-    
-    # 2. FORMULÁRIO IRON N1
-    st.subheader("➕ Novo Registro (Iron N1)")
+    st.subheader("➕ Novo Registro")
     with st.form("form_treino"):
         c_tr1, c_tr2 = st.columns(2)
         tipo = c_tr1.selectbox("Atividade", ["Caminhada Indoor", "Caminhada Rua", "Musculação", "Bicicleta Ergométrica", "Outro"])
         duracao = c_tr2.number_input("Duração (min)", 0, 300, 30)
-        
         c_tr3, c_tr4, c_tr5 = st.columns(3)
         passos = c_tr3.number_input("Passos (Relógio)", 0, 50000, 0)
         dist_est = c_tr4.number_input("Distância (km)", 0.0, 50.0, 0.0)
         cal = c_tr5.number_input("Calorias (Relógio)", 0, 5000, 0)
-        
         bpm = st.number_input("BPM Médio (Opcional)", 0, 200, 0)
         obs = st.text_input("Observações (Sensação, dores?)")
         
@@ -528,7 +488,6 @@ with tab_treino:
             st.success("Treino registrado!")
             st.rerun()
 
-    # 3. LISTA DO DIA
     if not df_treino_hoje.empty:
         st.write("#### Registros de Hoje")
         for i, row in df_treino_hoje.iterrows():
@@ -585,11 +544,15 @@ with tab_rel:
 with tab_admin:
     st.header("⚙️ Configurações")
     with st.form("form_metas_completo"):
+        st.subheader("Fator de Atividade (Basal Multiplier)")
+        st.caption("1.2 = Sedentário/Férias | 1.35 = Leve/Aulas | 1.55 = Moderado/Treino Pesado")
+        n_fator = st.number_input("Fator Atual", 1.0, 2.0, METAS['fator'], 0.05)
+        st.divider()
         c_k1, c_k2 = st.columns(2); n_kcal = c_k1.number_input("Calorias", value=METAS['kcal']); n_prot = c_k2.number_input("Proteína", value=METAS['prot'])
         c_k3, c_k4 = st.columns(2); n_carb = c_k3.number_input("Carbo", value=METAS['carb']); n_gord = c_k4.number_input("Gordura", value=METAS['gord'])
         c_p1, c_p2 = st.columns(2); n_peso_alvo = c_p1.number_input("Peso Alvo", value=METAS['peso_alvo']); n_ritmo = c_p2.number_input("Ritmo", value=METAS['ritmo'])
         if st.form_submit_button("💾 Salvar Metas"):
-            executar_sql("UPDATE public.perfil SET meta_kcal=:mk, meta_proteina=:mp, meta_carbo=:mc, meta_gordura=:mg, meta_peso_alvo=:mpa, ritmo_semanal=:rit WHERE id=1", {'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 'mpa': n_peso_alvo, 'rit': n_ritmo})
+            executar_sql("UPDATE public.perfil SET meta_kcal=:mk, meta_proteina=:mp, meta_carbo=:mc, meta_gordura=:mg, meta_peso_alvo=:mpa, ritmo_semanal=:rit, fator_atividade=:fat WHERE id=1", {'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 'mpa': n_peso_alvo, 'rit': n_ritmo, 'fat': n_fator})
             st.cache_resource.clear(); st.rerun()
 
-st.caption("Leo Tracker Pro v8.2 | DashPro Completo (All Features Restored) 🚀")
+st.caption("Leo Tracker Pro v8.3 | Fator Atividade Dinâmico 🏃‍♂️")
