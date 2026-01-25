@@ -77,6 +77,22 @@ def executar_sql(sql, params=None, is_select=False):
 def inicializar_banco():
     executar_sql("CREATE TABLE IF NOT EXISTS public.consumo (id SERIAL PRIMARY KEY, data DATE, alimento TEXT, quantidade REAL, kcal REAL, proteina REAL, carbo REAL, gordura REAL, gluten TEXT DEFAULT 'Não informado');")
     executar_sql("CREATE TABLE IF NOT EXISTS public.peso (id SERIAL PRIMARY KEY, data DATE, peso_kg REAL);")
+    
+    # NOVA TABELA DE EXERCÍCIOS (Iron N1 Support)
+    executar_sql("""
+        CREATE TABLE IF NOT EXISTS public.exercicios (
+            id SERIAL PRIMARY KEY,
+            data DATE,
+            tipo TEXT,
+            duracao_min INT,
+            passos INT,
+            distancia_km REAL,
+            calorias REAL,
+            bpm_medio INT,
+            observacoes TEXT
+        );
+    """)
+
     executar_sql("""
         CREATE TABLE IF NOT EXISTS public.perfil (
             id SERIAL PRIMARY KEY, 
@@ -191,6 +207,7 @@ def gerar_excel_nutri(dt_ini, dt_fim):
     df_peso = executar_sql("SELECT data, peso_kg FROM public.peso WHERE data >= :d1 AND data <= :d2 ORDER BY data ASC", params, is_select=True)
     df_medidas = executar_sql("SELECT log_date as data, weight_kg as peso, waist_cm as cintura, body_fat_est as bf_estimado, notes FROM public.body_measurements WHERE log_date >= :d1 AND log_date <= :d2 ORDER BY log_date DESC", params, is_select=True)
     df_pressao = executar_sql("SELECT measurement_time as data_hora, systolic, diastolic, pulse FROM public.blood_pressure WHERE measurement_time >= :d1 AND measurement_time <= :d2 ORDER BY measurement_time DESC", params, is_select=True)
+    df_treinos = executar_sql("SELECT data, tipo, duracao_min, passos, distancia_km, calorias, bpm_medio FROM public.exercicios WHERE data >= :d1 AND data <= :d2 ORDER BY data DESC", params, is_select=True)
 
     if not df_detalhado.empty:
         df_macros = df_detalhado.groupby('data')[['kcal', 'proteina', 'carbo', 'gordura']].sum().reset_index()
@@ -214,8 +231,9 @@ def gerar_excel_nutri(dt_ini, dt_fim):
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df_resumo.to_excel(writer, sheet_name='1. Resumo Diário', index=False)
         df_detalhado.to_excel(writer, sheet_name='2. Diário Detalhado', index=False)
-        df_medidas.to_excel(writer, sheet_name='3. Medidas', index=False)
-        df_pressao.to_excel(writer, sheet_name='4. Pressão', index=False)
+        df_treinos.to_excel(writer, sheet_name='3. Treinos', index=False)
+        df_medidas.to_excel(writer, sheet_name='4. Medidas', index=False)
+        df_pressao.to_excel(writer, sheet_name='5. Pressão', index=False)
     return output.getvalue()
 
 # ============================================================================
@@ -246,8 +264,8 @@ c4.metric("🥑 Gordura", f"{int(g_hoje)}g", f"Meta: {METAS['gord']}g")
 st.progress(min(k_hoje/METAS['kcal'], 1.0))
 st.divider()
 
-# ABAS
-tab_dash, tab_daily, tab_hist, tab_medidas, tab_rel, tab_admin = st.tabs(["📊 Dash Pro", "📝 Diário", "📜 Histórico", "❤️ Saúde", "📄 Relatórios", "⚙️ Configurações"])
+# ABAS - Adicionada aba Treino
+tab_dash, tab_daily, tab_treino, tab_hist, tab_medidas, tab_rel, tab_admin = st.tabs(["📊 Dash Pro", "📝 Diário", "🏃‍♂️ Treino", "📜 Histórico", "❤️ Saúde", "📄 Relatórios", "⚙️ Configurações"])
 
 # --- ABA DASH PRO ---
 with tab_dash:
@@ -421,44 +439,33 @@ with tab_dash:
                 st.info("Registre alimentos hoje para ver o gráfico.")
 
     # ========================================================
-    # 🌡️ ANÁLISE TERMODINÂMICA (CORRIGIDO v2)
+    # 🌡️ ANÁLISE TERMODINÂMICA
     # ========================================================
     st.markdown("##### 🌡️ Eficiência Termodinâmica")
 
-    # Usamos df_hist_d e df_peso_d aqui (variáveis locais do dash)
     if not df_hist_d.empty and not df_peso_d.empty:
-        # Criamos cópias para não bagunçar o dataframe original
         df_h_eff = df_hist_d.copy()
         df_p_eff = df_peso_d.copy()
-
-        # Normalizamos as datas para garantir que o merge funcione
         df_h_eff['data_dt'] = pd.to_datetime(df_h_eff['data']).dt.date
         df_p_eff['data_dt'] = pd.to_datetime(df_p_eff['data']).dt.date
 
-        # Cruzamos Consumo x Peso no mesmo dia
         df_eff = pd.merge(df_h_eff, df_p_eff[['data_dt', 'peso_kg']], on='data_dt', how='inner').sort_values('data_dt')
 
         if not df_eff.empty:
-            # 1. Perda Real (Diferença na Balança do primeiro para o último registro coincidente)
             peso_start = df_eff.iloc[0]['peso_kg']
             peso_curr = df_eff.iloc[-1]['peso_kg']
             perda_real = peso_start - peso_curr
 
-            # 2. Perda Teórica (Déficit Acumulado / 7700)
-            # GET Mifflin-St Jeor com fator 1.2 (Sedentário/Escritório)
-            # Usando 'METAS' que é o alias de 'p'
             df_eff['get_teorico'] = ((10 * df_eff['peso_kg']) + (6.25 * METAS['altura']) - (5 * METAS['idade']) + 5) * 1.2
             df_eff['deficit_dia'] = df_eff['get_teorico'] - df_eff['tkcal']
             deficit_acumulado = df_eff['deficit_dia'].sum()
             perda_teorica = deficit_acumulado / 7700
 
-            # 3. Cálculo do Fator (Eficiência)
-            if perda_teorica > 0.1: # Evita divisão por zero ou números muito pequenos
+            if perda_teorica > 0.1:
                 fator_termo = perda_real / perda_teorica
             else:
                 fator_termo = 1.0
 
-            # 4. Exibição Visual
             ct1, ct2 = st.columns(2)
             ct1.metric("Perda Real (Periodo)", f"{perda_real:.1f} kg", f"Teórica (Física): {perda_teorica:.1f} kg")
 
@@ -534,6 +541,66 @@ with tab_daily:
             st.markdown("---")
     else: st.info("Nada registrado hoje.")
 
+# --- NOVA ABA TREINO (IRON N1) ---
+with tab_treino:
+    st.markdown("### 🏃‍♂️ Monitoramento de Treino (Iron N1)")
+    
+    # 1. VISÃO GERAL DO DIA
+    df_treino_hoje = executar_sql("SELECT * FROM public.exercicios WHERE data = :d ORDER BY id DESC", {'d': data_hoje}, is_select=True)
+    
+    min_hoje = int(df_treino_hoje['duracao_min'].sum()) if not df_treino_hoje.empty else 0
+    passos_hoje = int(df_treino_hoje['passos'].sum()) if not df_treino_hoje.empty else 0
+    cal_hoje = int(df_treino_hoje['calorias'].sum()) if not df_treino_hoje.empty else 0
+    
+    # Progresso da Meta 120-150 min
+    pct_treino = min(min_hoje / 150.0, 1.0)
+    st.metric("⏱️ Tempo Total Hoje", f"{min_hoje} min", f"Meta Mínima: 120 min")
+    st.progress(pct_treino)
+    if min_hoje >= 120: st.success("✅ Meta de tempo batida!")
+    elif min_hoje >= 60: st.warning("⚠️ Metade do caminho!")
+    
+    col_t1, col_t2 = st.columns(2)
+    col_t1.metric("👣 Passos (Iron N1)", f"{passos_hoje}")
+    col_t2.metric("🔥 Gasto Estimado", f"{cal_hoje} kcal")
+    
+    st.divider()
+    
+    # 2. FORMULÁRIO IRON N1
+    st.subheader("➕ Novo Registro (Iron N1)")
+    with st.form("form_treino"):
+        c_tr1, c_tr2 = st.columns(2)
+        tipo = c_tr1.selectbox("Atividade", ["Caminhada Indoor", "Caminhada Rua", "Musculação", "Bicicleta Ergométrica", "Outro"])
+        duracao = c_tr2.number_input("Duração (min)", 0, 300, 30)
+        
+        c_tr3, c_tr4, c_tr5 = st.columns(3)
+        passos = c_tr3.number_input("Passos (Relógio)", 0, 50000, 0)
+        dist_est = c_tr4.number_input("Distância (km)", 0.0, 50.0, 0.0)
+        cal = c_tr5.number_input("Calorias (Relógio)", 0, 5000, 0)
+        
+        bpm = st.number_input("BPM Médio (Opcional)", 0, 200, 0)
+        obs = st.text_input("Observações (Sensação, dores?)")
+        
+        if st.form_submit_button("💾 Salvar Treino", use_container_width=True):
+            executar_sql("""
+                INSERT INTO public.exercicios (data, tipo, duracao_min, passos, distancia_km, calorias, bpm_medio, observacoes)
+                VALUES (:d, :t, :dm, :p, :dk, :c, :bpm, :o)
+            """, {'d': data_hoje, 't': tipo, 'dm': duracao, 'p': passos, 'dk': dist_est, 'c': cal, 'bpm': bpm, 'o': obs})
+            st.success("Treino registrado!")
+            st.rerun()
+
+    # 3. LISTA DO DIA
+    if not df_treino_hoje.empty:
+        st.write("#### Registros de Hoje")
+        for i, row in df_treino_hoje.iterrows():
+            with st.container():
+                ct1, ct2, ct3 = st.columns([3, 2, 1])
+                ct1.markdown(f"**{row['tipo']}** ({row['duracao_min']} min)")
+                ct2.caption(f"👣 {row['passos']} passos | {row['calorias']} kcal | BPM: {row['bpm_medio']}")
+                if ct3.button("🗑️", key=f"del_tr_{row['id']}"):
+                    executar_sql("DELETE FROM public.exercicios WHERE id=:id", {'id': row['id']})
+                    st.rerun()
+                st.markdown("---")
+
 # --- ABA HISTÓRICO ---
 with tab_hist:
     st.header("Histórico Completo")
@@ -585,4 +652,4 @@ with tab_admin:
             executar_sql("UPDATE public.perfil SET meta_kcal=:mk, meta_proteina=:mp, meta_carbo=:mc, meta_gordura=:mg, meta_peso_alvo=:mpa, ritmo_semanal=:rit WHERE id=1", {'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 'mpa': n_peso_alvo, 'rit': n_ritmo})
             st.cache_resource.clear(); st.rerun()
 
-st.caption("Leo Tracker Pro v7.5 | Bugfix Termodinâmica")
+st.caption("Leo Tracker Pro v8.0 | Iron N1 Edition 🏃‍♂️")
