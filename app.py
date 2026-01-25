@@ -78,7 +78,7 @@ def inicializar_banco():
     executar_sql("CREATE TABLE IF NOT EXISTS public.consumo (id SERIAL PRIMARY KEY, data DATE, alimento TEXT, quantidade REAL, kcal REAL, proteina REAL, carbo REAL, gordura REAL, gluten TEXT DEFAULT 'Não informado');")
     executar_sql("CREATE TABLE IF NOT EXISTS public.peso (id SERIAL PRIMARY KEY, data DATE, peso_kg REAL);")
     
-    # NOVA TABELA DE EXERCÍCIOS (Iron N1 Support)
+    # TABELA DE EXERCÍCIOS (Iron N1 Support)
     executar_sql("""
         CREATE TABLE IF NOT EXISTS public.exercicios (
             id SERIAL PRIMARY KEY,
@@ -188,7 +188,7 @@ def processar_texto_ia(texto_usuario, api_key):
     except Exception as e: return False, f"Erro: {str(e)}"
 
 # ============================================================================
-# 6. GERADOR DE EXCEL (ATUALIZADO COM TREINOS)
+# 6. GERADOR DE EXCEL
 # ============================================================================
 def gerar_excel_nutri(dt_ini, dt_fim):
     output = io.BytesIO()
@@ -207,7 +207,7 @@ def gerar_excel_nutri(dt_ini, dt_fim):
     else:
         df_macros = pd.DataFrame(columns=['data', 'kcal', 'proteina', 'carbo', 'gordura'])
 
-    # 3. Agregação de Treinos (Para o Resumo)
+    # 3. Agregação de Treinos
     if not df_treinos_raw.empty:
         df_treinos_agg = df_treinos_raw.groupby('data')[['duracao_min', 'passos', 'calorias']].sum().reset_index()
         df_treinos_agg.columns = ['data', 'treino_min', 'treino_passos', 'treino_kcal']
@@ -221,21 +221,16 @@ def gerar_excel_nutri(dt_ini, dt_fim):
         df_peso = df_peso.drop_duplicates(subset='data', keep='last')
     if not df_treinos_agg.empty: df_treinos_agg['data'] = pd.to_datetime(df_treinos_agg['data']).dt.normalize()
 
-    # 5. Merge Completo (Macros + Peso + Treino)
+    # 5. Merge Completo
     if not df_macros.empty or not df_peso.empty:
         df_resumo = pd.merge(df_macros, df_peso, on='data', how='outer')
-        df_resumo = pd.merge(df_resumo, df_treinos_agg, on='data', how='left') # Merge com treinos
-        
+        df_resumo = pd.merge(df_resumo, df_treinos_agg, on='data', how='left')
         df_resumo = df_resumo.sort_values('data', ascending=False)
-        # Seleção e renomeação
         cols_order = ['data', 'peso_kg', 'kcal', 'proteina', 'carbo', 'gordura', 'treino_min', 'treino_passos', 'treino_kcal']
-        # Garante que as colunas existem (caso o merge tenha falhado por falta de dados)
         for c in cols_order: 
             if c not in df_resumo.columns: df_resumo[c] = 0
-            
         df_resumo = df_resumo[cols_order]
         df_resumo.columns = ['Data', 'Peso (kg)', 'Comida (kcal)', 'Prot (g)', 'Carb (g)', 'Gord (g)', 'Treino (min)', 'Passos', 'Gasto Treino (kcal)']
-        
         df_resumo = df_resumo.dropna(subset=['Data'])
         df_resumo['Data'] = df_resumo['Data'].dt.strftime('%d/%m/%Y')
     else:
@@ -280,21 +275,16 @@ st.divider()
 # ABAS
 tab_dash, tab_daily, tab_treino, tab_hist, tab_medidas, tab_rel, tab_admin = st.tabs(["📊 Dash Pro", "📝 Diário", "🏃‍♂️ Treino", "📜 Histórico", "❤️ Saúde", "📄 Relatórios", "⚙️ Configurações"])
 
-# --- ABA DASH PRO (ATUALIZADA) ---
+# --- ABA DASH PRO (COMPLETA) ---
 with tab_dash:
     st.markdown("### 🧬 Leo's Analytics Hub")
 
     # 1. FETCH DADOS
     DATA_INICIO_D = pd.to_datetime("2025-12-30").date()
-    # Dados de Consumo
     df_hist_d = executar_sql("SELECT data, SUM(kcal) as tkcal, SUM(proteina) as tprot, SUM(carbo) as tcarb, SUM(gordura) as tgord, SUM(quantidade) as tqtd FROM public.consumo WHERE data >= :d GROUP BY data ORDER BY data ASC", {"d": DATA_INICIO_D}, is_select=True)
-    # Dados de Peso
     df_peso_d = executar_sql("SELECT * FROM public.peso ORDER BY data ASC", is_select=True)
-    # Dados de Treino (NOVO)
     df_treino_d = executar_sql("SELECT data, SUM(duracao_min) as t_min, SUM(passos) as t_passos, SUM(calorias) as t_cal_out FROM public.exercicios WHERE data >= :d GROUP BY data ORDER BY data ASC", {"d": DATA_INICIO_D}, is_select=True)
-    # Dados de Pressão
     df_bp_d = executar_sql("SELECT * FROM public.blood_pressure ORDER BY measurement_time ASC", is_select=True)
-    # Dados Medidas
     df_medidas_d = executar_sql("SELECT * FROM public.body_measurements ORDER BY log_date ASC", is_select=True)
 
     # 1.1 PRÉ-CÁLCULO DE DADOS COMBINADOS
@@ -302,12 +292,10 @@ with tab_dash:
         df_hist_d['data_dt'] = pd.to_datetime(df_hist_d['data']).dt.date
         df_peso_d['data_dt'] = pd.to_datetime(df_peso_d['data']).dt.date
         
-        # Merge Consumo + Peso
         df_merged = pd.merge(df_hist_d, df_peso_d[['data_dt', 'peso_kg']], on='data_dt', how='left').ffill()
         if df_merged['peso_kg'].isnull().any():
              df_merged['peso_kg'] = df_merged['peso_kg'].fillna(method='bfill').fillna(peso_atual_sidebar)
 
-        # Merge Treino
         if not df_treino_d.empty:
             df_treino_d['data_dt'] = pd.to_datetime(df_treino_d['data']).dt.date
             df_merged = pd.merge(df_merged, df_treino_d[['data_dt', 't_min', 't_passos', 't_cal_out']], on='data_dt', how='left')
@@ -316,8 +304,7 @@ with tab_dash:
             df_merged['t_min'] = 0; df_merged['t_passos'] = 0; df_merged['t_cal_out'] = 0
 
         idade, altura = METAS['idade'], METAS['altura']
-        # GET Diário (Mifflin-St Jeor Sedentário) + Gasto de Treino
-        # Nota: O fator 1.2 já cobre NEAT básico. Adicionamos o treino EXTRA.
+        # GET Basal+Neat(1.2) + Treino Extra
         df_merged['get_basal_neat'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * 1.2
         df_merged['get_total'] = df_merged['get_basal_neat'] + df_merged['t_cal_out']
         df_merged['deficit_real'] = df_merged['get_total'] - df_merged['tkcal']
@@ -337,7 +324,6 @@ with tab_dash:
     cd1.metric("💧 Meta Água", f"{META_AGUA}L")
     cd2.metric("❤️ Pressão", f"{last_sys}x{last_dia}", f"Pulso: {last_pulse}")
     
-    # Métrica de Atividade Recente (Média 7d)
     if not df_merged.empty and 't_passos' in df_merged.columns:
         avg_passos = df_merged['t_passos'].tail(7).mean()
         avg_min = df_merged['t_min'].tail(7).mean()
@@ -347,35 +333,60 @@ with tab_dash:
         
     st.divider()
 
-    # 2. NOVO GRÁFICO: BALANÇO ENERGÉTICO
+    # GRÁFICO 1: BALANÇO ENERGÉTICO (NOVO)
     st.subheader("🔥 Balanço Energético (Real vs Estimado)")
     if not df_merged.empty:
         fig_bal = go.Figure()
-        # Área de Gasto Total (Basal + Treino)
         fig_bal.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['get_total'], fill='tozeroy', mode='none', name='Gasto Total (Basal+Treino)', fillcolor='rgba(46, 204, 113, 0.2)'))
-        # Linha de Consumo (Comida)
         fig_bal.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['tkcal'], mode='lines+markers', name='Consumo (Comida)', line=dict(color='#e74c3c', width=3)))
-        # Barras de Déficit (Abaixo)
         fig_bal.add_trace(go.Bar(x=df_merged['data'], y=df_merged['deficit_real'], name='Déficit Real', marker_color='#3498db', opacity=0.6))
-        
-        fig_bal.update_layout(height=400, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1), title="Área Verde = Gasto | Linha Vermelha = Comida | Azul = Déficit")
+        fig_bal.update_layout(height=350, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1))
         st.plotly_chart(fig_bal, use_container_width=True)
 
-    # 3. GRÁFICO DE PESO (PROJEÇÃO)
+    # GRÁFICO 2: ENERGIA VS VOLUME (RESTAURADO)
+    st.subheader("⚖️ Energia (Linha) vs. Volume Comida (Barras)")
+    if not df_merged.empty:
+        fig_ev = make_subplots(specs=[[{"secondary_y": True}]])
+        fig_ev.add_trace(go.Bar(x=df_merged['data'], y=df_merged['tqtd'], name='Volume (g)', marker_color='#AED6F1', opacity=0.6), secondary_y=True)
+        fig_ev.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['tkcal'], name='Calorias (kcal)', mode='lines+markers', line=dict(color='#C0392B', width=3)), secondary_y=False)
+        fig_ev.add_hline(y=METAS['kcal'], line_dash="dash", line_color="#27AE60", annotation_text=f"Meta ({METAS['kcal']})")
+        fig_ev.update_layout(height=350, margin=dict(l=10,r=10,t=30,b=10), legend=dict(orientation="h", y=1.1))
+        fig_ev.update_yaxes(title_text="Kcal", secondary_y=False)
+        fig_ev.update_yaxes(title_text="Gramas", secondary_y=True, showgrid=False)
+        st.plotly_chart(fig_ev, use_container_width=True)
+
+    # GRÁFICO 3: SAÚDE (BF E PRESSÃO - RESTAURADOS)
+    st.divider()
+    c_h1, c_h2 = st.columns(2)
+    with c_h1:
+        st.subheader("🧬 Gordura Corporal (%)")
+        if not df_medidas_d.empty:
+            fig_bf = go.Figure(go.Scatter(x=df_medidas_d['log_date'], y=df_medidas_d['body_fat_est'], mode='lines+markers', line=dict(color='#e67e22'), name='BF%'))
+            fig_bf.update_layout(height=250, margin=dict(l=10,r=10,t=20,b=10))
+            st.plotly_chart(fig_bf, use_container_width=True)
+    with c_h2:
+        st.subheader("❤️ Pressão Arterial")
+        if not df_bp_d.empty:
+            fig_bp = go.Figure()
+            fig_bp.add_trace(go.Scatter(x=df_bp_d['measurement_time'], y=df_bp_d['systolic'], name="Sys", line=dict(color='red')))
+            fig_bp.add_trace(go.Scatter(x=df_bp_d['measurement_time'], y=df_bp_d['diastolic'], name="Dia", line=dict(color='blue')))
+            fig_bp.update_layout(height=250, margin=dict(l=10,r=10,t=20,b=10))
+            st.plotly_chart(fig_bp, use_container_width=True)
+
+    # GRÁFICO 4: PROJEÇÃO E TREINO (NOVOS)
+    st.divider()
     c_p1, c_p2 = st.columns([2, 1])
     with c_p1:
-        st.subheader("🎯 Projeção vs. Realidade")
+        st.subheader("🎯 Projeção Peso")
         if not df_peso_d.empty:
             df_peso_d['data_dt'] = pd.to_datetime(df_peso_d['data']).dt.date
             BASE_DATE = pd.to_datetime("2025-12-31").date()
             df_base = df_peso_d[df_peso_d['data_dt'] >= BASE_DATE].sort_values('data_dt')
-
             if not df_base.empty:
                 peso_inicial = float(df_base.iloc[0]['peso_kg'])
                 datas_proj = pd.date_range(start=BASE_DATE, end=data_hoje)
                 ritmo_diario = METAS['ritmo'] / 7
                 pesos_estimados = [peso_inicial - (i * ritmo_diario) for i in range(len(datas_proj))]
-                
                 fig_proj = go.Figure()
                 fig_proj.add_trace(go.Scatter(x=datas_proj, y=pesos_estimados, mode='lines', name='Meta', line=dict(color='#29B5E8', dash='dash')))
                 fig_proj.add_trace(go.Scatter(x=df_base['data_dt'], y=df_base['peso_kg'], mode='lines+markers', name='Real', line=dict(color='#FF4B4B', width=3)))
@@ -383,15 +394,15 @@ with tab_dash:
                 st.plotly_chart(fig_proj, use_container_width=True)
 
     with c_p2:
-        st.subheader("📊 Volume de Treino")
+        st.subheader("📊 Volume Treino")
         if not df_merged.empty and 't_passos' in df_merged.columns:
             fig_vol = make_subplots(specs=[[{"secondary_y": True}]])
-            fig_vol.add_trace(go.Bar(x=df_merged['data'], y=df_merged['t_min'], name='Minutos', marker_color='#f1c40f'), secondary_y=False)
+            fig_vol.add_trace(go.Bar(x=df_merged['data'], y=df_merged['t_min'], name='Min', marker_color='#f1c40f'), secondary_y=False)
             fig_vol.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['t_passos'], name='Passos', mode='lines+markers', line=dict(color='#8e44ad')), secondary_y=True)
             fig_vol.update_layout(height=300, margin=dict(l=10,r=10,t=20,b=10), showlegend=False)
             st.plotly_chart(fig_vol, use_container_width=True)
 
-    # 4. TERMODINÂMICA E MACROS
+    # GRÁFICO 5: TERMODINÂMICA E MACROS (FIM)
     st.divider()
     c_t1, c_t2 = st.columns(2)
     with c_t1:
@@ -581,4 +592,4 @@ with tab_admin:
             executar_sql("UPDATE public.perfil SET meta_kcal=:mk, meta_proteina=:mp, meta_carbo=:mc, meta_gordura=:mg, meta_peso_alvo=:mpa, ritmo_semanal=:rit WHERE id=1", {'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 'mpa': n_peso_alvo, 'rit': n_ritmo})
             st.cache_resource.clear(); st.rerun()
 
-st.caption("Leo Tracker Pro v8.1 | DashPro + Iron N1 Integration 🚀")
+st.caption("Leo Tracker Pro v8.2 | DashPro Completo (All Features Restored) 🚀")
