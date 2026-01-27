@@ -58,7 +58,7 @@ def executar_sql(sql, params=None, is_select=False):
         if is_select:
             with engine.connect() as conn:
                 df = pd.read_sql(text(sql), conn, params=params)
-                for col in ['data', 'log_date', 'measurement_time']:
+                for col in ['data', 'log_date', 'measurement_time', 'data_hora']:
                     if col in df.columns:
                         try: df[col] = pd.to_datetime(df[col])
                         except: pass
@@ -75,7 +75,12 @@ def executar_sql(sql, params=None, is_select=False):
 # 3. SINCRONIZAÇÃO DO BANCO
 # ============================================================================
 def inicializar_banco():
+    # Tabela consumo
     executar_sql("CREATE TABLE IF NOT EXISTS public.consumo (id SERIAL PRIMARY KEY, data DATE, alimento TEXT, quantidade REAL, kcal REAL, proteina REAL, carbo REAL, gordura REAL, gluten TEXT DEFAULT 'Não informado');")
+    # Garantir que data_hora exista para o calculo de tempo
+    try: executar_sql("ALTER TABLE public.consumo ADD COLUMN IF NOT EXISTS data_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
+    except: pass
+    
     executar_sql("CREATE TABLE IF NOT EXISTS public.peso (id SERIAL PRIMARY KEY, data DATE, peso_kg REAL);")
     executar_sql("""
         CREATE TABLE IF NOT EXISTS public.exercicios (
@@ -179,7 +184,7 @@ def processar_texto_ia(texto_usuario, api_key):
 def gerar_excel_nutri(dt_ini, dt_fim):
     output = io.BytesIO()
     params = {'d1': dt_ini, 'd2': dt_fim}
-    df_detalhado = executar_sql("SELECT data, alimento, quantidade, kcal, proteina, carbo, gordura FROM public.consumo WHERE data >= :d1 AND data <= :d2 ORDER BY data DESC", params, is_select=True)
+    df_detalhado = executar_sql("SELECT data, data_hora, alimento, quantidade, kcal, proteina, carbo, gordura FROM public.consumo WHERE data >= :d1 AND data <= :d2 ORDER BY data DESC", params, is_select=True)
     df_peso = executar_sql("SELECT data, peso_kg FROM public.peso WHERE data >= :d1 AND data <= :d2 ORDER BY data ASC", params, is_select=True)
     df_medidas = executar_sql("SELECT log_date as data, weight_kg as peso, waist_cm as cintura, body_fat_est as bf_estimado, notes FROM public.body_measurements WHERE log_date >= :d1 AND log_date <= :d2 ORDER BY log_date DESC", params, is_select=True)
     df_pressao = executar_sql("SELECT measurement_time as data_hora, systolic, diastolic, pulse FROM public.blood_pressure WHERE measurement_time >= :d1 AND measurement_time <= :d2 ORDER BY measurement_time DESC", params, is_select=True)
@@ -391,7 +396,54 @@ with tab_dash:
         elif fator_termo < 0.85: st_termo, cor_termo = "❄️ Lento", "inverse"
         else: st_termo, cor_termo = "✅ Normal", "off"
         c_t3.metric("Índice Termodinâmico", f"{fator_termo:.2f}x", st_termo, delta_color=cor_termo)
+
+    # ============================================================================
+    # 8. GRÁFICO DE CADÊNCIA ALIMENTAR (CORRIGIDO PARA DATA_HORA)
+    # ============================================================================
+    st.divider()
+    st.subheader("⏱️ Cadência Alimentar (Média)")
     
+    # 1. Buscar data_hora exata
+    df_intervalos = executar_sql("SELECT data_hora FROM public.consumo WHERE data >= :d ORDER BY data_hora ASC", {"d": DATA_INICIO_D}, is_select=True)
+    
+    if not df_intervalos.empty and 'data_hora' in df_intervalos.columns:
+        # Remover NaT se houver
+        df_intervalos = df_intervalos.dropna(subset=['data_hora'])
+        
+        # 2. Calcular diferença em minutos entre linhas consecutivas
+        df_intervalos['diff_min'] = df_intervalos['data_hora'].diff().dt.total_seconds() / 60
+        
+        # 3. Filtrar intervalos < 10 minutos (ignorando a mesma refeição) e NaNs
+        df_clean = df_intervalos[(df_intervalos['diff_min'] > 10)].copy()
+        
+        if not df_clean.empty:
+            # 4. Agrupar média por Dia
+            df_clean['day'] = df_clean['data_hora'].dt.date
+            df_daily_avg = df_clean.groupby('day')['diff_min'].mean().reset_index()
+            
+            # Converter para horas para visualização
+            df_daily_avg['hours'] = df_daily_avg['diff_min'] / 60
+            
+            fig_timer = go.Figure()
+            fig_timer.add_trace(go.Bar(
+                x=df_daily_avg['day'], 
+                y=df_daily_avg['hours'],
+                name='Horas entre Refeições',
+                marker_color='#9b59b6',
+                opacity=0.7
+            ))
+            fig_timer.update_layout(
+                title="Média de horas entre refeições (Excl. < 10min)",
+                yaxis_title="Horas",
+                height=300,
+                margin=dict(l=10,r=10,t=30,b=10)
+            )
+            st.plotly_chart(fig_timer, use_container_width=True)
+        else:
+            st.info("Sem dados suficientes de intervalo (calibrando...).")
+    else:
+        st.warning("Coluna 'data_hora' ainda não populada para gerar histórico.")
+
     st.divider()
     st.subheader("🍽️ Macros (%)")
     if not df_hist_d.empty:
@@ -566,4 +618,4 @@ with tab_admin:
             executar_sql("UPDATE public.perfil SET meta_kcal=:mk, meta_proteina=:mp, meta_carbo=:mc, meta_gordura=:mg, meta_peso_alvo=:mpa, ritmo_semanal=:rit, fator_atividade=:fat WHERE id=1", {'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 'mpa': n_peso_alvo, 'rit': n_ritmo, 'fat': n_fator})
             st.cache_resource.clear(); st.rerun()
 
-st.caption("Leo Tracker Pro v8.4 | DashPro Completo (Termodinâmica + Iron N1 + Fator Ativ) 🚀")
+st.caption("Leo Tracker Pro v8.5 | DashPro Completo (Termodinâmica + Iron N1 + Fator Ativ) 🚀")
