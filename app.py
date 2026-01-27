@@ -398,63 +398,79 @@ with tab_dash:
         c_t3.metric("Índice Termodinâmico", f"{fator_termo:.2f}x", st_termo, delta_color=cor_termo)
 
     # ============================================================================
-    # 8. GRÁFICO DE CADÊNCIA ALIMENTAR (CORRIGIDO PARA DATA_HORA)
+   # ============================================================================
+    # 8. HISTOGRAMA DE JEJUM (DISTRIBUIÇÃO DE FREQUÊNCIA)
     # ============================================================================
     st.divider()
-    st.subheader("⏱️ Cadência Alimentar (Média)")
-    
+    st.subheader("⏱️ Raio-X dos Seus Intervalos (Jejum)")
+
     # 1. Buscar data_hora exata
     df_intervalos = executar_sql("SELECT data_hora FROM public.consumo WHERE data >= :d ORDER BY data_hora ASC", {"d": DATA_INICIO_D}, is_select=True)
-    
+
     if not df_intervalos.empty and 'data_hora' in df_intervalos.columns:
-        # Remover NaT se houver
         df_intervalos = df_intervalos.dropna(subset=['data_hora'])
         
-        # 2. Calcular diferença em minutos entre linhas consecutivas
-        df_intervalos['diff_min'] = df_intervalos['data_hora'].diff().dt.total_seconds() / 60
+        # 2. Calcular diferença em HORAS entre refeições
+        df_intervalos['diff_hours'] = df_intervalos['data_hora'].diff().dt.total_seconds() / 3600
         
-        # 3. Filtrar intervalos < 10 minutos (ignorando a mesma refeição) e NaNs
-        df_clean = df_intervalos[(df_intervalos['diff_min'] > 10)].copy()
+        # 3. Filtrar intervalos < 20 minutos (ignorando "repete prato") e NaNs
+        # Consideramos intervalos válidos apenas aqueles significativos
+        df_clean = df_intervalos[(df_intervalos['diff_hours'] > 0.33)].copy() # > 20 min
         
         if not df_clean.empty:
-            # 4. Agrupar média por Dia
-            df_clean['day'] = df_clean['data_hora'].dt.date
-            df_daily_avg = df_clean.groupby('day')['diff_min'].mean().reset_index()
+            # Criar faixas de cores baseadas no Jejum
+            # < 4h: Intervalo comum de refeição (Cinza)
+            # 4h - 12h: Intervalo Digestivo (Azul Claro)
+            # 12h - 16h: Início de Autofagia (Azul Escuro)
+            # > 16h: Jejum "Leão" (Dourado/Laranja)
             
-            # Converter para horas para visualização
-            df_daily_avg['hours'] = df_daily_avg['diff_min'] / 60
-            
-            fig_timer = go.Figure()
-            fig_timer.add_trace(go.Bar(
-                x=df_daily_avg['day'], 
-                y=df_daily_avg['hours'],
-                name='Horas entre Refeições',
-                marker_color='#9b59b6',
-                opacity=0.7
-            ))
-            fig_timer.update_layout(
-                title="Média de horas entre refeições (Excl. < 10min)",
-                yaxis_title="Horas",
-                height=300,
-                margin=dict(l=10,r=10,t=30,b=10)
-            )
-            st.plotly_chart(fig_timer, use_container_width=True)
-        else:
-            st.info("Sem dados suficientes de intervalo (calibrando...).")
-    else:
-        st.warning("Coluna 'data_hora' ainda não populada para gerar histórico.")
+            fig_hist = go.Figure()
 
-    st.divider()
-    st.subheader("🍽️ Macros (%)")
-    if not df_hist_d.empty:
-        df_macros = df_hist_d.copy()
-        df_macros['tot'] = (df_macros['tprot']*4 + df_macros['tcarb']*4 + df_macros['tgord']*9).replace(0, 1)
-        fig_stack = go.Figure()
-        fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tprot']*4/df_macros['tot'])*100, name='P', marker_color='#3366CC'))
-        fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tgord']*9/df_macros['tot'])*100, name='G', marker_color='#DC3912'))
-        fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tcarb']*4/df_macros['tot'])*100, name='C', marker_color='#FF9900'))
-        fig_stack.update_layout(barmode='stack', height=250, margin=dict(l=10,r=10,t=20,b=10), yaxis=dict(range=[0, 100]))
-        st.plotly_chart(fig_stack, use_container_width=True)
+            # Adicionar o Histograma
+            fig_hist.add_trace(go.Histogram(
+                x=df_clean['diff_hours'],
+                nbinsx=20, # Ajuste a granulação das barras
+                marker=dict(
+                    color=df_clean['diff_hours'],
+                    colorscale=[
+                        [0.0, '#95a5a6'],   # Cinza (Comer toda hora)
+                        [0.2, '#3498db'],   # Azul (Normal)
+                        [0.6, '#2980b9'],   # Azul Forte (Jejum 12-14h)
+                        [1.0, '#f39c12']    # Laranja (Jejum 18h+)
+                    ],
+                    showscale=False
+                ),
+                name='Frequência',
+                opacity=0.85
+            ))
+
+            # Linhas de Meta
+            fig_hist.add_vline(x=12, line_dash="dash", line_color="green", annotation_text="12h (Mínimo)")
+            fig_hist.add_vline(x=16, line_dash="dash", line_color="orange", annotation_text="16h (Meta)")
+            fig_hist.add_vline(x=18, line_dash="dash", line_color="red", annotation_text="18h (Leão)")
+
+            fig_hist.update_layout(
+                title="Distribuição dos Intervalos (Quantas vezes você fica X horas sem comer?)",
+                xaxis_title="Horas sem comer",
+                yaxis_title="Ocorrências (Qtd de vezes)",
+                height=350,
+                bargap=0.1,
+                margin=dict(l=10,r=10,t=40,b=10)
+            )
+            st.plotly_chart(fig_hist, use_container_width=True)
+            
+            # Estatística Rápida
+            maior_jejum = df_clean['diff_hours'].max()
+            media_jejum = df_clean[df_clean['diff_hours'] > 4]['diff_hours'].mean() # Média ignorando lanchinhos < 4h
+            
+            cj1, cj2 = st.columns(2)
+            cj1.metric("🏆 Maior Jejum Registrado", f"{maior_jejum:.1f} horas")
+            cj2.metric("⏱️ Média (Intervalos > 4h)", f"{media_jejum:.1f} horas")
+
+        else:
+            st.info("Sem dados suficientes de intervalo temporal (necessário timestamps).")
+    else:
+        st.warning("Ainda não há dados de horário precisos.")
 
 # --- ABA DIÁRIO ---
 with tab_daily:
