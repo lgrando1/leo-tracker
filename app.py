@@ -277,8 +277,22 @@ with tab_dash:
     DATA_INICIO_D = pd.to_datetime("2025-12-30").date()
     df_hist_d = executar_sql("SELECT data, SUM(kcal) as tkcal, SUM(proteina) as tprot, SUM(carbo) as tcarb, SUM(gordura) as tgord, SUM(quantidade) as tqtd FROM public.consumo WHERE data >= :d GROUP BY data ORDER BY data ASC", {"d": DATA_INICIO_D}, is_select=True)
     df_peso_d = executar_sql("SELECT * FROM public.peso ORDER BY data ASC", is_select=True)
-    # ATUALIZADO: Buscar colunas de passos especificas
-    df_treino_d = executar_sql("SELECT data, SUM(duracao_min) as t_min, MAX(passos_total_dia) as t_passos_total, MAX(passos_trabalho) as t_passos_prof, SUM(calorias) as t_cal_out FROM public.exercicios WHERE data >= :d GROUP BY data ORDER BY data ASC", {"d": DATA_INICIO_D}, is_select=True)
+    
+    # ATUALIZADO: Busca Total do Dia e Soma dos Passos de Treino (excluindo fechamento)
+    # A lógica aqui: Passos de Treino são a soma das atividades. Passos Totais é o MAX do dia.
+    df_treino_d = executar_sql("""
+        SELECT 
+            data, 
+            SUM(duracao_min) as t_min, 
+            MAX(passos_total_dia) as t_passos_total, 
+            SUM(passos) as t_passos_treino, -- Soma apenas passos de atividades registradas
+            SUM(calorias) as t_cal_out 
+        FROM public.exercicios 
+        WHERE data >= :d 
+        GROUP BY data 
+        ORDER BY data ASC
+    """, {"d": DATA_INICIO_D}, is_select=True)
+    
     df_bp_d = executar_sql("SELECT * FROM public.blood_pressure ORDER BY measurement_time ASC", is_select=True)
     df_medidas_d = executar_sql("SELECT * FROM public.body_measurements ORDER BY log_date ASC", is_select=True)
 
@@ -292,14 +306,16 @@ with tab_dash:
 
         if not df_treino_d.empty:
             df_treino_d['data_dt'] = pd.to_datetime(df_treino_d['data']).dt.date
-            df_merged = pd.merge(df_merged, df_treino_d[['data_dt', 't_min', 't_passos_total', 't_passos_prof', 't_cal_out']], on='data_dt', how='left')
-            df_merged[['t_min', 't_passos_total', 't_passos_prof', 't_cal_out']] = df_merged[['t_min', 't_passos_total', 't_passos_prof', 't_cal_out']].fillna(0)
-            # Calcular Passos Lazer (Total - Professor)
-            df_merged['t_passos_lazer'] = df_merged['t_passos_total'] - df_merged['t_passos_prof']
-            # Garantir que não fique negativo caso input esteja errado
-            df_merged['t_passos_lazer'] = df_merged['t_passos_lazer'].clip(lower=0)
+            df_merged = pd.merge(df_merged, df_treino_d[['data_dt', 't_min', 't_passos_total', 't_passos_treino', 't_cal_out']], on='data_dt', how='left')
+            df_merged[['t_min', 't_passos_total', 't_passos_treino', 't_cal_out']] = df_merged[['t_min', 't_passos_total', 't_passos_treino', 't_cal_out']].fillna(0)
+            
+            # CÁLCULO REVERSO:
+            # Se tenho Total e tenho Treino, o resto é Rotina (Professor)
+            # Se o usuário não botou total (0), assume que Rotina é 0
+            df_merged['t_passos_rotina'] = df_merged['t_passos_total'] - df_merged['t_passos_treino']
+            df_merged['t_passos_rotina'] = df_merged['t_passos_rotina'].clip(lower=0) # Evitar negativo
         else:
-            df_merged['t_min'] = 0; df_merged['t_passos_total'] = 0; df_merged['t_passos_prof'] = 0; df_merged['t_passos_lazer'] = 0; df_merged['t_cal_out'] = 0
+            df_merged['t_min'] = 0; df_merged['t_passos_total'] = 0; df_merged['t_passos_treino'] = 0; df_merged['t_passos_rotina'] = 0; df_merged['t_cal_out'] = 0
 
         idade, altura = METAS['idade'], METAS['altura']
         fator_uso = METAS['fator'] 
@@ -386,15 +402,16 @@ with tab_dash:
     with c_p2:
         st.subheader("📊 Volume Treino (Empilhado)")
         if not df_merged.empty and 't_passos_total' in df_merged.columns:
-            # Gráfico de Barras Empilhadas para Passos
+            # Gráfico de Barras Empilhadas
             fig_vol = make_subplots(specs=[[{"secondary_y": True}]])
             
-            # Barras Empilhadas (Passos) - Eixo Primário
-            fig_vol.add_trace(go.Bar(x=df_merged['data'], y=df_merged['t_passos_prof'], name='Passos Professor', marker_color='#e67e22'), secondary_y=False)
-            fig_vol.add_trace(go.Bar(x=df_merged['data'], y=df_merged['t_passos_lazer'], name='Lazer/Transp', marker_color='#8e44ad'), secondary_y=False)
+            # Base: Rotina/Professor (Laranja)
+            fig_vol.add_trace(go.Bar(x=df_merged['data'], y=df_merged['t_passos_rotina'], name='Rotina/Prof', marker_color='#e67e22'), secondary_y=False)
+            # Topo: Treinos Específicos (Roxo)
+            fig_vol.add_trace(go.Bar(x=df_merged['data'], y=df_merged['t_passos_treino'], name='Treinos', marker_color='#8e44ad'), secondary_y=False)
             
-            # Linha para Minutos - Eixo Secundário
-            fig_vol.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['t_min'], name='Minutos Totais', mode='lines', line=dict(color='#f1c40f', width=2, dash='dot')), secondary_y=True)
+            # Linha: Minutos
+            fig_vol.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['t_min'], name='Minutos', mode='lines', line=dict(color='#f1c40f', width=2, dash='dot')), secondary_y=True)
             
             fig_vol.update_layout(barmode='stack', height=300, margin=dict(l=10,r=10,t=20,b=10), showlegend=True, legend=dict(orientation="h", y=1.1, font=dict(size=10)))
             fig_vol.update_yaxes(title_text="Passos", secondary_y=False)
@@ -409,7 +426,6 @@ with tab_dash:
         deficit_total = df_merged['deficit_real'].sum()
         kg_gordura = deficit_total / 7700
         
-        # CÁLCULO TERMODINÂMICA RESTAURADO
         peso_start = df_merged.iloc[0]['peso_kg']
         peso_curr = df_merged.iloc[-1]['peso_kg']
         perda_real = peso_start - peso_curr
@@ -423,7 +439,7 @@ with tab_dash:
         elif fator_termo < 0.85: st_termo, cor_termo = "❄️ Lento", "inverse"
         else: st_termo, cor_termo = "✅ Normal", "off"
         c_t3.metric("Índice Termodinâmico", f"{fator_termo:.2f}x", st_termo, delta_color=cor_termo)
-
+        
     # ============================================================================
     # 8. HISTOGRAMA DE JEJUM (DISTRIBUIÇÃO DE FREQUÊNCIA)
     # ============================================================================
@@ -560,84 +576,68 @@ with tab_treino:
     st.markdown("### 🏃‍♂️ Monitoramento de Treino (Iron N1)")
     
     # 1. RECUPERAR DADOS DO DIA
-    # Busca todos os registros do dia
     df_treino_hoje = executar_sql("SELECT * FROM public.exercicios WHERE data = :d ORDER BY id DESC", {'d': data_hoje}, is_select=True)
     
-    # Separa o que é "Fechamento" do que é "Treino Específico"
+    # Separa registros
     df_fechamento = df_treino_hoje[df_treino_hoje['tipo'] == 'Fechamento Diário']
     df_atividades = df_treino_hoje[df_treino_hoje['tipo'] != 'Fechamento Diário']
     
-    # Totais calculados
+    # Totais de TREINO (Soma das atividades específicas)
     min_treino_hoje = int(df_atividades['duracao_min'].sum())
     cal_treino_hoje = int(df_atividades['calorias'].sum())
     passos_treino_hoje = int(df_atividades['passos'].sum())
     
-    # Se já tiver fechamento, pega os dados dele, senão usa zero
+    # Se já tiver fechamento, pega o Total do Relógio salvo
     if not df_fechamento.empty:
-        row_fech = df_fechamento.iloc[0]
-        passos_total_n1 = int(row_fech['passos_total_dia'])
-        passos_prof = int(row_fech['passos_trabalho'])
+        passos_total_n1 = int(df_fechamento.iloc[0]['passos_total_dia'])
     else:
         passos_total_n1 = 0
-        passos_prof = 0
 
-    # Passos "Resto do Dia" (Lazer/Transporte) = Total - (Professor + Treinos)
-    passos_lazer = max(0, passos_total_n1 - passos_prof - passos_treino_hoje)
+    # CÁLCULO AUTOMÁTICO DO "PROFESSOR/ROTINA"
+    # Lógica: O que não é treino, é rotina.
+    if passos_total_n1 > 0:
+        passos_prof_rotina = max(0, passos_total_n1 - passos_treino_hoje)
+    else:
+        passos_prof_rotina = 0
 
-    # --- METRICA DO TOPO ---
-    pct_treino = min(min_treino_hoje / 120.0, 1.0) # Meta ajustada para 120min
+    # --- MÉTRICAS DE TOPO ---
+    pct_treino = min(min_treino_hoje / 120.0, 1.0)
     
     c_m1, c_m2, c_m3 = st.columns(3)
-    c_m1.metric("⏱️ Tempo de Treino", f"{min_treino_hoje} min", "Meta: 120 min")
-    c_m2.metric("👣 Total do Dia (N1)", f"{passos_total_n1}", f"Prof: {passos_prof} | Lazer: {passos_lazer}")
-    c_m3.metric("🔥 Gasto (Treinos)", f"{cal_treino_hoje} kcal")
+    c_m1.metric("⏱️ Tempo Treino", f"{min_treino_hoje} min", "Meta: 120 min")
+    c_m2.metric("👣 Passos Treino", f"{passos_treino_hoje}", f"Atividades registradas")
+    c_m3.metric("🏫 Passos Rotina (Prof)", f"{passos_prof_rotina}", f"Total Dia: {passos_total_n1}")
     st.progress(pct_treino)
     st.divider()
     
-    # --- FORMULÁRIO 1: FECHAMENTO INTELIGENTE ---
-    st.subheader("👟 Calculadora de Passos (Fechamento do Dia)")
-    st.info("Preencha apenas o que o relógio marcou. O sistema faz a subtração.")
+    # --- FORMULÁRIO 1: FECHAMENTO SIMPLIFICADO ---
+    st.subheader("🏁 Fechamento do Dia")
+    st.info("Insira apenas o valor final que aparece no seu relógio.")
     
-    with st.form("form_passos_dia"):
-        col_f1, col_f2 = st.columns(2)
-        
-        # Coluna 1: O Grande Total
+    with st.form("form_fechamento_simples"):
+        col_f1, col_f2 = st.columns([2, 1])
         with col_f1:
-            st.markdown("##### 1. Total Geral")
-            st.caption("Olhe o relógio antes de dormir.")
-            input_total_dia = st.number_input("Total de Passos (Iron N1)", 0, 60000, passos_total_n1 if passos_total_n1 > 0 else passos_treino_hoje)
-
-        # Coluna 2: A Calculadora do Professor
+            input_total_dia = st.number_input("Total de Passos (Iron N1)", 0, 60000, passos_total_n1, help="Olhe o relógio antes de dormir.")
         with col_f2:
-            st.markdown("##### 2. Passos como Professor")
-            st.caption("Qual era o número no relógio quando entrou e saiu da aula?")
-            c_calc1, c_calc2 = st.columns(2)
-            leitura_entrada = c_calc1.number_input("Leitura ENTRADA", 0, 60000, 0, help="Ex: 2500 passos ao chegar na escola")
-            leitura_saida = c_calc2.number_input("Leitura SAÍDA", 0, 60000, 0, help="Ex: 6000 passos ao sair da escola")
+            st.write("") # Espaçamento
+            st.write("") 
+            btn_save = st.form_submit_button("💾 Salvar Fechamento", use_container_width=True)
             
-            # Cálculo em tempo real (apenas visual se o Streamlit recarregasse, mas o Python fará no submit)
-            delta_prof = max(0, leitura_saida - leitura_entrada)
-            st.markdown(f"**= {delta_prof} passos em aula**")
-
-        st.divider()
-        if st.form_submit_button("💾 Salvar Fechamento (Calcular Automático)", use_container_width=True):
-            # Lógica: Se o usuário preencheu a calculadora, usa ela. 
-            # Se deixou zero, mas já tinha valor salvo antes, tenta manter (ou zera se for update).
-            # Aqui vamos priorizar a calculadora se houver input.
+        if btn_save:
+            # Salva o Total. O "passos_trabalho" no banco agora armazenará o "Resto" (Professor/Rotina)
+            # para manter compatibilidade com o histórico, mas o Dash recalcula dinamicamente também.
+            resto_calculado = max(0, input_total_dia - passos_treino_hoje)
             
-            passos_prof_final = delta_prof
-            
-            # Se ele não usou a calculadora (tudo 0), mas digitou manualmente num campo legado (não existe mais aqui), assumimos 0.
-            # Removemos registros de fechamento anteriores do dia para não duplicar
+            # Limpa fechamentos anteriores do dia
             executar_sql("DELETE FROM public.exercicios WHERE data = :d AND tipo = 'Fechamento Diário'", {'d': data_hoje})
             
-            # Insere o novo
+            # Insere novo
             executar_sql("""
                 INSERT INTO public.exercicios (data, tipo, duracao_min, passos, passos_total_dia, passos_trabalho, calorias, observacoes)
-                VALUES (:d, 'Fechamento Diário', 0, 0, :pt, :ptr, 0, 'Cálculo Automático')
-            """, {'d': data_hoje, 'pt': input_total_dia, 'ptr': passos_prof_final})
+                VALUES (:d, 'Fechamento Diário', 0, 0, :pt, :ptr, 0, 'Total Relógio')
+            """, {'d': data_hoje, 'pt': input_total_dia, 'ptr': resto_calculado})
             
-            st.success(f"Fechado! Professor: {passos_prof_final} | Total: {input_total_dia}")
+            st.success(f"Fechado! Total: {input_total_dia} (Sendo {resto_calculado} de Rotina)")
             st.rerun()
             
     st.markdown("---")
@@ -670,8 +670,8 @@ with tab_treino:
             with st.container():
                 ct1, ct2, ct3 = st.columns([3, 2, 0.5])
                 if row['tipo'] == 'Fechamento Diário':
-                    ct1.markdown(f"🏁 **FECHAMENTO DO DIA**")
-                    ct2.caption(f"Total: **{row['passos_total_dia']}** | Prof: **{row['passos_trabalho']}** (Calculado)")
+                    ct1.markdown(f"🏁 **TOTAL DO DIA**")
+                    ct2.caption(f"Relógio: **{row['passos_total_dia']}** | Rotina (Calc): **{row['passos_trabalho']}**")
                 else:
                     ct1.markdown(f"🏃‍♂️ **{row['tipo']}**")
                     ct2.caption(f"{row['duracao_min']} min | {row['passos']} passos | {row['calorias']} kcal")
