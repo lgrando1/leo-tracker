@@ -559,84 +559,127 @@ with tab_daily:
 with tab_treino:
     st.markdown("### 🏃‍♂️ Monitoramento de Treino (Iron N1)")
     
-    # Busca dados para exibir o totalizador de hoje (considerando MAX para passos_dia)
+    # 1. RECUPERAR DADOS DO DIA
+    # Busca todos os registros do dia
     df_treino_hoje = executar_sql("SELECT * FROM public.exercicios WHERE data = :d ORDER BY id DESC", {'d': data_hoje}, is_select=True)
-    min_hoje = int(df_treino_hoje['duracao_min'].sum()) if not df_treino_hoje.empty else 0
     
-    # Lógica de exibição: Se tiver registro de fechamento do dia, usa ele. Se não, soma parciais antigas (compatibilidade)
-    passos_total_hj = int(df_treino_hoje['passos_total_dia'].max()) if not df_treino_hoje.empty and df_treino_hoje['passos_total_dia'].max() > 0 else int(df_treino_hoje['passos'].sum())
+    # Separa o que é "Fechamento" do que é "Treino Específico"
+    df_fechamento = df_treino_hoje[df_treino_hoje['tipo'] == 'Fechamento Diário']
+    df_atividades = df_treino_hoje[df_treino_hoje['tipo'] != 'Fechamento Diário']
     
-    cal_hoje = int(df_treino_hoje['calorias'].sum()) if not df_treino_hoje.empty else 0
+    # Totais calculados
+    min_treino_hoje = int(df_atividades['duracao_min'].sum())
+    cal_treino_hoje = int(df_atividades['calorias'].sum())
+    passos_treino_hoje = int(df_atividades['passos'].sum())
     
-    pct_treino = min(min_hoje / 150.0, 1.0)
-    st.metric("⏱️ Tempo Total Hoje", f"{min_hoje} min", f"Meta Mínima: 120 min")
+    # Se já tiver fechamento, pega os dados dele, senão usa zero
+    if not df_fechamento.empty:
+        row_fech = df_fechamento.iloc[0]
+        passos_total_n1 = int(row_fech['passos_total_dia'])
+        passos_prof = int(row_fech['passos_trabalho'])
+    else:
+        passos_total_n1 = 0
+        passos_prof = 0
+
+    # Passos "Resto do Dia" (Lazer/Transporte) = Total - (Professor + Treinos)
+    passos_lazer = max(0, passos_total_n1 - passos_prof - passos_treino_hoje)
+
+    # --- METRICA DO TOPO ---
+    pct_treino = min(min_treino_hoje / 120.0, 1.0) # Meta ajustada para 120min
+    
+    c_m1, c_m2, c_m3 = st.columns(3)
+    c_m1.metric("⏱️ Tempo de Treino", f"{min_treino_hoje} min", "Meta: 120 min")
+    c_m2.metric("👣 Total do Dia (N1)", f"{passos_total_n1}", f"Prof: {passos_prof} | Lazer: {passos_lazer}")
+    c_m3.metric("🔥 Gasto (Treinos)", f"{cal_treino_hoje} kcal")
     st.progress(pct_treino)
-    
-    col_t1, col_t2 = st.columns(2)
-    col_t1.metric("👣 Passos (Iron N1)", f"{passos_total_hj}")
-    col_t2.metric("🔥 Gasto Estimado", f"{cal_hoje} kcal")
-    
     st.divider()
     
-    # --- NOVO FORMULÁRIO DE FECHAMENTO DE PASSOS ---
-    st.subheader("👟 Fechamento de Passos (Diário)")
-    st.info("Insira aqui o totalizador do relógio ao final do dia.")
+    # --- FORMULÁRIO 1: FECHAMENTO INTELIGENTE ---
+    st.subheader("👟 Calculadora de Passos (Fechamento do Dia)")
+    st.info("Preencha apenas o que o relógio marcou. O sistema faz a subtração.")
+    
     with st.form("form_passos_dia"):
-        c_fp1, c_fp2 = st.columns(2)
-        # Campo 1: Total do Relógio
-        p_total_dia = c_fp1.number_input("Total do Dia (Iron N1)", 0, 50000, passos_total_hj, help="Valor total que aparece no relógio antes de dormir.")
-        # Campo 2: Passos como Professor
-        p_trabalho = c_fp2.number_input("Passos como Professor (Aula)", 0, 30000, 0, help="Diferença anotada durante o horário de aula.")
+        col_f1, col_f2 = st.columns(2)
         
-        if st.form_submit_button("💾 Salvar Fechamento de Passos", use_container_width=True):
-            # Registra como um tipo especial de "atividade" para constar no banco
+        # Coluna 1: O Grande Total
+        with col_f1:
+            st.markdown("##### 1. Total Geral")
+            st.caption("Olhe o relógio antes de dormir.")
+            input_total_dia = st.number_input("Total de Passos (Iron N1)", 0, 60000, passos_total_n1 if passos_total_n1 > 0 else passos_treino_hoje)
+
+        # Coluna 2: A Calculadora do Professor
+        with col_f2:
+            st.markdown("##### 2. Passos como Professor")
+            st.caption("Qual era o número no relógio quando entrou e saiu da aula?")
+            c_calc1, c_calc2 = st.columns(2)
+            leitura_entrada = c_calc1.number_input("Leitura ENTRADA", 0, 60000, 0, help="Ex: 2500 passos ao chegar na escola")
+            leitura_saida = c_calc2.number_input("Leitura SAÍDA", 0, 60000, 0, help="Ex: 6000 passos ao sair da escola")
+            
+            # Cálculo em tempo real (apenas visual se o Streamlit recarregasse, mas o Python fará no submit)
+            delta_prof = max(0, leitura_saida - leitura_entrada)
+            st.markdown(f"**= {delta_prof} passos em aula**")
+
+        st.divider()
+        if st.form_submit_button("💾 Salvar Fechamento (Calcular Automático)", use_container_width=True):
+            # Lógica: Se o usuário preencheu a calculadora, usa ela. 
+            # Se deixou zero, mas já tinha valor salvo antes, tenta manter (ou zera se for update).
+            # Aqui vamos priorizar a calculadora se houver input.
+            
+            passos_prof_final = delta_prof
+            
+            # Se ele não usou a calculadora (tudo 0), mas digitou manualmente num campo legado (não existe mais aqui), assumimos 0.
+            # Removemos registros de fechamento anteriores do dia para não duplicar
+            executar_sql("DELETE FROM public.exercicios WHERE data = :d AND tipo = 'Fechamento Diário'", {'d': data_hoje})
+            
+            # Insere o novo
             executar_sql("""
                 INSERT INTO public.exercicios (data, tipo, duracao_min, passos, passos_total_dia, passos_trabalho, calorias, observacoes)
-                VALUES (:d, 'Fechamento Diário', 0, 0, :pt, :ptr, 0, 'Registro de Passos Total vs Professor')
-            """, {'d': data_hoje, 'pt': p_total_dia, 'ptr': p_trabalho})
-            st.success("Passos registrados!")
+                VALUES (:d, 'Fechamento Diário', 0, 0, :pt, :ptr, 0, 'Cálculo Automático')
+            """, {'d': data_hoje, 'pt': input_total_dia, 'ptr': passos_prof_final})
+            
+            st.success(f"Fechado! Professor: {passos_prof_final} | Total: {input_total_dia}")
             st.rerun()
             
     st.markdown("---")
 
-    st.subheader("➕ Novo Treino Específico (Caminhada/Musculação)")
+    # --- FORMULÁRIO 2: TREINOS ESPECÍFICOS ---
+    st.subheader("➕ Adicionar Treino / Caminhada")
     with st.form("form_treino"):
         c_tr1, c_tr2 = st.columns(2)
         tipo = c_tr1.selectbox("Atividade", ["Caminhada Indoor", "Caminhada Rua (Transporte)", "Musculação", "Bicicleta Ergométrica", "Outro"])
         duracao = c_tr2.number_input("Duração (min)", 0, 300, 30)
         c_tr3, c_tr4, c_tr5 = st.columns(3)
-        # Mantendo 'passos' para compatibilidade, mas o foco agora é o fechamento diário
-        passos = c_tr3.number_input("Passos (Desta atividade)", 0, 50000, 0)
+        passos = c_tr3.number_input("Passos (Desta atividade)", 0, 20000, 0)
         dist_est = c_tr4.number_input("Distância (km)", 0.0, 50.0, 0.0)
-        cal = c_tr5.number_input("Calorias (Relógio)", 0, 5000, 0)
+        cal = c_tr5.number_input("Calorias (Relógio)", 0, 2000, 0)
         bpm = st.number_input("BPM Médio (Opcional)", 0, 200, 0)
-        obs = st.text_input("Observações (Sensação, dores?)")
+        obs = st.text_input("Observações")
         
-        if st.form_submit_button("💾 Salvar Treino", use_container_width=True):
+        if st.form_submit_button("💾 Registrar Atividade", use_container_width=True):
             executar_sql("""
                 INSERT INTO public.exercicios (data, tipo, duracao_min, passos, distancia_km, calorias, bpm_medio, observacoes)
                 VALUES (:d, :t, :dm, :p, :dk, :c, :bpm, :o)
             """, {'d': data_hoje, 't': tipo, 'dm': duracao, 'p': passos, 'dk': dist_est, 'c': cal, 'bpm': bpm, 'o': obs})
-            st.success("Treino registrado!")
+            st.success("Atividade registrada!")
             st.rerun()
 
+    # --- LISTAGEM DO DIA ---
     if not df_treino_hoje.empty:
-        st.write("#### Registros de Hoje")
+        st.write("#### 📝 Registros de Hoje")
         for i, row in df_treino_hoje.iterrows():
             with st.container():
-                ct1, ct2, ct3 = st.columns([3, 2, 1])
-                ct1.markdown(f"**{row['tipo']}**")
-                # Exibe detalhes dependendo do tipo de registro
+                ct1, ct2, ct3 = st.columns([3, 2, 0.5])
                 if row['tipo'] == 'Fechamento Diário':
-                     ct2.caption(f"🏁 Total N1: {row['passos_total_dia']} | 👨‍🏫 Prof: {row['passos_trabalho']}")
+                    ct1.markdown(f"🏁 **FECHAMENTO DO DIA**")
+                    ct2.caption(f"Total: **{row['passos_total_dia']}** | Prof: **{row['passos_trabalho']}** (Calculado)")
                 else:
-                     ct2.caption(f"⏱️ {row['duracao_min']} min | 🔥 {row['calorias']} kcal | 👣 {row['passos']}")
+                    ct1.markdown(f"🏃‍♂️ **{row['tipo']}**")
+                    ct2.caption(f"{row['duracao_min']} min | {row['passos']} passos | {row['calorias']} kcal")
                 
                 if ct3.button("🗑️", key=f"del_tr_{row['id']}"):
                     executar_sql("DELETE FROM public.exercicios WHERE id=:id", {'id': row['id']})
                     st.rerun()
                 st.markdown("---")
-
 # --- ABA HISTÓRICO ---
 with tab_hist:
     st.header("Histórico Completo")
