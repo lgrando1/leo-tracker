@@ -77,7 +77,6 @@ def executar_sql(sql, params=None, is_select=False):
 def inicializar_banco():
     # Tabela consumo
     executar_sql("CREATE TABLE IF NOT EXISTS public.consumo (id SERIAL PRIMARY KEY, data DATE, alimento TEXT, quantidade REAL, kcal REAL, proteina REAL, carbo REAL, gordura REAL, gluten TEXT DEFAULT 'Não informado');")
-    # Garantir que data_hora exista para o calculo de tempo
     try: executar_sql("ALTER TABLE public.consumo ADD COLUMN IF NOT EXISTS data_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
     except: pass
     
@@ -87,6 +86,12 @@ def inicializar_banco():
             id SERIAL PRIMARY KEY, data DATE, tipo TEXT, duracao_min INT, passos INT, distancia_km REAL, calorias REAL, bpm_medio INT, observacoes TEXT
         );
     """)
+    # NOVAS COLUNAS PARA O MONITORAMENTO DE PASSOS (PROFESSOR VS TOTAL)
+    try: 
+        executar_sql("ALTER TABLE public.exercicios ADD COLUMN IF NOT EXISTS passos_trabalho INT DEFAULT 0;")
+        executar_sql("ALTER TABLE public.exercicios ADD COLUMN IF NOT EXISTS passos_total_dia INT DEFAULT 0;")
+    except: pass
+
     executar_sql("""
         CREATE TABLE IF NOT EXISTS public.perfil (
             id SERIAL PRIMARY KEY, genero TEXT, idade INT, altura_cm INT, atividade TEXT, objetivo TEXT, ritmo_semanal REAL, 
@@ -188,16 +193,23 @@ def gerar_excel_nutri(dt_ini, dt_fim):
     df_peso = executar_sql("SELECT data, peso_kg FROM public.peso WHERE data >= :d1 AND data <= :d2 ORDER BY data ASC", params, is_select=True)
     df_medidas = executar_sql("SELECT log_date as data, weight_kg as peso, waist_cm as cintura, body_fat_est as bf_estimado, notes FROM public.body_measurements WHERE log_date >= :d1 AND log_date <= :d2 ORDER BY log_date DESC", params, is_select=True)
     df_pressao = executar_sql("SELECT measurement_time as data_hora, systolic, diastolic, pulse FROM public.blood_pressure WHERE measurement_time >= :d1 AND measurement_time <= :d2 ORDER BY measurement_time DESC", params, is_select=True)
-    df_treinos_raw = executar_sql("SELECT data, tipo, duracao_min, passos, distancia_km, calorias, bpm_medio FROM public.exercicios WHERE data >= :d1 AND data <= :d2 ORDER BY data DESC", params, is_select=True)
+    df_treinos_raw = executar_sql("SELECT data, tipo, duracao_min, passos, passos_trabalho, passos_total_dia, distancia_km, calorias, bpm_medio FROM public.exercicios WHERE data >= :d1 AND data <= :d2 ORDER BY data DESC", params, is_select=True)
 
     if not df_detalhado.empty:
         df_macros = df_detalhado.groupby('data')[['kcal', 'proteina', 'carbo', 'gordura']].sum().reset_index()
     else: df_macros = pd.DataFrame(columns=['data', 'kcal', 'proteina', 'carbo', 'gordura'])
 
     if not df_treinos_raw.empty:
-        df_treinos_agg = df_treinos_raw.groupby('data')[['duracao_min', 'passos', 'calorias']].sum().reset_index()
-        df_treinos_agg.columns = ['data', 'treino_min', 'treino_passos', 'treino_kcal']
-    else: df_treinos_agg = pd.DataFrame(columns=['data', 'treino_min', 'treino_passos', 'treino_kcal'])
+        # Aggregação ajustada para incluir os passos totais e de trabalho
+        # Usamos MAX para os totais do dia, pois é um fechamento único, e SUM para duração
+        df_treinos_agg = df_treinos_raw.groupby('data').agg({
+            'duracao_min': 'sum',
+            'passos_total_dia': 'max',
+            'passos_trabalho': 'max',
+            'calorias': 'sum'
+        }).reset_index()
+        df_treinos_agg.columns = ['data', 'treino_min', 'passos_dia', 'passos_prof', 'treino_kcal']
+    else: df_treinos_agg = pd.DataFrame(columns=['data', 'treino_min', 'passos_dia', 'passos_prof', 'treino_kcal'])
 
     if not df_macros.empty: df_macros['data'] = pd.to_datetime(df_macros['data']).dt.normalize()
     if not df_peso.empty:
@@ -209,11 +221,11 @@ def gerar_excel_nutri(dt_ini, dt_fim):
         df_resumo = pd.merge(df_macros, df_peso, on='data', how='outer')
         df_resumo = pd.merge(df_resumo, df_treinos_agg, on='data', how='left')
         df_resumo = df_resumo.sort_values('data', ascending=False)
-        cols_order = ['data', 'peso_kg', 'kcal', 'proteina', 'carbo', 'gordura', 'treino_min', 'treino_passos', 'treino_kcal']
+        cols_order = ['data', 'peso_kg', 'kcal', 'proteina', 'carbo', 'gordura', 'treino_min', 'passos_dia', 'passos_prof', 'treino_kcal']
         for c in cols_order: 
             if c not in df_resumo.columns: df_resumo[c] = 0
         df_resumo = df_resumo[cols_order]
-        df_resumo.columns = ['Data', 'Peso (kg)', 'Comida (kcal)', 'Prot (g)', 'Carb (g)', 'Gord (g)', 'Treino (min)', 'Passos', 'Gasto Treino (kcal)']
+        df_resumo.columns = ['Data', 'Peso (kg)', 'Comida (kcal)', 'Prot (g)', 'Carb (g)', 'Gord (g)', 'Treino (min)', 'Passos Totais', 'Passos Prof', 'Gasto Treino (kcal)']
         df_resumo = df_resumo.dropna(subset=['Data'])
         df_resumo['Data'] = df_resumo['Data'].dt.strftime('%d/%m/%Y')
     else: df_resumo = pd.DataFrame(columns=['Data', 'Peso', 'Kcal', '...'])
@@ -265,7 +277,8 @@ with tab_dash:
     DATA_INICIO_D = pd.to_datetime("2025-12-30").date()
     df_hist_d = executar_sql("SELECT data, SUM(kcal) as tkcal, SUM(proteina) as tprot, SUM(carbo) as tcarb, SUM(gordura) as tgord, SUM(quantidade) as tqtd FROM public.consumo WHERE data >= :d GROUP BY data ORDER BY data ASC", {"d": DATA_INICIO_D}, is_select=True)
     df_peso_d = executar_sql("SELECT * FROM public.peso ORDER BY data ASC", is_select=True)
-    df_treino_d = executar_sql("SELECT data, SUM(duracao_min) as t_min, SUM(passos) as t_passos, SUM(calorias) as t_cal_out FROM public.exercicios WHERE data >= :d GROUP BY data ORDER BY data ASC", {"d": DATA_INICIO_D}, is_select=True)
+    # ATUALIZADO: Buscar colunas de passos especificas
+    df_treino_d = executar_sql("SELECT data, SUM(duracao_min) as t_min, MAX(passos_total_dia) as t_passos_total, MAX(passos_trabalho) as t_passos_prof, SUM(calorias) as t_cal_out FROM public.exercicios WHERE data >= :d GROUP BY data ORDER BY data ASC", {"d": DATA_INICIO_D}, is_select=True)
     df_bp_d = executar_sql("SELECT * FROM public.blood_pressure ORDER BY measurement_time ASC", is_select=True)
     df_medidas_d = executar_sql("SELECT * FROM public.body_measurements ORDER BY log_date ASC", is_select=True)
 
@@ -279,10 +292,14 @@ with tab_dash:
 
         if not df_treino_d.empty:
             df_treino_d['data_dt'] = pd.to_datetime(df_treino_d['data']).dt.date
-            df_merged = pd.merge(df_merged, df_treino_d[['data_dt', 't_min', 't_passos', 't_cal_out']], on='data_dt', how='left')
-            df_merged[['t_min', 't_passos', 't_cal_out']] = df_merged[['t_min', 't_passos', 't_cal_out']].fillna(0)
+            df_merged = pd.merge(df_merged, df_treino_d[['data_dt', 't_min', 't_passos_total', 't_passos_prof', 't_cal_out']], on='data_dt', how='left')
+            df_merged[['t_min', 't_passos_total', 't_passos_prof', 't_cal_out']] = df_merged[['t_min', 't_passos_total', 't_passos_prof', 't_cal_out']].fillna(0)
+            # Calcular Passos Lazer (Total - Professor)
+            df_merged['t_passos_lazer'] = df_merged['t_passos_total'] - df_merged['t_passos_prof']
+            # Garantir que não fique negativo caso input esteja errado
+            df_merged['t_passos_lazer'] = df_merged['t_passos_lazer'].clip(lower=0)
         else:
-            df_merged['t_min'] = 0; df_merged['t_passos'] = 0; df_merged['t_cal_out'] = 0
+            df_merged['t_min'] = 0; df_merged['t_passos_total'] = 0; df_merged['t_passos_prof'] = 0; df_merged['t_passos_lazer'] = 0; df_merged['t_cal_out'] = 0
 
         idade, altura = METAS['idade'], METAS['altura']
         fator_uso = METAS['fator'] 
@@ -303,8 +320,8 @@ with tab_dash:
     cd1.metric("💧 Meta Água", f"{META_AGUA}L")
     cd2.metric("❤️ Pressão", f"{last_sys}x{last_dia}", f"Pulso: {last_pulse}")
     
-    if not df_merged.empty and 't_passos' in df_merged.columns:
-        avg_passos = df_merged['t_passos'].tail(7).mean()
+    if not df_merged.empty and 't_passos_total' in df_merged.columns:
+        avg_passos = df_merged['t_passos_total'].tail(7).mean()
         avg_min = df_merged['t_min'].tail(7).mean()
         cd3.metric("🏃‍♂️ Média 7d", f"{int(avg_passos)} passos", f"{int(avg_min)} min/dia")
     else: cd3.metric("🏃‍♂️ Atividade", "--", "--")
@@ -367,12 +384,22 @@ with tab_dash:
                 st.plotly_chart(fig_proj, use_container_width=True)
 
     with c_p2:
-        st.subheader("📊 Volume Treino")
-        if not df_merged.empty and 't_passos' in df_merged.columns:
+        st.subheader("📊 Volume Treino (Empilhado)")
+        if not df_merged.empty and 't_passos_total' in df_merged.columns:
+            # Gráfico de Barras Empilhadas para Passos
             fig_vol = make_subplots(specs=[[{"secondary_y": True}]])
-            fig_vol.add_trace(go.Bar(x=df_merged['data'], y=df_merged['t_min'], name='Min', marker_color='#f1c40f'), secondary_y=False)
-            fig_vol.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['t_passos'], name='Passos', mode='lines+markers', line=dict(color='#8e44ad')), secondary_y=True)
-            fig_vol.update_layout(height=300, margin=dict(l=10,r=10,t=20,b=10), showlegend=False)
+            
+            # Barras Empilhadas (Passos) - Eixo Primário
+            fig_vol.add_trace(go.Bar(x=df_merged['data'], y=df_merged['t_passos_prof'], name='Passos Professor', marker_color='#e67e22'), secondary_y=False)
+            fig_vol.add_trace(go.Bar(x=df_merged['data'], y=df_merged['t_passos_lazer'], name='Lazer/Transp', marker_color='#8e44ad'), secondary_y=False)
+            
+            # Linha para Minutos - Eixo Secundário
+            fig_vol.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['t_min'], name='Minutos Totais', mode='lines', line=dict(color='#f1c40f', width=2, dash='dot')), secondary_y=True)
+            
+            fig_vol.update_layout(barmode='stack', height=300, margin=dict(l=10,r=10,t=20,b=10), showlegend=True, legend=dict(orientation="h", y=1.1, font=dict(size=10)))
+            fig_vol.update_yaxes(title_text="Passos", secondary_y=False)
+            fig_vol.update_yaxes(title_text="Min", secondary_y=True, showgrid=False)
+            
             st.plotly_chart(fig_vol, use_container_width=True)
 
     st.divider()
@@ -398,7 +425,6 @@ with tab_dash:
         c_t3.metric("Índice Termodinâmico", f"{fator_termo:.2f}x", st_termo, delta_color=cor_termo)
 
     # ============================================================================
-   # ============================================================================
     # 8. HISTOGRAMA DE JEJUM (DISTRIBUIÇÃO DE FREQUÊNCIA)
     # ============================================================================
     st.divider()
@@ -533,9 +559,13 @@ with tab_daily:
 with tab_treino:
     st.markdown("### 🏃‍♂️ Monitoramento de Treino (Iron N1)")
     
+    # Busca dados para exibir o totalizador de hoje (considerando MAX para passos_dia)
     df_treino_hoje = executar_sql("SELECT * FROM public.exercicios WHERE data = :d ORDER BY id DESC", {'d': data_hoje}, is_select=True)
     min_hoje = int(df_treino_hoje['duracao_min'].sum()) if not df_treino_hoje.empty else 0
-    passos_hoje = int(df_treino_hoje['passos'].sum()) if not df_treino_hoje.empty else 0
+    
+    # Lógica de exibição: Se tiver registro de fechamento do dia, usa ele. Se não, soma parciais antigas (compatibilidade)
+    passos_total_hj = int(df_treino_hoje['passos_total_dia'].max()) if not df_treino_hoje.empty and df_treino_hoje['passos_total_dia'].max() > 0 else int(df_treino_hoje['passos'].sum())
+    
     cal_hoje = int(df_treino_hoje['calorias'].sum()) if not df_treino_hoje.empty else 0
     
     pct_treino = min(min_hoje / 150.0, 1.0)
@@ -543,17 +573,40 @@ with tab_treino:
     st.progress(pct_treino)
     
     col_t1, col_t2 = st.columns(2)
-    col_t1.metric("👣 Passos (Iron N1)", f"{passos_hoje}")
+    col_t1.metric("👣 Passos (Iron N1)", f"{passos_total_hj}")
     col_t2.metric("🔥 Gasto Estimado", f"{cal_hoje} kcal")
     
     st.divider()
-    st.subheader("➕ Novo Registro")
+    
+    # --- NOVO FORMULÁRIO DE FECHAMENTO DE PASSOS ---
+    st.subheader("👟 Fechamento de Passos (Diário)")
+    st.info("Insira aqui o totalizador do relógio ao final do dia.")
+    with st.form("form_passos_dia"):
+        c_fp1, c_fp2 = st.columns(2)
+        # Campo 1: Total do Relógio
+        p_total_dia = c_fp1.number_input("Total do Dia (Iron N1)", 0, 50000, passos_total_hj, help="Valor total que aparece no relógio antes de dormir.")
+        # Campo 2: Passos como Professor
+        p_trabalho = c_fp2.number_input("Passos como Professor (Aula)", 0, 30000, 0, help="Diferença anotada durante o horário de aula.")
+        
+        if st.form_submit_button("💾 Salvar Fechamento de Passos", use_container_width=True):
+            # Registra como um tipo especial de "atividade" para constar no banco
+            executar_sql("""
+                INSERT INTO public.exercicios (data, tipo, duracao_min, passos, passos_total_dia, passos_trabalho, calorias, observacoes)
+                VALUES (:d, 'Fechamento Diário', 0, 0, :pt, :ptr, 0, 'Registro de Passos Total vs Professor')
+            """, {'d': data_hoje, 'pt': p_total_dia, 'ptr': p_trabalho})
+            st.success("Passos registrados!")
+            st.rerun()
+            
+    st.markdown("---")
+
+    st.subheader("➕ Novo Treino Específico (Caminhada/Musculação)")
     with st.form("form_treino"):
         c_tr1, c_tr2 = st.columns(2)
-        tipo = c_tr1.selectbox("Atividade", ["Caminhada Indoor", "Caminhada Rua", "Musculação", "Bicicleta Ergométrica", "Outro"])
+        tipo = c_tr1.selectbox("Atividade", ["Caminhada Indoor", "Caminhada Rua (Transporte)", "Musculação", "Bicicleta Ergométrica", "Outro"])
         duracao = c_tr2.number_input("Duração (min)", 0, 300, 30)
         c_tr3, c_tr4, c_tr5 = st.columns(3)
-        passos = c_tr3.number_input("Passos (Relógio)", 0, 50000, 0)
+        # Mantendo 'passos' para compatibilidade, mas o foco agora é o fechamento diário
+        passos = c_tr3.number_input("Passos (Desta atividade)", 0, 50000, 0)
         dist_est = c_tr4.number_input("Distância (km)", 0.0, 50.0, 0.0)
         cal = c_tr5.number_input("Calorias (Relógio)", 0, 5000, 0)
         bpm = st.number_input("BPM Médio (Opcional)", 0, 200, 0)
@@ -572,8 +625,13 @@ with tab_treino:
         for i, row in df_treino_hoje.iterrows():
             with st.container():
                 ct1, ct2, ct3 = st.columns([3, 2, 1])
-                ct1.markdown(f"**{row['tipo']}** ({row['duracao_min']} min)")
-                ct2.caption(f"👣 {row['passos']} passos | {row['calorias']} kcal | BPM: {row['bpm_medio']}")
+                ct1.markdown(f"**{row['tipo']}**")
+                # Exibe detalhes dependendo do tipo de registro
+                if row['tipo'] == 'Fechamento Diário':
+                     ct2.caption(f"🏁 Total N1: {row['passos_total_dia']} | 👨‍🏫 Prof: {row['passos_trabalho']}")
+                else:
+                     ct2.caption(f"⏱️ {row['duracao_min']} min | 🔥 {row['calorias']} kcal | 👣 {row['passos']}")
+                
                 if ct3.button("🗑️", key=f"del_tr_{row['id']}"):
                     executar_sql("DELETE FROM public.exercicios WHERE id=:id", {'id': row['id']})
                     st.rerun()
@@ -634,4 +692,4 @@ with tab_admin:
             executar_sql("UPDATE public.perfil SET meta_kcal=:mk, meta_proteina=:mp, meta_carbo=:mc, meta_gordura=:mg, meta_peso_alvo=:mpa, ritmo_semanal=:rit, fator_atividade=:fat WHERE id=1", {'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 'mpa': n_peso_alvo, 'rit': n_ritmo, 'fat': n_fator})
             st.cache_resource.clear(); st.rerun()
 
-st.caption("Leo Tracker Pro v8.5 | DashPro Completo (Termodinâmica + Iron N1 + Fator Ativ) 🚀")
+st.caption("Leo Tracker Pro v8.6 | Monitoramento de Passos Professor/Total Integrado 🚀")
