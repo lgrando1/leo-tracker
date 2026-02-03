@@ -79,7 +79,7 @@ def inicializar_banco():
     executar_sql("CREATE TABLE IF NOT EXISTS public.consumo (id SERIAL PRIMARY KEY, data DATE, alimento TEXT, quantidade REAL, kcal REAL, proteina REAL, carbo REAL, gordura REAL, gluten TEXT DEFAULT 'Não informado');")
     try: executar_sql("ALTER TABLE public.consumo ADD COLUMN IF NOT EXISTS data_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
     except: pass
-    
+
     executar_sql("CREATE TABLE IF NOT EXISTS public.peso (id SERIAL PRIMARY KEY, data DATE, peso_kg REAL);")
     executar_sql("""
         CREATE TABLE IF NOT EXISTS public.exercicios (
@@ -100,7 +100,7 @@ def inicializar_banco():
     """)
     try: executar_sql("ALTER TABLE public.perfil ADD COLUMN IF NOT EXISTS fator_atividade REAL DEFAULT 1.2;")
     except: pass
-    
+
     for c in ['ultimo_pescoco', 'ultima_cintura', 'ultimo_quadril']:
         try: executar_sql(f"ALTER TABLE public.perfil ADD COLUMN IF NOT EXISTS {c} REAL;")
         except: pass
@@ -200,8 +200,6 @@ def gerar_excel_nutri(dt_ini, dt_fim):
     else: df_macros = pd.DataFrame(columns=['data', 'kcal', 'proteina', 'carbo', 'gordura'])
 
     if not df_treinos_raw.empty:
-        # Aggregação ajustada para incluir os passos totais e de trabalho
-        # Usamos MAX para os totais do dia, pois é um fechamento único, e SUM para duração
         df_treinos_agg = df_treinos_raw.groupby('data').agg({
             'duracao_min': 'sum',
             'passos_total_dia': 'max',
@@ -247,6 +245,26 @@ df_hoje = executar_sql("SELECT * FROM public.consumo WHERE data = :d", {'d': dat
 
 # SIDEBAR
 st.sidebar.header("🎯 Status")
+
+# --- NOVO: TIMER DE JEJUM NA SIDEBAR ---
+df_last_meal = executar_sql("SELECT data_hora FROM public.consumo ORDER BY data_hora DESC LIMIT 1", is_select=True)
+tempo_jejum = "0h 0m"
+if not df_last_meal.empty:
+    last_dt = df_last_meal.iloc[0]['data_hora']
+    if pd.notnull(last_dt):
+        # Cálcula a diferença (ajustando fuso se necessário, mas simplificando para 'naive' funciona bem aqui)
+        now_naive = get_now_br().replace(tzinfo=None)
+        last_naive = last_dt.replace(tzinfo=None) if last_dt.tzinfo else last_dt
+        diff_secs = (now_naive - last_naive).total_seconds()
+        
+        if diff_secs > 0:
+            h = int(diff_secs // 3600)
+            m = int((diff_secs % 3600) // 60)
+            tempo_jejum = f"{h}h {m}m"
+
+st.sidebar.metric("⏱️ Jejum Atual", tempo_jejum)
+# ---------------------------------------
+
 ultimo_peso_df = executar_sql("SELECT peso_kg FROM public.peso ORDER BY data DESC LIMIT 1", is_select=True)
 peso_atual_sidebar = float(ultimo_peso_df.iloc[0]['peso_kg']) if not ultimo_peso_df.empty else 140.0
 st.sidebar.metric("Peso Atual", f"{peso_atual_sidebar} kg", f"Meta: {METAS['peso_alvo']} kg")
@@ -271,248 +289,113 @@ tab_dash, tab_daily, tab_treino, tab_hist, tab_medidas, tab_rel, tab_admin = st.
 
 # --- ABA DASH PRO ---
 with tab_dash:
-    st.markdown("### 🧬 Leo's Analytics Hub")
+    st.markdown("### 🧬 Leo's Analytics Hub (Visão Gerencial)")
 
     # 1. FETCH DADOS
     DATA_INICIO_D = pd.to_datetime("2025-12-30").date()
-    df_hist_d = executar_sql("SELECT data, SUM(kcal) as tkcal, SUM(proteina) as tprot, SUM(carbo) as tcarb, SUM(gordura) as tgord, SUM(quantidade) as tqtd FROM public.consumo WHERE data >= :d GROUP BY data ORDER BY data ASC", {"d": DATA_INICIO_D}, is_select=True)
+    df_hist_d = executar_sql("SELECT data, SUM(kcal) as tkcal FROM public.consumo WHERE data >= :d GROUP BY data ORDER BY data ASC", {"d": DATA_INICIO_D}, is_select=True)
     df_peso_d = executar_sql("SELECT * FROM public.peso ORDER BY data ASC", is_select=True)
-    
-    # ATUALIZADO: Busca Total do Dia e Soma dos Passos de Treino (excluindo fechamento)
-    # A lógica aqui: Passos de Treino são a soma das atividades. Passos Totais é o MAX do dia.
     df_treino_d = executar_sql("""
         SELECT 
             data, 
             SUM(duracao_min) as t_min, 
             MAX(passos_total_dia) as t_passos_total, 
-            SUM(passos) as t_passos_treino, -- Soma apenas passos de atividades registradas
-            SUM(calorias) as t_cal_out 
+            SUM(passos) as t_passos_treino
         FROM public.exercicios 
         WHERE data >= :d 
         GROUP BY data 
         ORDER BY data ASC
     """, {"d": DATA_INICIO_D}, is_select=True)
-    
-    df_bp_d = executar_sql("SELECT * FROM public.blood_pressure ORDER BY measurement_time ASC", is_select=True)
-    df_medidas_d = executar_sql("SELECT * FROM public.body_measurements ORDER BY log_date ASC", is_select=True)
+    df_bp_d = executar_sql("SELECT measurement_time, systolic, diastolic FROM public.blood_pressure WHERE measurement_time >= :d ORDER BY measurement_time ASC", {"d": DATA_INICIO_D}, is_select=True)
 
-    if not df_hist_d.empty and not df_peso_d.empty:
-        df_hist_d['data_dt'] = pd.to_datetime(df_hist_d['data']).dt.date
+    # Preparar Dados
+    if not df_peso_d.empty:
         df_peso_d['data_dt'] = pd.to_datetime(df_peso_d['data']).dt.date
-        
-        df_merged = pd.merge(df_hist_d, df_peso_d[['data_dt', 'peso_kg']], on='data_dt', how='left').ffill()
-        if df_merged['peso_kg'].isnull().any():
-             df_merged['peso_kg'] = df_merged['peso_kg'].fillna(method='bfill').fillna(peso_atual_sidebar)
-
-        if not df_treino_d.empty:
-            df_treino_d['data_dt'] = pd.to_datetime(df_treino_d['data']).dt.date
-            df_merged = pd.merge(df_merged, df_treino_d[['data_dt', 't_min', 't_passos_total', 't_passos_treino', 't_cal_out']], on='data_dt', how='left')
-            df_merged[['t_min', 't_passos_total', 't_passos_treino', 't_cal_out']] = df_merged[['t_min', 't_passos_total', 't_passos_treino', 't_cal_out']].fillna(0)
-            
-            # CÁLCULO REVERSO:
-            # Se tenho Total e tenho Treino, o resto é Rotina (Professor)
-            # Se o usuário não botou total (0), assume que Rotina é 0
-            df_merged['t_passos_rotina'] = df_merged['t_passos_total'] - df_merged['t_passos_treino']
-            df_merged['t_passos_rotina'] = df_merged['t_passos_rotina'].clip(lower=0) # Evitar negativo
-        else:
-            df_merged['t_min'] = 0; df_merged['t_passos_total'] = 0; df_merged['t_passos_treino'] = 0; df_merged['t_passos_rotina'] = 0; df_merged['t_cal_out'] = 0
-
-        idade, altura = METAS['idade'], METAS['altura']
-        fator_uso = METAS['fator'] 
-        
-        df_merged['get_basal_neat'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * fator_uso
-        df_merged['get_total'] = df_merged['get_basal_neat'] + df_merged['t_cal_out']
-        df_merged['deficit_real'] = df_merged['get_total'] - df_merged['tkcal']
-    else: df_merged = pd.DataFrame()
-
-    META_AGUA = round((peso_atual_sidebar * 35) / 1000, 1)
-    last_sys, last_dia, last_pulse = "--", "--", "--"
-    if not df_bp_d.empty:
-        last_bp = df_bp_d.iloc[-1]
-        last_sys, last_dia = last_bp['systolic'], last_bp['diastolic']
-        last_pulse = last_bp.get('pulse', "--")
-
-    cd1, cd2, cd3 = st.columns(3)
-    cd1.metric("💧 Meta Água", f"{META_AGUA}L")
-    cd2.metric("❤️ Pressão", f"{last_sys}x{last_dia}", f"Pulso: {last_pulse}")
+        # Média Móvel de 7 dias para o peso
+        df_peso_d['media_movel_7d'] = df_peso_d['peso_kg'].rolling(window=7, min_periods=1).mean()
     
-    if not df_merged.empty and 't_passos_total' in df_merged.columns:
-        avg_passos = df_merged['t_passos_total'].tail(7).mean()
-        avg_min = df_merged['t_min'].tail(7).mean()
-        cd3.metric("🏃‍♂️ Média 7d", f"{int(avg_passos)} passos", f"{int(avg_min)} min/dia")
-    else: cd3.metric("🏃‍♂️ Atividade", "--", "--")
+    if not df_hist_d.empty:
+        df_hist_d['data_dt'] = pd.to_datetime(df_hist_d['data']).dt.date
+        
+    if not df_treino_d.empty:
+        df_treino_d['data_dt'] = pd.to_datetime(df_treino_d['data']).dt.date
+        df_treino_d['t_passos_rotina'] = df_treino_d['t_passos_total'] - df_treino_d['t_passos_treino']
+        df_treino_d['t_passos_rotina'] = df_treino_d['t_passos_rotina'].clip(lower=0)
+
+    # --------------------------------------------------------
+    # GRÁFICO 1: TENDÊNCIA DE PESO (A "Estrela do Norte")
+    # --------------------------------------------------------
+    st.subheader("📉 Tendência de Peso (Média 7 Dias)")
+    if not df_peso_d.empty:
+        fig_peso = go.Figure()
+        # Pontos Reais (Fundo)
+        fig_peso.add_trace(go.Scatter(x=df_peso_d['data'], y=df_peso_d['peso_kg'], mode='markers', name='Diário', marker=dict(color='#bdc3c7', size=6, opacity=0.5)))
+        # Média Móvel (Destaque)
+        fig_peso.add_trace(go.Scatter(x=df_peso_d['data'], y=df_peso_d['media_movel_7d'], mode='lines', name='Média 7d', line=dict(color='#2c3e50', width=4)))
+        # Meta
+        fig_peso.add_hline(y=METAS['peso_alvo'], line_dash="dash", line_color="#27ae60", annotation_text="Meta Alvo")
+        
+        fig_peso.update_layout(height=350, margin=dict(l=10,r=10,t=30,b=10), showlegend=True, legend=dict(orientation="h", y=1.1))
+        st.plotly_chart(fig_peso, use_container_width=True)
+    else: st.info("Sem dados de peso suficientes.")
+    
     st.divider()
 
-    st.subheader("🔥 Balanço Energético (Real vs Estimado)")
-    if not df_merged.empty:
-        fig_bal = go.Figure()
-        fig_bal.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['get_total'], fill='tozeroy', mode='none', name=f'Gasto (Fator {fator_uso}x + Treino)', fillcolor='rgba(46, 204, 113, 0.2)'))
-        fig_bal.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['tkcal'], mode='lines+markers', name='Consumo', line=dict(color='#e74c3c', width=3)))
-        fig_bal.add_trace(go.Bar(x=df_merged['data'], y=df_merged['deficit_real'], name='Déficit Real', marker_color='#3498db', opacity=0.6))
-        fig_bal.update_layout(height=350, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1))
-        st.plotly_chart(fig_bal, use_container_width=True)
+    col_g2, col_g3 = st.columns(2)
 
-    st.subheader("⚖️ Energia (Linha) vs. Volume Comida (Barras)")
-    if not df_merged.empty:
-        fig_ev = make_subplots(specs=[[{"secondary_y": True}]])
-        fig_ev.add_trace(go.Bar(x=df_merged['data'], y=df_merged['tqtd'], name='Volume (g)', marker_color='#AED6F1', opacity=0.6), secondary_y=True)
-        fig_ev.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['tkcal'], name='Calorias (kcal)', mode='lines+markers', line=dict(color='#C0392B', width=3)), secondary_y=False)
-        fig_ev.add_hline(y=METAS['kcal'], line_dash="dash", line_color="#27AE60", annotation_text=f"Meta ({METAS['kcal']})")
-        fig_ev.update_layout(height=350, margin=dict(l=10,r=10,t=30,b=10), legend=dict(orientation="h", y=1.1))
-        fig_ev.update_yaxes(title_text="Kcal", secondary_y=False)
-        fig_ev.update_yaxes(title_text="Gramas", secondary_y=True, showgrid=False)
-        st.plotly_chart(fig_ev, use_container_width=True)
+    # --------------------------------------------------------
+    # GRÁFICO 2: ALIMENTAÇÃO (Gerencial - Bateu a Meta?)
+    # --------------------------------------------------------
+    with col_g2:
+        st.subheader("🍽️ Consumo Calórico vs Meta")
+        if not df_hist_d.empty:
+            # Cores: Verde se abaixo da meta, Vermelho se acima
+            colors = ['#27ae60' if k <= METAS['kcal'] else '#c0392b' for k in df_hist_d['tkcal']]
+            
+            fig_nutri = go.Figure()
+            fig_nutri.add_trace(go.Bar(x=df_hist_d['data'], y=df_hist_d['tkcal'], name='Kcal', marker_color=colors))
+            fig_nutri.add_hline(y=METAS['kcal'], line_dash="dash", line_color="#2c3e50", annotation_text="Teto")
+            
+            fig_nutri.update_layout(height=300, margin=dict(l=10,r=10,t=30,b=10), showlegend=False)
+            st.plotly_chart(fig_nutri, use_container_width=True)
+        else: st.info("Sem dados de consumo.")
+
+    # --------------------------------------------------------
+    # GRÁFICO 3: EXERCÍCIOS (Rotina vs Treino)
+    # --------------------------------------------------------
+    with col_g3:
+        st.subheader("👟 Atividade Física")
+        if not df_treino_d.empty:
+            fig_treino = make_subplots(specs=[[{"secondary_y": True}]])
+            
+            # Barras Empilhadas
+            fig_treino.add_trace(go.Bar(x=df_treino_d['data'], y=df_treino_d['t_passos_rotina'], name='Rotina', marker_color='#e67e22'), secondary_y=False)
+            fig_treino.add_trace(go.Bar(x=df_treino_d['data'], y=df_treino_d['t_passos_treino'], name='Treino', marker_color='#8e44ad'), secondary_y=False)
+            
+            # Linha Meta de Tempo
+            fig_treino.add_trace(go.Scatter(x=df_treino_d['data'], y=df_treino_d['t_min'], name='Minutos', mode='lines', line=dict(color='#f1c40f', width=2)), secondary_y=True)
+            
+            fig_treino.update_layout(barmode='stack', height=300, margin=dict(l=10,r=10,t=30,b=10), legend=dict(orientation="h", y=1.1, font=dict(size=10)))
+            st.plotly_chart(fig_treino, use_container_width=True)
+        else: st.info("Sem dados de treino.")
 
     st.divider()
-    c_h1, c_h2 = st.columns(2)
-    with c_h1:
-        st.subheader("🧬 Gordura Corporal (%)")
-        if not df_medidas_d.empty:
-            fig_bf = go.Figure(go.Scatter(x=df_medidas_d['log_date'], y=df_medidas_d['body_fat_est'], mode='lines+markers', line=dict(color='#e67e22'), name='BF%'))
-            fig_bf.update_layout(height=250, margin=dict(l=10,r=10,t=20,b=10))
-            st.plotly_chart(fig_bf, use_container_width=True)
-    with c_h2:
-        st.subheader("❤️ Pressão Arterial")
-        if not df_bp_d.empty:
-            fig_bp = go.Figure()
-            fig_bp.add_trace(go.Scatter(x=df_bp_d['measurement_time'], y=df_bp_d['systolic'], name="Sys", line=dict(color='red')))
-            fig_bp.add_trace(go.Scatter(x=df_bp_d['measurement_time'], y=df_bp_d['diastolic'], name="Dia", line=dict(color='blue')))
-            fig_bp.update_layout(height=250, margin=dict(l=10,r=10,t=20,b=10))
-            st.plotly_chart(fig_bp, use_container_width=True)
 
-    st.divider()
-    c_p1, c_p2 = st.columns([2, 1])
-    with c_p1:
-        st.subheader("🎯 Projeção Peso")
-        if not df_peso_d.empty:
-            df_peso_d['data_dt'] = pd.to_datetime(df_peso_d['data']).dt.date
-            BASE_DATE = pd.to_datetime("2025-12-31").date()
-            df_base = df_peso_d[df_peso_d['data_dt'] >= BASE_DATE].sort_values('data_dt')
-            if not df_base.empty:
-                peso_inicial = float(df_base.iloc[0]['peso_kg'])
-                datas_proj = pd.date_range(start=BASE_DATE, end=data_hoje)
-                ritmo_diario = METAS['ritmo'] / 7
-                pesos_estimados = [peso_inicial - (i * ritmo_diario) for i in range(len(datas_proj))]
-                fig_proj = go.Figure()
-                fig_proj.add_trace(go.Scatter(x=datas_proj, y=pesos_estimados, mode='lines', name='Meta', line=dict(color='#29B5E8', dash='dash')))
-                fig_proj.add_trace(go.Scatter(x=df_base['data_dt'], y=df_base['peso_kg'], mode='lines+markers', name='Real', line=dict(color='#FF4B4B', width=3)))
-                fig_proj.update_layout(height=300, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1))
-                st.plotly_chart(fig_proj, use_container_width=True)
-
-    with c_p2:
-        st.subheader("📊 Volume Treino (Empilhado)")
-        if not df_merged.empty and 't_passos_total' in df_merged.columns:
-            # Gráfico de Barras Empilhadas
-            fig_vol = make_subplots(specs=[[{"secondary_y": True}]])
-            
-            # Base: Rotina/Professor (Laranja)
-            fig_vol.add_trace(go.Bar(x=df_merged['data'], y=df_merged['t_passos_rotina'], name='Rotina/Prof', marker_color='#e67e22'), secondary_y=False)
-            # Topo: Treinos Específicos (Roxo)
-            fig_vol.add_trace(go.Bar(x=df_merged['data'], y=df_merged['t_passos_treino'], name='Treinos', marker_color='#8e44ad'), secondary_y=False)
-            
-            # Linha: Minutos
-            fig_vol.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['t_min'], name='Minutos', mode='lines', line=dict(color='#f1c40f', width=2, dash='dot')), secondary_y=True)
-            
-            fig_vol.update_layout(barmode='stack', height=300, margin=dict(l=10,r=10,t=20,b=10), showlegend=True, legend=dict(orientation="h", y=1.1, font=dict(size=10)))
-            fig_vol.update_yaxes(title_text="Passos", secondary_y=False)
-            fig_vol.update_yaxes(title_text="Min", secondary_y=True, showgrid=False)
-            
-            st.plotly_chart(fig_vol, use_container_width=True)
-
-    st.divider()
-    st.subheader("🏦 Banco de Gordura & Termodinâmica")
-    c_t1, c_t2, c_t3 = st.columns(3)
-    if not df_merged.empty:
-        deficit_total = df_merged['deficit_real'].sum()
-        kg_gordura = deficit_total / 7700
+    # --------------------------------------------------------
+    # GRÁFICO 4: PRESSÃO ARTERIAL (Monitoramento Saúde)
+    # --------------------------------------------------------
+    st.subheader("❤️ Pressão Arterial (Histórico)")
+    if not df_bp_d.empty:
+        fig_bp = go.Figure()
+        fig_bp.add_trace(go.Scatter(x=df_bp_d['measurement_time'], y=df_bp_d['systolic'], name='Sistólica', line=dict(color='#e74c3c')))
+        fig_bp.add_trace(go.Scatter(x=df_bp_d['measurement_time'], y=df_bp_d['diastolic'], name='Diastólica', line=dict(color='#3498db')))
         
-        peso_start = df_merged.iloc[0]['peso_kg']
-        peso_curr = df_merged.iloc[-1]['peso_kg']
-        perda_real = peso_start - peso_curr
-        perda_teorica = deficit_total / 7700
-        fator_termo = perda_real / perda_teorica if perda_teorica > 0.1 else 1.0
-
-        c_t1.metric("Déficit Acumulado", f"{int(deficit_total)} kcal")
-        c_t2.metric("Perda Real / Teórica", f"{perda_real:.1f}kg / {perda_teorica:.1f}kg")
+        # Zonas de Referência (Opcional - visual clean)
+        fig_bp.add_hrect(y0=120, y1=80, line_width=0, fillcolor="green", opacity=0.1, annotation_text="Ideal")
         
-        if fator_termo > 1.15: st_termo, cor_termo = "🔥 Turbo", "normal"
-        elif fator_termo < 0.85: st_termo, cor_termo = "❄️ Lento", "inverse"
-        else: st_termo, cor_termo = "✅ Normal", "off"
-        c_t3.metric("Índice Termodinâmico", f"{fator_termo:.2f}x", st_termo, delta_color=cor_termo)
-        
-    # ============================================================================
-    # 8. HISTOGRAMA DE JEJUM (DISTRIBUIÇÃO DE FREQUÊNCIA)
-    # ============================================================================
-    st.divider()
-    st.subheader("⏱️ Raio-X dos Seus Intervalos (Jejum)")
-
-    # 1. Buscar data_hora exata
-    df_intervalos = executar_sql("SELECT data_hora FROM public.consumo WHERE data >= :d ORDER BY data_hora ASC", {"d": DATA_INICIO_D}, is_select=True)
-
-    if not df_intervalos.empty and 'data_hora' in df_intervalos.columns:
-        df_intervalos = df_intervalos.dropna(subset=['data_hora'])
-        
-        # 2. Calcular diferença em HORAS entre refeições
-        df_intervalos['diff_hours'] = df_intervalos['data_hora'].diff().dt.total_seconds() / 3600
-        
-        # 3. Filtrar intervalos < 20 minutos (ignorando "repete prato") e NaNs
-        # Consideramos intervalos válidos apenas aqueles significativos
-        df_clean = df_intervalos[(df_intervalos['diff_hours'] > 0.33)].copy() # > 20 min
-        
-        if not df_clean.empty:
-            # Criar faixas de cores baseadas no Jejum
-            # < 4h: Intervalo comum de refeição (Cinza)
-            # 4h - 12h: Intervalo Digestivo (Azul Claro)
-            # 12h - 16h: Início de Autofagia (Azul Escuro)
-            # > 16h: Jejum "Leão" (Dourado/Laranja)
-            
-            fig_hist = go.Figure()
-
-            # Adicionar o Histograma
-            fig_hist.add_trace(go.Histogram(
-                x=df_clean['diff_hours'],
-                nbinsx=20, # Ajuste a granulação das barras
-                marker=dict(
-                    color=df_clean['diff_hours'],
-                    colorscale=[
-                        [0.0, '#95a5a6'],   # Cinza (Comer toda hora)
-                        [0.2, '#3498db'],   # Azul (Normal)
-                        [0.6, '#2980b9'],   # Azul Forte (Jejum 12-14h)
-                        [1.0, '#f39c12']    # Laranja (Jejum 18h+)
-                    ],
-                    showscale=False
-                ),
-                name='Frequência',
-                opacity=0.85
-            ))
-
-            # Linhas de Meta
-            fig_hist.add_vline(x=12, line_dash="dash", line_color="green", annotation_text="12h (Mínimo)")
-            fig_hist.add_vline(x=16, line_dash="dash", line_color="orange", annotation_text="16h (Meta)")
-            fig_hist.add_vline(x=18, line_dash="dash", line_color="red", annotation_text="18h (Leão)")
-
-            fig_hist.update_layout(
-                title="Distribuição dos Intervalos (Quantas vezes você fica X horas sem comer?)",
-                xaxis_title="Horas sem comer",
-                yaxis_title="Ocorrências (Qtd de vezes)",
-                height=350,
-                bargap=0.1,
-                margin=dict(l=10,r=10,t=40,b=10)
-            )
-            st.plotly_chart(fig_hist, use_container_width=True)
-            
-            # Estatística Rápida
-            maior_jejum = df_clean['diff_hours'].max()
-            media_jejum = df_clean[df_clean['diff_hours'] > 4]['diff_hours'].mean() # Média ignorando lanchinhos < 4h
-            
-            cj1, cj2 = st.columns(2)
-            cj1.metric("🏆 Maior Jejum Registrado", f"{maior_jejum:.1f} horas")
-            cj2.metric("⏱️ Média (Intervalos > 4h)", f"{media_jejum:.1f} horas")
-
-        else:
-            st.info("Sem dados suficientes de intervalo temporal (necessário timestamps).")
-    else:
-        st.warning("Ainda não há dados de horário precisos.")
+        fig_bp.update_layout(height=300, margin=dict(l=10,r=10,t=30,b=10), legend=dict(orientation="h", y=1.1))
+        st.plotly_chart(fig_bp, use_container_width=True)
+    else: st.info("Registre sua pressão na aba Saúde.")
 
 # --- ABA DIÁRIO ---
 with tab_daily:
@@ -574,19 +457,19 @@ with tab_daily:
 # --- ABA TREINO ---
 with tab_treino:
     st.markdown("### 🏃‍♂️ Monitoramento de Treino (Iron N1)")
-    
+
     # 1. RECUPERAR DADOS DO DIA
     df_treino_hoje = executar_sql("SELECT * FROM public.exercicios WHERE data = :d ORDER BY id DESC", {'d': data_hoje}, is_select=True)
-    
+
     # Separa registros
     df_fechamento = df_treino_hoje[df_treino_hoje['tipo'] == 'Fechamento Diário']
     df_atividades = df_treino_hoje[df_treino_hoje['tipo'] != 'Fechamento Diário']
-    
+
     # Totais de TREINO (Soma das atividades específicas)
     min_treino_hoje = int(df_atividades['duracao_min'].sum())
     cal_treino_hoje = int(df_atividades['calorias'].sum())
     passos_treino_hoje = int(df_atividades['passos'].sum())
-    
+
     # Se já tiver fechamento, pega o Total do Relógio salvo
     if not df_fechamento.empty:
         passos_total_n1 = int(df_fechamento.iloc[0]['passos_total_dia'])
@@ -594,7 +477,6 @@ with tab_treino:
         passos_total_n1 = 0
 
     # CÁLCULO AUTOMÁTICO DO "PROFESSOR/ROTINA"
-    # Lógica: O que não é treino, é rotina.
     if passos_total_n1 > 0:
         passos_prof_rotina = max(0, passos_total_n1 - passos_treino_hoje)
     else:
@@ -602,18 +484,18 @@ with tab_treino:
 
     # --- MÉTRICAS DE TOPO ---
     pct_treino = min(min_treino_hoje / 120.0, 1.0)
-    
+
     c_m1, c_m2, c_m3 = st.columns(3)
     c_m1.metric("⏱️ Tempo Treino", f"{min_treino_hoje} min", "Meta: 120 min")
     c_m2.metric("👣 Passos Treino", f"{passos_treino_hoje}", f"Atividades registradas")
     c_m3.metric("🏫 Passos Rotina (Prof)", f"{passos_prof_rotina}", f"Total Dia: {passos_total_n1}")
     st.progress(pct_treino)
     st.divider()
-    
+
     # --- FORMULÁRIO 1: FECHAMENTO SIMPLIFICADO ---
     st.subheader("🏁 Fechamento do Dia")
     st.info("Insira apenas o valor final que aparece no seu relógio.")
-    
+
     with st.form("form_fechamento_simples"):
         col_f1, col_f2 = st.columns([2, 1])
         with col_f1:
@@ -622,24 +504,17 @@ with tab_treino:
             st.write("") # Espaçamento
             st.write("") 
             btn_save = st.form_submit_button("💾 Salvar Fechamento", use_container_width=True)
-            
+
         if btn_save:
-            # Salva o Total. O "passos_trabalho" no banco agora armazenará o "Resto" (Professor/Rotina)
-            # para manter compatibilidade com o histórico, mas o Dash recalcula dinamicamente também.
             resto_calculado = max(0, input_total_dia - passos_treino_hoje)
-            
-            # Limpa fechamentos anteriores do dia
             executar_sql("DELETE FROM public.exercicios WHERE data = :d AND tipo = 'Fechamento Diário'", {'d': data_hoje})
-            
-            # Insere novo
             executar_sql("""
                 INSERT INTO public.exercicios (data, tipo, duracao_min, passos, passos_total_dia, passos_trabalho, calorias, observacoes)
                 VALUES (:d, 'Fechamento Diário', 0, 0, :pt, :ptr, 0, 'Total Relógio')
             """, {'d': data_hoje, 'pt': input_total_dia, 'ptr': resto_calculado})
-            
             st.success(f"Fechado! Total: {input_total_dia} (Sendo {resto_calculado} de Rotina)")
             st.rerun()
-            
+
     st.markdown("---")
 
     # --- FORMULÁRIO 2: TREINOS ESPECÍFICOS ---
@@ -654,7 +529,7 @@ with tab_treino:
         cal = c_tr5.number_input("Calorias (Relógio)", 0, 2000, 0)
         bpm = st.number_input("BPM Médio (Opcional)", 0, 200, 0)
         obs = st.text_input("Observações")
-        
+
         if st.form_submit_button("💾 Registrar Atividade", use_container_width=True):
             executar_sql("""
                 INSERT INTO public.exercicios (data, tipo, duracao_min, passos, distancia_km, calorias, bpm_medio, observacoes)
@@ -675,11 +550,12 @@ with tab_treino:
                 else:
                     ct1.markdown(f"🏃‍♂️ **{row['tipo']}**")
                     ct2.caption(f"{row['duracao_min']} min | {row['passos']} passos | {row['calorias']} kcal")
-                
+
                 if ct3.button("🗑️", key=f"del_tr_{row['id']}"):
                     executar_sql("DELETE FROM public.exercicios WHERE id=:id", {'id': row['id']})
                     st.rerun()
                 st.markdown("---")
+
 # --- ABA HISTÓRICO ---
 with tab_hist:
     st.header("Histórico Completo")
@@ -735,4 +611,4 @@ with tab_admin:
             executar_sql("UPDATE public.perfil SET meta_kcal=:mk, meta_proteina=:mp, meta_carbo=:mc, meta_gordura=:mg, meta_peso_alvo=:mpa, ritmo_semanal=:rit, fator_atividade=:fat WHERE id=1", {'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 'mpa': n_peso_alvo, 'rit': n_ritmo, 'fat': n_fator})
             st.cache_resource.clear(); st.rerun()
 
-st.caption("Leo Tracker Pro v8.6 | Monitoramento de Passos Professor/Total Integrado 🚀")
+st.caption("Leo Tracker Pro v8.7 | Dash Gerencial Clean 🚀")
