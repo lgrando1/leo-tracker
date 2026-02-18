@@ -5,23 +5,24 @@ from datetime import datetime, timedelta
 import pytz
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import numpy as np
 
 # ============================================================================
-# 1. CONFIGURAÇÃO VISUAL
+# 1. CONFIGURAÇÃO VISUAL (TEMA INDUSTRIAL)
 # ============================================================================
-st.set_page_config(page_title="Leo's Nutrition Dash", page_icon="🦁", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="BioControl System", page_icon="🎛️", layout="wide", initial_sidebar_state="collapsed")
 
+# CSS para dar um ar mais "Engenharia/Dashboard"
 st.markdown("""
     <style>
-    #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
-    div[data-testid="stMetric"] { background-color: #f0f2f6; padding: 15px; border-radius: 12px; border: 1px solid #e0e0e0; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); }
-    @media (prefers-color-scheme: dark) { div[data-testid="stMetric"] { background-color: #262730; border: 1px solid #464b5c; } }
-    h1, h2, h3 { font-family: 'Helvetica', sans-serif; font-weight: 700; }
+    div[data-testid="stMetric"] { background-color: #1E1E1E; border: 1px solid #444; border-radius: 5px; color: #EEE; }
+    h1, h2, h3 { font-family: 'Consolas', 'Courier New', monospace; color: #00FF00; }
+    .stAlert { background-color: #222; border: 1px solid #555; }
     </style>
     """, unsafe_allow_html=True)
 
 # ============================================================================
-# 2. CONEXÃO BLINDADA
+# 2. CONEXÃO E CACHE
 # ============================================================================
 @st.cache_resource(ttl=600)
 def get_engine():
@@ -33,281 +34,207 @@ def get_engine():
 def run_query(query, params=None, is_select=True):
     engine = get_engine()
     try:
-        if is_select:
-            with engine.connect() as conn:
+        with engine.connect() as conn:
+            if is_select:
                 df = pd.read_sql(text(query), conn, params=params)
                 for col in ['data', 'log_date', 'measurement_time']:
                     if col in df.columns:
                         try: df[col] = pd.to_datetime(df[col])
                         except: pass
                 return df
-    except Exception:
+            return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Erro DB: {e}")
         return pd.DataFrame()
 
-# --- TRAVA DE SEGURANÇA (TOKEN) ---
+# TRAVA DE SEGURANÇA
 if st.query_params.get("token") != st.secrets.get("DASH_ACCESS_TOKEN"):
-    st.error("🔒 Acesso Restrito. Token inválido."); st.stop()
+    st.error("🔒 SYSTEM LOCKED. AUTHORIZATION REQUIRED."); st.stop()
 
 # ============================================================================
-# 3. ETL (EXTRAÇÃO E TRATAMENTO)
+# 3. EXTRAÇÃO DE DADOS (ETL)
 # ============================================================================
 hoje = datetime.now(pytz.timezone('America/Sao_Paulo')).date()
 DATA_INICIO = pd.to_datetime("2025-12-30").date()
 
-# Fetch Data
+# Queries
 df_perfil = run_query("SELECT * FROM public.perfil WHERE id = 1")
 df_peso = run_query("SELECT * FROM public.peso ORDER BY data ASC")
-df_medidas = run_query("SELECT * FROM public.body_measurements ORDER BY log_date ASC")
-df_bp = run_query("SELECT * FROM public.blood_pressure ORDER BY measurement_time ASC")
-df_hist = run_query("""
-    SELECT data, SUM(kcal) as tkcal, SUM(proteina) as tprot, SUM(carbo) as tcarb, 
-           SUM(gordura) as tgord, SUM(quantidade) as tqtd
-    FROM public.consumo WHERE data >= :d GROUP BY data ORDER BY data ASC
-""", {"d": DATA_INICIO})
-df_treino = run_query("""
-    SELECT data, SUM(duracao_min) as t_min, SUM(passos) as t_passos, SUM(calorias) as t_cal_out 
-    FROM public.exercicios WHERE data >= :d GROUP BY data ORDER BY data ASC
-""", {"d": DATA_INICIO})
+df_hist = run_query("SELECT data, SUM(kcal) as tkcal FROM public.consumo WHERE data >= :d GROUP BY data ORDER BY data ASC", {"d": DATA_INICIO})
 
-# Fetch Hoje
-df_hoje_comida = run_query("SELECT * FROM public.consumo WHERE data = :d", {"d": hoje})
-df_hoje_treino = run_query("SELECT * FROM public.exercicios WHERE data = :d", {"d": hoje})
+# Setup Perfil
+if not df_perfil.empty: p = df_perfil.iloc[0]
+else: p = {'meta_kcal': 1650, 'meta_peso_alvo': 90.0, 'ritmo_semanal': 0.8}
 
-# --- SETUP PERFIL ---
-if not df_perfil.empty:
-    p = df_perfil.iloc[0]
-else:
-    p = {'meta_kcal': 1650, 'meta_proteina': 130, 'meta_carbo': 150, 'meta_gordura': 59, 
-         'meta_peso_alvo': 120.0, 'ritmo_semanal': 0.8, 'idade': 41, 'altura_cm': 178, 'fator_atividade': 1.2}
+# Dados Atuais
+peso_atual = float(df_peso.iloc[-1]['peso_kg']) if not df_peso.empty else 0.0
+meta_final = float(p['meta_peso_alvo'])
+ritmo_semanal = float(p['ritmo_semanal'])
 
-fator_atividade = float(p.get('fator_atividade') or 1.2)
-peso_atual = float(df_peso.iloc[-1]['peso_kg']) if not df_peso.empty else 140.0
+# --- CÁLCULO DO SETPOINT DINÂMICO (A LINHA IDEAL) ---
+# Criamos uma linha ideal desde o dia 1 até hoje
+df_peso['data_dt'] = pd.to_datetime(df_peso['data']).dt.date
+data_start = df_peso.iloc[0]['data_dt']
+peso_start = df_peso.iloc[0]['peso_kg']
+days_passed = (hoje - data_start).days
 
-# --- MERGE INTELIGENTE ---
-df_merged = pd.DataFrame()
-if not df_hist.empty and not df_peso.empty:
-    df_hist['data_dt'] = pd.to_datetime(df_hist['data']).dt.date
-    df_peso['data_dt'] = pd.to_datetime(df_peso['data']).dt.date
-    
-    # Base: Consumo + Peso
-    df_merged = pd.merge(df_hist, df_peso[['data_dt', 'peso_kg']], on='data_dt', how='left').ffill()
-    if df_merged['peso_kg'].isnull().any():
-         df_merged['peso_kg'] = df_merged['peso_kg'].fillna(method='bfill').fillna(peso_atual)
-
-    # Add Treino
-    if not df_treino.empty:
-        df_treino['data_dt'] = pd.to_datetime(df_treino['data']).dt.date
-        df_merged = pd.merge(df_merged, df_treino[['data_dt', 't_min', 't_passos', 't_cal_out']], on='data_dt', how='left')
-        df_merged[['t_min', 't_passos', 't_cal_out']] = df_merged[['t_min', 't_passos', 't_cal_out']].fillna(0)
-    else:
-        df_merged['t_min'] = 0; df_merged['t_passos'] = 0; df_merged['t_cal_out'] = 0
-    
-    # Cálculos Avançados
-    idade, altura = int(p.get('idade', 41)), int(p.get('altura_cm', 178))
-    # GET (Mifflin-St Jeor)
-    df_merged['get_basal'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * fator_atividade
-    df_merged['get_total'] = df_merged['get_basal'] + df_merged['t_cal_out']
-    df_merged['deficit_real'] = df_merged['get_total'] - df_merged['tkcal']
+# O Setpoint hoje é onde você DEVERIA estar se tivesse perdido 0.8kg/semana perfeitamente
+sp_hoje = peso_start - ((ritmo_semanal / 7) * days_passed)
+erro_atual = sp_hoje - peso_atual # Se positivo, estou leve. Se negativo, estou pesado.
 
 # ============================================================================
-# 4. DASHBOARD VISUAL
+# 4. INTERFACE DE CONTROLE (O NOVO DASHBOARD)
 # ============================================================================
-st.markdown(f"### 🦁 Leo's Performance Dashboard | {hoje.strftime('%d/%m/%Y')}")
 
-# --- KPI ROW 1: DO DIA ---
-k_act = df_hoje_comida['kcal'].sum() if not df_hoje_comida.empty else 0
-p_act = df_hoje_comida['proteina'].sum() if not df_hoje_comida.empty else 0
-meta_agua = round((peso_atual * 35) / 1000, 1)
+st.title(f"SYSTEM STATUS: {'ONLINE' if erro_atual > -2 else 'WARNING'}")
+st.caption(f"Plant: Human Body (Leonardo) | Controller: External Cognition | Date: {hoje}")
 
-# Dados Treino Hoje
-treino_min = int(df_hoje_treino['duracao_min'].sum()) if not df_hoje_treino.empty else 0
-treino_passos = int(df_hoje_treino['passos'].sum()) if not df_hoje_treino.empty else 0
+# --- ABA 1: MALHA DE CONTROLE (O CORAÇÃO DA AULA) ---
+tab_ctrl, tab_data = st.tabs(["🎛️ Malha de Controle (PID View)", "📊 Dados Brutos"])
 
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("⚖️ Peso Atual", f"{peso_atual} kg", f"Meta: {p['meta_peso_alvo']}", help="Última pesagem registrada no banco de dados.")
-c2.metric("🔥 Calorias (Hoje)", f"{int(k_act)}", f"Meta: {p['meta_kcal']}", help="Soma dos alimentos registrados hoje via IA.")
-c3.metric("🥩 Proteína (Hoje)", f"{int(p_act)}g", f"Meta: {p['meta_proteina']}", help="Total de proteínas (animal + vegetal).")
-c4.metric("💧 Água", f"{meta_agua}L", "Minímo", help="Cálculo: 35ml x Peso Atual.")
-c5.metric("🏃‍♂️ Treino (Hoje)", f"{treino_min} min", f"{treino_passos} passos", help="Dados importados do Iron N1 (Caminhada/Musculação).")
-
-last_bp_txt = "--"
-if not df_bp.empty:
-    last = df_bp.iloc[-1]
-    last_bp_txt = f"{last['systolic']}x{last['diastolic']}"
-c6.metric("❤️ Pressão", last_bp_txt, f"Pulso: {last.get('pulse', '--')}")
-
-st.divider()
-
-# --- ROW 2: ENERGIA & DENSIDADE ---
-c_main1, c_main2 = st.columns([2, 1])
-
-with c_main1:
-    st.markdown("##### 🧪 Densidade Energética: Volume vs. Calorias", help="Compara o peso da comida (g) com a energia (kcal). Barras altas com linha baixa indicam alta saciedade.")
-    if not df_merged.empty:
-        fig_vol = make_subplots(specs=[[{"secondary_y": True}]])
-        fig_vol.add_trace(go.Bar(x=df_merged['data'], y=df_merged['tqtd'], name="Volume (g)", marker_color='#AED6F1', opacity=0.5), secondary_y=True)
-        fig_vol.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['tkcal'], name="Calorias In", mode='lines+markers', line=dict(color='#C0392B', width=3)), secondary_y=False)
-        fig_vol.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['get_total'], name="Gasto Total (Out)", mode='lines', line=dict(color='#27AE60', width=2, dash='dot')), secondary_y=False)
+with tab_ctrl:
+    
+    # --- BLOCO 1: VARIÁVEIS DE ESTADO ---
+    st.markdown("### 1. Estado do Sistema (System State)")
+    c1, c2, c3, c4 = st.columns(4)
+    
+    with c1:
+        st.metric(
+            label="🎯 Setpoint (SP)",
+            value=f"{sp_hoje:.2f} kg",
+            help="Onde você DEVERIA estar hoje seguindo a meta linear."
+        )
         
-        fig_vol.update_layout(height=350, margin=dict(l=10,r=10,t=30,b=10), legend=dict(orientation="h", y=1.1), template="plotly_white")
-        fig_vol.update_yaxes(title_text="Kcal", secondary_y=False, showgrid=True)
-        fig_vol.update_yaxes(title_text="Gramas", secondary_y=True, showgrid=False)
-        st.plotly_chart(fig_vol, use_container_width=True)
-    else: st.info("Aguardando dados...")
+    with c2:
+        st.metric(
+            label="⚖️ Process Variable (PV)",
+            value=f"{peso_atual:.2f} kg",
+            delta=f"{peso_atual - float(df_peso.iloc[-2]['peso_kg']):.2f} kg (desde ontem)",
+            delta_color="inverse",
+            help="Leitura real do sensor (Balança)."
+        )
 
-with c_main2:
-    st.markdown("##### 🏦 Termodinâmica & Déficit", help="Compara a perda de peso real na balança com a perda matemática baseada no déficit calórico.")
-    if not df_merged.empty:
-        deficit_total = df_merged['deficit_real'].sum()
-        kg_gordura = deficit_total / 7700
-        peso_start = df_merged.iloc[0]['peso_kg']
-        peso_curr = df_merged.iloc[-1]['peso_kg']
-        perda_real = peso_start - peso_curr
-        perda_teorica = deficit_total / 7700
-        fator_termo = perda_real / perda_teorica if perda_teorica > 0.1 else 1.0
+    with c3:
+        # O ERRO É CRUCIAL. Se negativo, precisa atuar.
+        # Erro = SP - PV. 
+        # Ex: Meta 90, Real 92. Erro = -2. (Estamos 2kg acima do ideal).
+        erro_calc = sp_hoje - peso_atual
+        lbl_erro = "✅ Estável" if abs(erro_calc) < 0.5 else ("⚠️ Desvio Crítico" if erro_calc < -1 else "Avançado")
+        st.metric(
+            label="📉 Erro (SP - PV)",
+            value=f"{erro_calc:.2f} kg",
+            delta=lbl_erro,
+            delta_color="normal" if erro_calc >= 0 else "inverse",
+            help="Diferença entre a Meta e o Real. O objetivo do controlador é ZERAR este número."
+        )
 
-        st.metric("Déficit Acumulado", f"{int(deficit_total)} kcal")
-        st.metric("Gordura Eliminada (Teórica)", f"{kg_gordura:.2f} kg", help="Baseado em 7700kcal = 1kg de gordura")
-        if fator_termo > 1.15: lbl, clr = "🔥 Turbo", "normal"
-        elif fator_termo < 0.85: lbl, clr = "❄️ Lento", "inverse"
-        else: lbl, clr = "✅ Normal", "off"
-        st.metric("Índice Termodinâmico", f"{fator_termo:.2f}x", lbl, delta_color=clr, help=">1.0: Perdendo mais que o previsto. <1.0: Perdendo menos (possível retenção ou adaptação).")
-        st.caption(f"*Baseado no fator de atividade: {fator_atividade}x*")
+    with c4:
+        # AÇÃO DE CONTROLE SUGERIDA (Lógica Proporcional Simples)
+        # Se Erro < 0 (Estou gordo), Reduz Kcal. Se Erro > 0 (Estou magro), Mantém.
+        kp = 200 # Ganho Proporcional (Arbitrário: 200kcal para cada kg de erro)
+        acao_p = kp * erro_calc
+        meta_ajustada = float(p['meta_kcal']) + acao_p
+        # Saturação (Limites de segurança)
+        meta_ajustada = max(1200, min(2500, meta_ajustada))
+        
+        st.metric(
+            label="🔥 Variável Manipulada (MV)",
+            value=f"{int(meta_ajustada)} kcal",
+            delta=f"{int(acao_p)} kcal (Correção P)",
+            help="Sugestão de Ingestão para hoje baseada no Erro atual (Lógica P)."
+        )
 
-st.divider()
+    st.divider()
 
-# --- ROW 3: PROJEÇÃO & TREINO ---
-c_p1, c_p2 = st.columns([2, 1])
-
-with c_p1:
-    st.markdown("##### 🎯 Projeção de Peso", help="Linha tracejada indica a meta de perda semanal. Linha sólida é o peso real.")
+    # --- BLOCO 2: GRÁFICO DE CONTROLE (SP vs PV) ---
+    st.markdown("### 2. Análise de Rastreamento (Tracking Analysis)")
+    
     if not df_peso.empty:
-        df_peso['data_dt'] = pd.to_datetime(df_peso['data']).dt.date
-        BASE_DATE = pd.to_datetime("2025-12-31").date()
-        df_base = df_peso[df_peso['data_dt'] >= BASE_DATE].sort_values('data_dt')
+        # Criar dados projetados (Setpoint Line)
+        dates = pd.date_range(start=data_start, end=hoje)
+        sp_line = [peso_start - ((ritmo_semanal / 7) * (d.date() - data_start).days) for d in dates]
         
-        if not df_base.empty:
-            peso_inicial = float(df_base.iloc[0]['peso_kg'])
-            datas_proj = pd.date_range(start=BASE_DATE, end=hoje + timedelta(days=14))
-            ritmo_diario = float(p['ritmo_semanal']) / 7
-            pesos_estimados = [peso_inicial - (i * ritmo_diario) for i in range(len(datas_proj))]
-            fig_proj = go.Figure()
-            fig_proj.add_trace(go.Scatter(x=datas_proj, y=pesos_estimados, mode='lines', name='Meta Ideal', line=dict(color='#29B5E8', dash='dash')))
-            fig_proj.add_trace(go.Scatter(x=df_base['data_dt'], y=df_base['peso_kg'], mode='lines+markers', name='Realizado', line=dict(color='#FF4B4B', width=3)))
-            fig_proj.update_layout(height=300, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1), template="plotly_white")
-            st.plotly_chart(fig_proj, use_container_width=True)
+        # Filtrar dados reais para o mesmo período
+        df_plot = df_peso[df_peso['data_dt'] <= hoje].set_index('data_dt').reindex(dates.date).reset_index()
+        
+        fig = go.Figure()
+        
+        # Linha do Setpoint (Meta)
+        fig.add_trace(go.Scatter(
+            x=dates, y=sp_line,
+            name='Setpoint (Meta Linear)',
+            mode='lines',
+            line=dict(color='green', dash='dash')
+        ))
+        
+        # Linha da PV (Real)
+        fig.add_trace(go.Scatter(
+            x=dates, y=df_plot['peso_kg'],
+            name='PV (Peso Real)',
+            mode='lines+markers',
+            line=dict(color='red', width=3)
+        ))
+        
+        # Preencher a área do ERRO (Integral visual)
+        fig.add_trace(go.Scatter(
+            x=dates, y=sp_line,
+            fill=None, mode='lines', line_color='green', showlegend=False
+        ))
+        fig.add_trace(go.Scatter(
+            x=dates, y=df_plot['peso_kg'],
+            fill='tonexty', # Preenche até a linha do SP
+            name='Erro (Integral)',
+            mode='none',
+            fillcolor='rgba(255, 0, 0, 0.1)'
+        ))
 
-with c_p2:
-    st.markdown("##### 🏃‍♂️ Consistência de Treino")
-    if not df_merged.empty and 't_passos' in df_merged.columns:
-        fig_tr = make_subplots(specs=[[{"secondary_y": True}]])
-        fig_tr.add_trace(go.Bar(x=df_merged['data'], y=df_merged['t_min'], name='Minutos', marker_color='#F1C40F'), secondary_y=False)
-        fig_tr.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['t_passos'], name='Passos', mode='lines', line=dict(color='#8E44AD', width=2)), secondary_y=True)
-        fig_tr.update_layout(height=300, margin=dict(l=10,r=10,t=20,b=10), showlegend=False, template="plotly_white")
-        st.plotly_chart(fig_tr, use_container_width=True)
+        fig.update_layout(
+            template="plotly_dark",
+            title="Resposta do Sistema: PV rastreando SP",
+            xaxis_title="Tempo",
+            yaxis_title="Peso (kg)",
+            height=400,
+            hovermode="x unified"
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-st.divider()
-
-# --- ROW 4: SAÚDE ---
-st.markdown("##### 🧬 Indicadores de Saúde")
-col_s1, col_s2, col_s3 = st.columns(3)
-
-with col_s1:
-    if not df_medidas.empty:
-        fig_bf = go.Figure(go.Scatter(x=df_medidas['log_date'], y=df_medidas['body_fat_est'], mode='lines+markers', name="BF%", line=dict(color='#e67e22')))
-        fig_bf.update_layout(title="Gordura Corporal (%)", height=250, margin=dict(l=10,r=10,t=30,b=10))
-        st.plotly_chart(fig_bf, use_container_width=True)
-
-with col_s2:
-    if not df_bp.empty:
-        fig_bp = go.Figure()
-        fig_bp.add_trace(go.Scatter(x=df_bp['measurement_time'], y=df_bp['systolic'], name="Sys", line=dict(color='#c0392b')))
-        fig_bp.add_trace(go.Scatter(x=df_bp['measurement_time'], y=df_bp['diastolic'], name="Dia", line=dict(color='#2980b9')))
-        fig_bp.update_layout(title="Pressão Arterial", height=250, margin=dict(l=10,r=10,t=30,b=10))
-        st.plotly_chart(fig_bp, use_container_width=True)
-
-with col_s3:
-    if not df_hist.empty:
-        df_macros = df_hist.copy()
-        df_macros['tot'] = (df_macros['tprot']*4 + df_macros['tcarb']*4 + df_macros['tgord']*9).replace(0, 1)
-        fig_stack = go.Figure()
-        fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tprot']*4/df_macros['tot'])*100, name='P', marker_color='#3366CC'))
-        fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tgord']*9/df_macros['tot'])*100, name='G', marker_color='#DC3912'))
-        fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tcarb']*4/df_macros['tot'])*100, name='C', marker_color='#FF9900'))
-        fig_stack.update_layout(title="Distribuição Macros (%)", barmode='stack', height=250, margin=dict(l=10,r=10,t=30,b=10), yaxis=dict(range=[0, 100]), showlegend=False)
-        st.plotly_chart(fig_stack, use_container_width=True)
-
-st.divider()
-
-# ============================================================================
-# 5. ANÁLISE ESTATÍSTICA (EDA)
-# ============================================================================
-st.markdown("### 📊 Análise de Tendências (Médias Móveis & Extremos)")
-
-if not df_merged.empty:
-    cols_eda = ['peso_kg', 'tkcal', 'tprot', 'tcarb', 'tgord', 't_min', 't_passos', 'deficit_real']
-    df_eda = df_merged[['data', *cols_eda]].copy().sort_values('data').fillna(0)
-
-    def calc_mean(df, days, col): return df.tail(days)[col].mean()
-
-    metrics_list = [
-        ("⚖️ Peso Médio (kg)", 'peso_kg'),
-        ("🔥 Calorias (kcal)", 'tkcal'),
-        ("🥩 Proteína (g)", 'tprot'),
-        ("🍞 Carbo (g)", 'tcarb'),
-        ("🥑 Gordura (g)", 'tgord'),
-        ("⏱️ Treino (min)", 't_min'),
-        ("👣 Passos", 't_passos'),
-        ("📉 Déficit Diário", 'deficit_real')
-    ]
-
-    eda_data = []
-    for label, col in metrics_list:
-        row = {
-            "Indicador": label,
-            "3 Dias": f"{calc_mean(df_eda, 3, col):.1f}",
-            "7 Dias": f"{calc_mean(df_eda, 7, col):.1f}",
-            "30 Dias": f"{calc_mean(df_eda, 30, col):.1f}",
-            "Média (Total)": f"{df_eda[col].mean():.1f}",
-            "Mínimo": f"{df_eda[col].min():.1f}",
-            "Máximo": f"{df_eda[col].max():.1f}"
-        }
-        eda_data.append(row)
-
-    st.table(pd.DataFrame(eda_data))
-
-    st.markdown("##### 📈 Evolução de Macronutrientes (Gramas)")
-    fig_macros_grams = go.Figure()
-    fig_macros_grams.add_trace(go.Scatter(x=df_eda['data'], y=df_eda['tprot'], name='Proteína (g)', mode='lines+markers', line=dict(color='#3366CC', width=3)))
-    fig_macros_grams.add_trace(go.Scatter(x=df_eda['data'], y=df_eda['tcarb'], name='Carbo (g)', mode='lines+markers', line=dict(color='#FF9900', width=2)))
-    fig_macros_grams.add_trace(go.Scatter(x=df_eda['data'], y=df_eda['tgord'], name='Gordura (g)', mode='lines+markers', line=dict(color='#DC3912', width=2)))
-    fig_macros_grams.update_layout(height=350, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1), template="plotly_white", yaxis_title="Gramas")
-    st.plotly_chart(fig_macros_grams, use_container_width=True)
-
-# ============================================================================
-# 6. GLOSSÁRIO E METODOLOGIA (NOVO)
-# ============================================================================
-with st.expander("📚 Metodologia e Glossário Técnico (Clique para abrir)", expanded=False):
-    st.markdown("""
-    ### 1. Estimativa de Gasto Energético (GET)
-    * **Fórmula Base:** Equação de Mifflin-St Jeor (Padrão ouro para obesidade/perda de peso).
-    * **Ajuste:** Multiplicado pelo **Fator de Atividade** (Configurado para 1.2 - Sedentário/Escritório).
-    * **Gasto Ativo:** Adicionamos as calorias do exercício registradas no **Iron N1** (Caminhada/Musculação) sobre o basal.
+    # --- BLOCO 3: ATUAÇÃO DO CONTROLADOR (CALORIAS) ---
+    c_act1, c_act2 = st.columns(2)
     
-    ### 2. Termodinâmica e Déficit
-    * **Déficit Real:** Diferença entre o Gasto Total Estimado e as Calorias Ingeridas.
-    * **Perda Teórica:** Déficit Acumulado / 7700 (Considerando que 1kg de gordura ≈ 7700kcal).
-    * **Índice Termodinâmico:** Razão entre a perda na balança e a perda teórica.
-        * *> 1.0:* Perda acelerada (metabolismo alto ou desidratação).
-        * *< 1.0:* Perda lenta (possível retenção hídrica, erro de contagem ou adaptação metabólica).
-    
-    ### 3. Densidade Calórica
-    * Analisa a relação entre **Volume de Comida (g)** e **Calorias (kcal)**.
-    * **Objetivo:** Manter barras de volume altas e linha de calorias baixa (Saciedade).
-    
-    ### 4. Projeção Linear
-    * Calculada com base na meta de **0.8kg/semana**.
-    * A linha tracejada mostra o caminho ideal até a meta.
-    """)
+    with c_act1:
+        st.markdown("### 3. Sinal de Controle (Histórico MV)")
+        if not df_hist.empty:
+            df_hist['MV_Target'] = float(p['meta_kcal'])
+            
+            fig_mv = go.Figure()
+            fig_mv.add_trace(go.Bar(
+                x=df_hist['data'], y=df_hist['tkcal'],
+                name='MV Real (Ingestão)',
+                marker_color='#3498DB'
+            ))
+            fig_mv.add_trace(go.Scatter(
+                x=df_hist['data'], y=df_hist['MV_Target'],
+                name='MV Alvo',
+                mode='lines',
+                line=dict(color='orange', dash='dot')
+            ))
+            fig_mv.update_layout(template="plotly_dark", height=300, title="Atuação vs Meta")
+            st.plotly_chart(fig_mv, use_container_width=True)
 
-st.caption("Leo Tracker Smart View v4.3 | Presentation Mode")
+    with c_act2:
+        st.markdown("### 4. Diagnóstico de Distúrbios")
+        st.info(f"""
+        **Análise de Estabilidade:**
+        * **Offset (Erro Atual):** {erro_calc:.2f} kg.
+        * **Ação do Controlador:** {'Aumentar Restrição' if erro_calc < 0 else 'Manter'}
+        * **Perturbação Estimada:** Baixa
+        
+        **Conceitos Aplicados:**
+        * O corpo humano possui **Grande Inércia** (Peso não muda no mesmo dia que se come).
+        * A **Balança** atua como sensor com **Ruído** (Retenção hídrica).
+        * A **Dieta** é a única forma de atuar na planta (MV).
+        """)
+
+# --- ABA 2: VISÃO ANTIGA (DADOS) ---
+with tab_data:
+    st.dataframe(df_peso)
