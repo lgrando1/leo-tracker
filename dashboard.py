@@ -119,73 +119,119 @@ if not df_hist.empty and not df_peso.empty:
 tab_control, tab_dash = st.tabs(["🎛️ Sala de Controle (Engenharia)", "🦁 Dashboard Original"])
 
 # ============================================================================
-# ABA 1: VISÃO DE ENGENHARIA DE CONTROLE (NOVA LÓGICA COM VARIÁVEIS ANTIGAS)
+# ABA 1: VISÃO DE ENGENHARIA DE CONTROLE (COM SIMULADOR)
 # ============================================================================
 with tab_control:
+    # --- SIDEBAR: O SIMULADOR DE REFERÊNCIA ---
+    with st.sidebar:
+        st.header("🎛️ Parâmetros de Controle")
+        st.markdown("Ajuste a trajetória ideal para recalcular o erro.")
+        
+        # Simuladores (Inputs)
+        sim_meta_final = st.number_input("Meta Final (kg)", min_value=80.0, max_value=150.0, value=130.0, step=1.0)
+        sim_ritmo = st.slider("Ritmo Semanal (kg/sem)", 0.5, 2.0, 0.8, 0.1, help="Velocidade de descida da rampa.")
+        sim_kp = st.slider("Ganho Kp (Agressividade)", 100, 500, 300, 50, help="Quanto cortar de caloria por kg de erro.")
+
     st.markdown("### 🏭 Monitoramento de Processo (Malha Fechada)")
     
-    # --- CÁLCULOS DE CONTROLE (SP, PV, ERRO) ---
-    # Usando as variáveis que já existiam
     if not df_peso.empty:
-        # Definir Setpoint (SP) Dinâmico baseado na meta semanal
+        # --- 1. CÁLCULO DA TRAJETÓRIA SIMULADA ---
         BASE_DATE = pd.to_datetime("2025-12-31").date()
         df_base = df_peso[df_peso['data_dt'] >= BASE_DATE].sort_values('data_dt')
         
         if not df_base.empty:
             peso_start = float(df_base.iloc[0]['peso_kg'])
             dias_passados = (hoje - BASE_DATE).days
-            ritmo_diario = float(p['ritmo_semanal']) / 7
+            ritmo_diario = sim_ritmo / 7  # Usa o valor do simulador
             
-            # SP: Onde eu deveria estar hoje
-            sp_hoje = peso_start - (dias_passados * ritmo_diario)
+            # CÁLCULO DO SP HOJE (Baseado no simulador)
+            sp_calculado = peso_start - (dias_passados * ritmo_diario)
+            # Trava: Não deixa o SP ser menor que a meta final do simulador
+            sp_hoje = max(sim_meta_final, sp_calculado) 
             
-            # PV: Onde eu estou (Peso Atual já calculado no ETL)
+            # PV: Onde eu estou
             pv_hoje = peso_atual
             
-            # Erro = SP - PV
-            # Se SP=90 e PV=92, Erro = -2 (Estou pesado). Se SP=90 e PV=88, Erro=+2 (Estou leve).
+            # Erro = SP Simulado - PV Real
             erro_t = sp_hoje - pv_hoje
             
-            # MV (Variável Manipulada Sugerida - Controle Proporcional)
-            kp = 300.0 # Ganho: Cortar 300kcal para cada 1kg de erro
-            acao_p = kp * erro_t
+            # --- 2. CONTROLADOR (COM GANHO SIMULADO) ---
+            acao_p = sim_kp * erro_t
             mv_sugerida = float(p['meta_kcal']) + acao_p
-            # Saturação de segurança
-            mv_sugerida = max(1200, min(3000, mv_sugerida))
+            mv_sugerida = max(1200, min(3000, mv_sugerida)) # Saturação
 
-            # --- DISPLAY VISUAL DE CONTROLE ---
+            # --- 3. DISPLAY (HMI) ---
             kc1, kc2, kc3, kc4 = st.columns(4)
             
             with kc1:
-                st.metric("🎯 Setpoint (SP)", f"{sp_hoje:.2f} kg", help="Meta calculada linearmente")
+                st.metric("🎯 Setpoint (Simulado)", f"{sp_hoje:.2f} kg", f"Alvo: {sim_meta_final} kg", 
+                         help=f"Calculado com ritmo de {sim_ritmo}kg/sem")
             with kc2:
-                st.metric("⚖️ Process Variable (PV)", f"{pv_hoje:.2f} kg", help="Leitura do sensor (Balança)")
+                st.metric("⚖️ Process Variable (PV)", f"{pv_hoje:.2f} kg", help="Leitura atual da Balança.")
             with kc3:
-                # Cor invertida: Erro negativo é ruim (estou acima do peso)
-                lbl_erro = "✅ No Alvo" if abs(erro_t) < 0.5 else ("⚠️ Desvio" if erro_t < 0 else "Adiantado")
-                st.metric("📉 Erro (SP - PV)", f"{erro_t:.2f} kg", delta=lbl_erro, delta_color="normal" if erro_t >=0 else "inverse")
+                # Lógica do Delta:
+                # Erro Positivo (ex: 2kg) = SP(135) - PV(133). Estou LEVE (Adiantado).
+                # Erro Negativo (ex: -2kg) = SP(130) - PV(132). Estou PESADO (Atrasado).
+                lbl_status = "✅ No Alvo"
+                cor_delta = "off"
+                
+                if erro_t > 0.5: 
+                    lbl_status = "🚀 Adiantado (Leve)"
+                    cor_delta = "normal" # Verde (Bom)
+                elif erro_t < -0.5:
+                    lbl_status = "⚠️ Atrasado (Pesado)"
+                    cor_delta = "inverse" # Vermelho (Ruim)
+                
+                st.metric("📉 Erro (SP - PV)", f"{erro_t:.2f} kg", delta=lbl_status, delta_color=cor_delta)
+                
             with kc4:
-                st.metric("🔥 MV (Ação P)", f"{int(mv_sugerida)} kcal", delta=f"{int(acao_p)} kcal", help="Sugestão de ingestão baseada no erro")
+                st.metric("🔥 MV Sugerida", f"{int(mv_sugerida)} kcal", delta=f"{int(acao_p)} kcal", 
+                         help="Ingestão sugerida para corrigir o erro atual.")
 
             st.markdown("---")
             
-            # GRÁFICO DE CONTROLE (SP vs PV)
-            datas_ctrl = pd.date_range(start=BASE_DATE, end=hoje)
-            sp_line = [peso_start - ((ritmo_diario) * (d.date() - BASE_DATE).days) for d in datas_ctrl]
+            # --- 4. GRÁFICO DINÂMICO ---
+            # Projetar 4 semanas para frente para ver onde vai dar
+            datas_ctrl = pd.date_range(start=BASE_DATE, end=hoje + timedelta(days=30))
             
-            # Filtrar dados reais para plotar junto
+            # Gerar linha do SP baseada nos sliders
+            sp_line = []
+            for d in datas_ctrl:
+                dias = (d.date() - BASE_DATE).days
+                val = peso_start - (dias * ritmo_diario)
+                sp_line.append(max(sim_meta_final, val)) # Trava na meta do slider
+            
+            # Dados reais
             df_plot_ctrl = df_peso[df_peso['data_dt'] >= BASE_DATE].copy()
             
             fig_ctrl = go.Figure()
-            # Linha SP
-            fig_ctrl.add_trace(go.Scatter(x=datas_ctrl, y=sp_line, name='Setpoint (Meta)', mode='lines', line=dict(color='green', dash='dash')))
-            # Linha PV
-            fig_ctrl.add_trace(go.Scatter(x=df_plot_ctrl['data_dt'], y=df_plot_ctrl['peso_kg'], name='PV (Real)', mode='lines+markers', line=dict(color='red', width=3)))
             
-            fig_ctrl.update_layout(title="Resposta do Sistema (Rastreamento de Meta)", height=400, template="plotly_white")
+            # Linha SP (Verde - Simulada)
+            fig_ctrl.add_trace(go.Scatter(x=datas_ctrl, y=sp_line, name=f'Trajetória ({sim_ritmo}kg/sem)', 
+                                         mode='lines', line=dict(color='#00FF00', dash='dash')))
+            
+            # Linha PV (Vermelha - Real)
+            fig_ctrl.add_trace(go.Scatter(x=df_plot_ctrl['data_dt'], y=df_plot_ctrl['peso_kg'], name='Você (Real)', 
+                                         mode='lines+markers', line=dict(color='#FF4B4B', width=3)))
+            
+            fig_ctrl.update_layout(
+                title=f"Simulador de Trajetória (Meta: {sim_meta_final}kg)", 
+                height=450, 
+                template="plotly_white", 
+                hovermode="x unified"
+            )
+            
+            # Marca a Meta Final
+            fig_ctrl.add_hline(y=sim_meta_final, line_dash="dot", annotation_text="Meta Final Simulado")
+            
             st.plotly_chart(fig_ctrl, use_container_width=True)
             
-            st.caption(f"Controlador: Humano | Planta: Metabolismo | Ganho Kp: {kp}")
+            st.info("""
+            **Como usar o Simulador:**
+            1. Abra a barra lateral (esquerda) se estiver fechada.
+            2. Mude o **Ritmo Semanal** até a linha verde encostar na linha vermelha atual.
+            3. Isso vai te mostrar qual é o seu **ritmo real** de perda hoje.
+            """)
 
 # ============================================================================
 # ABA 2: DASHBOARD ORIGINAL (SEU CÓDIGO ORIGINAL, APENAS INDENTADO)
