@@ -270,4 +270,123 @@ with tab_dash:
                 datas_proj = pd.date_range(start=BASE_DATE, end=hoje + timedelta(days=14))
                 ritmo_diario = float(p['ritmo_semanal']) / 7
                 pesos_estimados = [peso_inicial - (i * ritmo_diario) for i in range(len(datas_proj))]
-                fig_proj = go.Figure
+                fig_proj = go.Figure()
+                fig_proj.add_trace(go.Scatter(x=datas_proj, y=pesos_estimados, mode='lines', name='Meta Ideal', line=dict(color='#29B5E8', dash='dash')))
+                fig_proj.add_trace(go.Scatter(x=df_base['data_dt'], y=df_base['peso_kg'], mode='lines+markers', name='Realizado', line=dict(color='#FF4B4B', width=3)))
+                fig_proj.update_layout(height=300, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1), template="plotly_white")
+                st.plotly_chart(fig_proj, use_container_width=True)
+
+    with c_p2:
+        st.markdown("##### 🏃‍♂️ Consistência de Treino")
+        if not df_merged.empty and 't_passos' in df_merged.columns:
+            fig_tr = make_subplots(specs=[[{"secondary_y": True}]])
+            fig_tr.add_trace(go.Bar(x=df_merged['data'], y=df_merged['t_min'], name='Minutos', marker_color='#F1C40F'), secondary_y=False)
+            fig_tr.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['t_passos'], name='Passos', mode='lines', line=dict(color='#8E44AD', width=2)), secondary_y=True)
+            fig_tr.update_layout(height=300, margin=dict(l=10,r=10,t=20,b=10), showlegend=False, template="plotly_white")
+            st.plotly_chart(fig_tr, use_container_width=True)
+
+    st.divider()
+
+    # --- ROW 4: SAÚDE ---
+    st.markdown("##### 🧬 Indicadores de Saúde")
+    col_s1, col_s2, col_s3 = st.columns(3)
+
+    with col_s1:
+        if not df_medidas.empty:
+            fig_bf = go.Figure(go.Scatter(x=df_medidas['log_date'], y=df_medidas['body_fat_est'], mode='lines+markers', name="BF%", line=dict(color='#e67e22')))
+            fig_bf.update_layout(title="Gordura Corporal (%)", height=250, margin=dict(l=10,r=10,t=30,b=10))
+            st.plotly_chart(fig_bf, use_container_width=True)
+
+    with col_s2:
+        if not df_bp.empty:
+            fig_bp = go.Figure()
+            fig_bp.add_trace(go.Scatter(x=df_bp['measurement_time'], y=df_bp['systolic'], name="Sys", line=dict(color='#c0392b')))
+            fig_bp.add_trace(go.Scatter(x=df_bp['measurement_time'], y=df_bp['diastolic'], name="Dia", line=dict(color='#2980b9')))
+            fig_bp.update_layout(title="Pressão Arterial", height=250, margin=dict(l=10,r=10,t=30,b=10))
+            st.plotly_chart(fig_bp, use_container_width=True)
+
+    with col_s3:
+        if not df_hist.empty:
+            df_macros = df_hist.copy()
+            df_macros['tot'] = (df_macros['tprot']*4 + df_macros['tcarb']*4 + df_macros['tgord']*9).replace(0, 1)
+            fig_stack = go.Figure()
+            fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tprot']*4/df_macros['tot'])*100, name='P', marker_color='#3366CC'))
+            fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tgord']*9/df_macros['tot'])*100, name='G', marker_color='#DC3912'))
+            fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tcarb']*4/df_macros['tot'])*100, name='C', marker_color='#FF9900'))
+            fig_stack.update_layout(title="Distribuição Macros (%)", barmode='stack', height=250, margin=dict(l=10,r=10,t=30,b=10), yaxis=dict(range=[0, 100]), showlegend=False)
+            st.plotly_chart(fig_stack, use_container_width=True)
+
+    st.divider()
+
+    # ============================================================================
+    # 5. ANÁLISE ESTATÍSTICA (EDA)
+    # ============================================================================
+    st.markdown("### 📊 Análise de Tendências (Médias Móveis & Extremos)")
+
+    if not df_merged.empty:
+        cols_eda = ['peso_kg', 'tkcal', 'tprot', 'tcarb', 'tgord', 't_min', 't_passos', 'deficit_real']
+        df_eda = df_merged[['data', *cols_eda]].copy().sort_values('data').fillna(0)
+
+        def calc_mean(df, days, col): return df.tail(days)[col].mean()
+
+        metrics_list = [
+            ("⚖️ Peso Médio (kg)", 'peso_kg'),
+            ("🔥 Calorias (kcal)", 'tkcal'),
+            ("🥩 Proteína (g)", 'tprot'),
+            ("🍞 Carbo (g)", 'tcarb'),
+            ("🥑 Gordura (g)", 'tgord'),
+            ("⏱️ Treino (min)", 't_min'),
+            ("👣 Passos", 't_passos'),
+            ("📉 Déficit Diário", 'deficit_real')
+        ]
+
+        eda_data = []
+        for label, col in metrics_list:
+            row = {
+                "Indicador": label,
+                "3 Dias": f"{calc_mean(df_eda, 3, col):.1f}",
+                "7 Dias": f"{calc_mean(df_eda, 7, col):.1f}",
+                "30 Dias": f"{calc_mean(df_eda, 30, col):.1f}",
+                "Média (Total)": f"{df_eda[col].mean():.1f}",
+                "Mínimo": f"{df_eda[col].min():.1f}",
+                "Máximo": f"{df_eda[col].max():.1f}"
+            }
+            eda_data.append(row)
+
+        st.table(pd.DataFrame(eda_data))
+
+        st.markdown("##### 📈 Evolução de Macronutrientes (Gramas)")
+        fig_macros_grams = go.Figure()
+        fig_macros_grams.add_trace(go.Scatter(x=df_eda['data'], y=df_eda['tprot'], name='Proteína (g)', mode='lines+markers', line=dict(color='#3366CC', width=3)))
+        fig_macros_grams.add_trace(go.Scatter(x=df_eda['data'], y=df_eda['tcarb'], name='Carbo (g)', mode='lines+markers', line=dict(color='#FF9900', width=2)))
+        fig_macros_grams.add_trace(go.Scatter(x=df_eda['data'], y=df_eda['tgord'], name='Gordura (g)', mode='lines+markers', line=dict(color='#DC3912', width=2)))
+        fig_macros_grams.update_layout(height=350, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1), template="plotly_white", yaxis_title="Gramas")
+        st.plotly_chart(fig_macros_grams, use_container_width=True)
+
+    # ============================================================================
+    # 6. GLOSSÁRIO E METODOLOGIA
+    # ============================================================================
+    with st.expander("📚 Metodologia e Glossário Técnico (Clique para abrir)", expanded=False):
+        st.markdown("""
+        ### 1. Estimativa de Gasto Energético (GET)
+        * **Fórmula Base:** Equação de Mifflin-St Jeor (Padrão ouro para obesidade/perda de peso).
+        * **Ajuste:** Multiplicado pelo **Fator de Atividade** (Configurado para 1.2 - Sedentário/Escritório).
+        * **Gasto Ativo:** Adicionamos as calorias do exercício registradas no **Iron N1** (Caminhada/Musculação) sobre o basal.
+        
+        ### 2. Termodinâmica e Déficit
+        * **Déficit Real:** Diferença entre o Gasto Total Estimado e as Calorias Ingeridas.
+        * **Perda Teórica:** Déficit Acumulado / 7700 (Considerando que 1kg de gordura ≈ 7700kcal).
+        * **Índice Termodinâmico:** Razão entre a perda na balança e a perda teórica.
+            * *> 1.0:* Perda acelerada (metabolismo alto ou desidratação).
+            * *< 1.0:* Perda lenta (possível retenção hídrica, erro de contagem ou adaptação metabólica).
+        
+        ### 3. Densidade Calórica
+        * Analisa a relação entre **Volume de Comida (g)** e **Calorias (kcal)**.
+        * **Objetivo:** Manter barras de volume altas e linha de calorias baixa (Saciedade).
+        
+        ### 4. Projeção Linear
+        * Calculada com base na meta de **0.8kg/semana**.
+        * A linha tracejada mostra o caminho ideal até a meta.
+        """)
+
+    st.caption("Leo Tracker Smart View v4.3 | Presentation Mode")
