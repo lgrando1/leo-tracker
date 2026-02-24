@@ -62,11 +62,16 @@ df_perfil = run_query("SELECT * FROM public.perfil WHERE id = 1")
 df_peso = run_query("SELECT * FROM public.peso ORDER BY data ASC")
 df_medidas = run_query("SELECT * FROM public.body_measurements ORDER BY log_date ASC")
 df_bp = run_query("SELECT * FROM public.blood_pressure ORDER BY measurement_time ASC")
+
+# Fetch com extração da Primeira e Última refeição (data_hora)
 df_hist = run_query("""
     SELECT data, SUM(kcal) as tkcal, SUM(proteina) as tprot, SUM(carbo) as tcarb, 
-           SUM(gordura) as tgord, SUM(quantidade) as tqtd
+           SUM(gordura) as tgord, SUM(quantidade) as tqtd,
+           MIN(data_hora) as primeira_refeicao_dt, 
+           MAX(data_hora) as ultima_refeicao_dt
     FROM public.consumo WHERE data >= :d GROUP BY data ORDER BY data ASC
 """, {"d": DATA_INICIO})
+
 df_treino = run_query("""
     SELECT data, SUM(duracao_min) as t_min, SUM(passos) as t_passos, SUM(calorias) as t_cal_out 
     FROM public.exercicios WHERE data >= :d GROUP BY data ORDER BY data ASC
@@ -154,11 +159,19 @@ with tab_qs:
         df_qs['tipo_perda'] = df_qs['fator_desinflamacao'].apply(classificar_perda)
         df_qs['cor'] = df_qs['fator_desinflamacao'].apply(cor_fator)
 
-        # 4. Variável de Jejum (Simulada temporariamente até criação da coluna real no banco)
-        if 'jejum_h' not in df_qs.columns:
-            np.random.seed(42) # Mantém visualização consistente
-            df_qs['jejum_h'] = np.random.uniform(14, 24, size=len(df_qs)).round(1)
-            st.info("💡 **Aviso Tático:** As horas de jejum estão sendo simuladas. Precisamos conectar o `timestamp` das suas refeições do banco de dados para o algoritmo ler o Shift real.")
+        # 4. Motor de Cálculo Real de Jejum
+        # Converte as colunas extraídas para o formato DateTime de segurança
+        df_qs['primeira_refeicao_dt'] = pd.to_datetime(df_qs['primeira_refeicao_dt'])
+        df_qs['ultima_refeicao_dt'] = pd.to_datetime(df_qs['ultima_refeicao_dt'])
+        
+        # Pega o horário da última refeição do dia anterior
+        df_qs['ultima_ref_ontem'] = df_qs['ultima_refeicao_dt'].shift(1)
+        
+        # O Cálculo do Shift: (Primeira de hoje - Última de ontem) convertido em horas
+        df_qs['jejum_h'] = (df_qs['primeira_refeicao_dt'] - df_qs['ultima_ref_ontem']).dt.total_seconds() / 3600
+        
+        # Filtro de Blindagem: Ignora logs de jejuns menores que 8h ou maiores que 48h
+        df_qs['jejum_h'] = df_qs['jejum_h'].apply(lambda x: x if 8 <= x <= 48 else np.nan)
 
         # Limpar o primeiro dia (sem 'ontem' para comparar)
         df_qs = df_qs.dropna(subset=['perda_real_kg'])
@@ -214,20 +227,23 @@ with tab_qs:
             fig_shift = go.Figure()
             
             # Gráfico de Dispersão para encontrar o Sweet Spot do Jejum
+            # Drop NaN apenas para gerar a linha de tendência sem quebrar
+            df_qs_trend = df_qs.dropna(subset=['jejum_h', 'perda_real_kg'])
+            
             fig_shift.add_trace(go.Scatter(
-                x=df_qs['jejum_h'], 
-                y=df_qs['perda_real_kg'],
+                x=df_qs_trend['jejum_h'], 
+                y=df_qs_trend['perda_real_kg'],
                 mode='markers',
-                marker=dict(size=10, color=df_qs['cor'], opacity=0.8, line=dict(width=1, color='black')),
-                text=df_qs['data_dt'],
+                marker=dict(size=10, color=df_qs_trend['cor'], opacity=0.8, line=dict(width=1, color='black')),
+                text=df_qs_trend['data_dt'],
                 hoverinfo='text+x+y'
             ))
             
             # Linha de tendência (Moving Average ou Polyfit simples)
-            if len(df_qs) > 2:
-                z = np.polyfit(df_qs['jejum_h'], df_qs['perda_real_kg'], 1)
-                poly_func = np.poly1d(z) # <-- Variável isolada para não conflitar com o Perfil
-                x_trend = np.linspace(df_qs['jejum_h'].min(), df_qs['jejum_h'].max(), 100)
+            if len(df_qs_trend) > 2:
+                z = np.polyfit(df_qs_trend['jejum_h'], df_qs_trend['perda_real_kg'], 1)
+                poly_func = np.poly1d(z)
+                x_trend = np.linspace(df_qs_trend['jejum_h'].min(), df_qs_trend['jejum_h'].max(), 100)
                 fig_shift.add_trace(go.Scatter(x=x_trend, y=poly_func(x_trend), mode='lines', name='Tendência', line=dict(color='black', dash='dot')))
 
             fig_shift.update_layout(height=400, template="plotly_white", 
