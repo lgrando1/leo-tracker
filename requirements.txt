@@ -7,4 +7,4 @@ pytz
 groq
 xlsxwriter
 fpdf2
-statsmodels==0.14.0
+statsmodels
