@@ -133,9 +133,10 @@ with tab_qs:
         # --- LÓGICA CORE: O ALGORITMO DE QUALIDADE DA PERDA ---
         df_qs = df_merged.copy()
         
-        # 1. Delta de Peso INVERTIDO (Perda de peso = Número Negativo)
-        df_qs['peso_ontem'] = df_qs['peso_kg'].shift(1)
-        df_qs['delta_peso_kg'] = df_qs['peso_kg'] - df_qs['peso_ontem'] 
+    # --- CÁLCULO DE CAUSALIDADE CORRIGIDO ---
+        # 1. Delta de Peso PREDITIVO (Peso de AMANHÃ - Peso de HOJE)
+        df_qs['peso_amanha'] = df_qs['peso_kg'].shift(-1)
+        df_qs['delta_peso_kg'] = df_qs['peso_amanha'] - df_qs['peso_kg']
         
         # 2. Delta Esperado (Déficit resulta em número negativo)
         df_qs['delta_esperado_kg'] = - (df_qs['deficit_real'] / 7700)
