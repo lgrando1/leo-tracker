@@ -5,6 +5,7 @@ from sqlalchemy import create_engine, text
 from datetime import datetime, timedelta
 import pytz
 import plotly.graph_objects as go
+import plotly.express as px
 from plotly.subplots import make_subplots
 
 # ============================================================================
@@ -132,131 +133,201 @@ with tab_qs:
         # --- LÓGICA CORE: O ALGORITMO DE QUALIDADE DA PERDA ---
         df_qs = df_merged.copy()
         
-        # 1. Delta de Peso (O que a balança diz)
+        # 1. Delta de Peso INVERTIDO (Perda de peso = Número Negativo)
         df_qs['peso_ontem'] = df_qs['peso_kg'].shift(1)
-        # Se positivo: perdeu peso. Se negativo: ganhou peso.
-        df_qs['perda_real_kg'] = df_qs['peso_ontem'] - df_qs['peso_kg'] 
+        df_qs['delta_peso_kg'] = df_qs['peso_kg'] - df_qs['peso_ontem'] 
         
-        # 2. Delta Esperado (O que a física diz)
-        df_qs['perda_esperada_kg'] = df_qs['deficit_real'] / 7700
+        # 2. Delta Esperado (Déficit resulta em número negativo)
+        df_qs['delta_esperado_kg'] = - (df_qs['deficit_real'] / 7700)
         
-        # 3. O Fator de Desinflamação
-        df_qs['fator_desinflamacao'] = df_qs['perda_real_kg'] - df_qs['perda_esperada_kg']
+        # 3. O Fator de Desinflamação (Matemática Ajustada)
+        # Se eu perdi -1.0kg e era esperado -0.5kg -> -1.0 - (-0.5) = -0.5 (Perda extra/Água)
+        df_qs['fator_desinflamacao'] = df_qs['delta_peso_kg'] - df_qs['delta_esperado_kg']
         
-        # Classificação do Fator
+        # Classificação do Fator Ajustada
         def classificar_perda(fator):
             if pd.isna(fator): return 'Sem Dados'
-            if fator > 0.1: return 'Água/Desinflamação (Azul)'
-            elif fator < -0.1: return 'Retenção/Glicogênio (Amarelo)'
+            if fator < -0.1: return 'Água/Desinflamação (Azul)' # Negativo = perdeu a mais
+            elif fator > 0.1: return 'Retenção/Glicogênio (Amarelo)' # Positivo = perdeu menos/ganhou
             else: return 'Perda de Gordura Pura (Vermelho)'
             
         def cor_fator(fator):
             if pd.isna(fator): return '#bdc3c7'
-            if fator > 0.1: return '#3498DB' # Azul
-            elif fator < -0.1: return '#F1C40F' # Amarelo
+            if fator < -0.1: return '#3498DB' # Azul
+            elif fator > 0.1: return '#F1C40F' # Amarelo
             else: return '#E74C3C' # Vermelho
             
         df_qs['tipo_perda'] = df_qs['fator_desinflamacao'].apply(classificar_perda)
         df_qs['cor'] = df_qs['fator_desinflamacao'].apply(cor_fator)
 
         # 4. Motor de Cálculo Real de Jejum
-        # Converte as colunas extraídas para o formato DateTime de segurança
         df_qs['primeira_refeicao_dt'] = pd.to_datetime(df_qs['primeira_refeicao_dt'])
         df_qs['ultima_refeicao_dt'] = pd.to_datetime(df_qs['ultima_refeicao_dt'])
-        
-        # Pega o horário da última refeição do dia anterior
         df_qs['ultima_ref_ontem'] = df_qs['ultima_refeicao_dt'].shift(1)
-        
-        # O Cálculo do Shift: (Primeira de hoje - Última de ontem) convertido em horas
         df_qs['jejum_h'] = (df_qs['primeira_refeicao_dt'] - df_qs['ultima_ref_ontem']).dt.total_seconds() / 3600
-        
-        # Filtro de Blindagem: Ignora logs de jejuns menores que 8h ou maiores que 48h
         df_qs['jejum_h'] = df_qs['jejum_h'].apply(lambda x: x if 8 <= x <= 48 else np.nan)
 
         # Limpar o primeiro dia (sem 'ontem' para comparar)
-        df_qs = df_qs.dropna(subset=['perda_real_kg'])
+        df_qs = df_qs.dropna(subset=['delta_peso_kg'])
 
-        # --- EXIBIÇÃO DE KPIs (ÚLTIMO DIA VÁLIDO) ---
+        # --- EXIBIÇÃO DE KPIs ---
         last_day = df_qs.iloc[-1]
         
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("⚖️ Balança (Real)", f"{last_day['perda_real_kg']*1000:.0f} g", "Variação Diária")
-        col2.metric("📐 Termodinâmica (Esperado)", f"{last_day['perda_esperada_kg']*1000:.0f} g", "Gordura Pura Calculada")
+        col1.metric("⚖️ Variação Diária (Real)", f"{last_day['delta_peso_kg']*1000:.0f} g", 
+                    help="Valores negativos indicam perda de peso na balança.")
+        col2.metric("📐 Termodinâmica (Esperado)", f"{last_day['delta_esperado_kg']*1000:.0f} g", 
+                    help="Gordura teórica queimada baseada no déficit.")
         col3.metric("💧 Fator Desinflamação", f"{last_day['fator_desinflamacao']*1000:.0f} g", 
-                    help="Positivo = Eliminou água. Negativo = Reteu líquido/glicogênio.")
+                    help="Negativo = Eliminou água/Desinflamou. Positivo = Reteu líquido/glicogênio.")
         
-        # Status
-        status_color = "🟢" if last_day['tipo_perda'] == 'Perda de Gordura Pura (Vermelho)' else "🔵" if "Desinflamação" in last_day['tipo_perda'] else "🟡"
-        col4.markdown(f"**Qualidade da Perda (Hoje):**<br> {status_color} {last_day['tipo_perda'].split(' (')[0]}", unsafe_allow_html=True)
+        status_color = "🔴" if last_day['tipo_perda'] == 'Perda de Gordura Pura (Vermelho)' else "🔵" if "Desinflamação" in last_day['tipo_perda'] else "🟡"
+        col4.markdown(f"**Qualidade da Variação (Hoje):**<br> {status_color} {last_day['tipo_perda'].split(' (')[0]}", unsafe_allow_html=True)
 
         st.markdown("---")
 
-        # --- GRÁFICOS DO LABORATÓRIO ---
+        # ============================================================================
+        # BLOCO 1: VISÃO GERAL (PESO E CALORIAS)
+        # ============================================================================
+        st.markdown("### 1️⃣ Visão Macro: Peso Absoluto e Combustão Calórica")
+        c_macro1, c_macro2 = st.columns(2)
+
+        with c_macro1:
+            fig_peso_abs = go.Figure()
+            fig_peso_abs.add_trace(go.Scatter(
+                x=df_merged['data_dt'], y=df_merged['peso_kg'],
+                mode='lines+markers', name='Peso Real (kg)', line=dict(color='#2980B9', width=4)
+            ))
+            fig_peso_abs.update_layout(
+                title="Evolução do Peso na Balança", height=500, template="plotly_white", 
+                yaxis_title="Peso (kg)", hovermode="x unified"
+            )
+            st.plotly_chart(fig_peso_abs, use_container_width=True)
+
+        with c_macro2:
+            fig_cal = go.Figure()
+            # Barras de Consumo (Ingestão)
+            fig_cal.add_trace(go.Bar(
+                x=df_merged['data_dt'], y=df_merged['tkcal'],
+                name='Calorias Ingeridas', marker_color='#E74C3C', opacity=0.8
+            ))
+            # Linha de Gasto Total (TDEE)
+            fig_cal.add_trace(go.Scatter(
+                x=df_merged['data_dt'], y=df_merged['get_total'],
+                mode='lines', name='Gasto Energético (TDEE)', line=dict(color='#27AE60', width=3, dash='dot')
+            ))
+            fig_cal.update_layout(
+                title="Déficit Calórico: Consumo vs Gasto Total", height=500, template="plotly_white", 
+                yaxis_title="Kcal", hovermode="x unified", legend=dict(orientation="h", y=1.1)
+            )
+            st.plotly_chart(fig_cal, use_container_width=True)
+
+        st.markdown("---")
+
+        # ============================================================================
+        # BLOCO 2: LABORATÓRIO TERMODINÂMICO (EIXO Y INVERTIDO E SHIFT)
+        # ============================================================================
+        st.markdown("### 2️⃣ O Laboratório: Desinflamação e o Shift de Jejum")
         c_qs1, c_qs2 = st.columns([2, 1])
 
         with c_qs1:
-            st.markdown("##### 🧬 Série Temporal: Água vs Gordura vs Retenção")
+            st.markdown("##### 🧬 Série Temporal: Água vs Gordura vs Retenção (Eixo Invertido)")
             fig_qs_time = go.Figure()
             
-            # Barras representando a perda real de peso, pintadas pela "Qualidade"
+            # Barras de Delta Peso (agora perda é para baixo)
             fig_qs_time.add_trace(go.Bar(
                 x=df_qs['data_dt'], 
-                y=df_qs['perda_real_kg'], 
+                y=df_qs['delta_peso_kg'], 
                 marker_color=df_qs['cor'],
-                name='Variação na Balança',
+                name='Delta Real na Balança',
                 text=df_qs['tipo_perda'],
                 hoverinfo='x+y+text'
             ))
             
-            # Linha tracejada do déficit teórico
+            # Linha tracejada do Delta Esperado
             fig_qs_time.add_trace(go.Scatter(
                 x=df_qs['data_dt'], 
-                y=df_qs['perda_esperada_kg'], 
+                y=df_qs['delta_esperado_kg'], 
                 mode='lines', 
-                name='Queima de Gordura Teórica', 
+                name='Delta Esperado (Teórico)', 
                 line=dict(color='#2ECC71', dash='dash', width=2)
             ))
             
-            fig_qs_time.update_layout(height=400, template="plotly_white", hovermode="x unified",
-                                      yaxis_title="Variação de Peso (kg)",
-                                      legend=dict(orientation="h", y=1.1))
+            fig_qs_time.update_layout(
+                height=500, template="plotly_white", hovermode="x unified",
+                yaxis_title="Variação de Peso (kg) - Perda é Negativo",
+                legend=dict(orientation="h", y=1.1)
+            )
+            # Traça a linha do ZERO
+            fig_qs_time.add_hline(y=0, line_width=1, line_color="black")
             st.plotly_chart(fig_qs_time, use_container_width=True)
 
         with c_qs2:
-            st.markdown("##### ⏳ O 'Shift' Metabólico (Jejum vs Perda)")
+            st.markdown("##### ⏳ O 'Shift': Jejum vs Delta de Peso")
             fig_shift = go.Figure()
-            
-            # Gráfico de Dispersão para encontrar o Sweet Spot do Jejum
-            # Drop NaN apenas para gerar a linha de tendência sem quebrar
-            df_qs_trend = df_qs.dropna(subset=['jejum_h', 'perda_real_kg'])
+            df_qs_trend = df_qs.dropna(subset=['jejum_h', 'delta_peso_kg'])
             
             fig_shift.add_trace(go.Scatter(
                 x=df_qs_trend['jejum_h'], 
-                y=df_qs_trend['perda_real_kg'],
+                y=df_qs_trend['delta_peso_kg'],
                 mode='markers',
-                marker=dict(size=10, color=df_qs_trend['cor'], opacity=0.8, line=dict(width=1, color='black')),
+                marker=dict(size=12, color=df_qs_trend['cor'], opacity=0.8, line=dict(width=1, color='black')),
                 text=df_qs_trend['data_dt'],
                 hoverinfo='text+x+y'
             ))
             
-            # Linha de tendência (Moving Average ou Polyfit simples)
             if len(df_qs_trend) > 2:
-                z = np.polyfit(df_qs_trend['jejum_h'], df_qs_trend['perda_real_kg'], 1)
+                z = np.polyfit(df_qs_trend['jejum_h'], df_qs_trend['delta_peso_kg'], 1)
                 poly_func = np.poly1d(z)
                 x_trend = np.linspace(df_qs_trend['jejum_h'].min(), df_qs_trend['jejum_h'].max(), 100)
                 fig_shift.add_trace(go.Scatter(x=x_trend, y=poly_func(x_trend), mode='lines', name='Tendência', line=dict(color='black', dash='dot')))
 
-            fig_shift.update_layout(height=400, template="plotly_white", 
-                                    xaxis_title="Horas de Jejum", yaxis_title="Delta de Peso (kg)",
-                                    showlegend=False)
+            fig_shift.update_layout(
+                height=500, template="plotly_white", 
+                xaxis_title="Horas de Jejum", yaxis_title="Variação de Peso Seguinte (kg)",
+                showlegend=False
+            )
+            fig_shift.add_hline(y=0, line_width=1, line_dash="dash", line_color="gray")
             st.plotly_chart(fig_shift, use_container_width=True)
 
-        st.markdown("""
-        **🔍 Como ler o seu painel:**
-        * 🔵 **Barras Azuis:** Dias de jejum pesado ou restrição severa. Você perdeu peso na balança muito além da queima calórica (Desinflamou/Perdeu água).
-        * 🔴 **Barras Vermelhas:** O peso que caiu na balança bate exatamente com as calorias que você cortou. Isso é fogo na gordura pura.
-        * 🟡 **Barras Amarelas:** A balança subiu ou estagnou, mas o seu déficit calórico existiu. Isso não é engordar. É retenção hídrica ou reabastecimento de glicogênio nos músculos.
-        """)
+        st.markdown("---")
+
+        # ============================================================================
+        # BLOCO 3: CORRELAÇÃO DE MACRONUTRIENTES
+        # ============================================================================
+        st.markdown("### 3️⃣ Análise de Variáveis: Influência dos Macronutrientes")
+        st.markdown("Esses gráficos mostram como o consumo de **Carboidrato, Proteína e Gordura (eixo X)** no dia anterior afeta o seu **Peso no dia seguinte (eixo Y)**.")
+        
+        c_mac1, c_mac2, c_mac3 = st.columns(3)
+        df_macros_trend = df_qs.dropna(subset=['delta_peso_kg'])
+
+        def plot_macro_scatter(col_x, title, color_hex):
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=df_macros_trend[col_x], y=df_macros_trend['delta_peso_kg'],
+                mode='markers', marker=dict(size=10, color=color_hex, opacity=0.7, line=dict(width=1, color='black')),
+                text=df_macros_trend['data_dt'], hoverinfo='text+x+y'
+            ))
+            if len(df_macros_trend) > 2:
+                z = np.polyfit(df_macros_trend[col_x], df_macros_trend['delta_peso_kg'], 1)
+                p_func = np.poly1d(z)
+                x_tr = np.linspace(df_macros_trend[col_x].min(), df_macros_trend[col_x].max(), 100)
+                fig.add_trace(go.Scatter(x=x_tr, y=p_func(x_tr), mode='lines', line=dict(color='black', dash='dot')))
+            
+            fig.update_layout(
+                title=title, height=400, template="plotly_white",
+                xaxis_title=f"{title.split(' ')[0]} (g)", yaxis_title="Variação de Peso (kg)",
+                showlegend=False, margin=dict(l=10,r=10,t=40,b=10)
+            )
+            fig.add_hline(y=0, line_width=1, line_dash="dash", line_color="gray")
+            return fig
+
+        with c_mac1:
+            st.plotly_chart(plot_macro_scatter('tcarb', '🍞 Carboidratos vs Peso', '#F39C12'), use_container_width=True)
+        with c_mac2:
+            st.plotly_chart(plot_macro_scatter('tprot', '🥩 Proteína vs Peso', '#2980B9'), use_container_width=True)
+        with c_mac3:
+            st.plotly_chart(plot_macro_scatter('tgord', '🥑 Gordura vs Peso', '#C0392B'), use_container_width=True)
 
 # ============================================================================
 # ABA 2: DASHBOARD ORIGINAL (MANTIDO)
@@ -299,7 +370,7 @@ with tab_dash:
             fig_vol.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['tkcal'], name="Calorias In", mode='lines+markers', line=dict(color='#C0392B', width=3)), secondary_y=False)
             fig_vol.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['get_total'], name="Gasto Total (Out)", mode='lines', line=dict(color='#27AE60', width=2, dash='dot')), secondary_y=False)
             
-            fig_vol.update_layout(height=350, margin=dict(l=10,r=10,t=30,b=10), legend=dict(orientation="h", y=1.1), template="plotly_white")
+            fig_vol.update_layout(height=450, margin=dict(l=10,r=10,t=30,b=10), legend=dict(orientation="h", y=1.1), template="plotly_white")
             fig_vol.update_yaxes(title_text="Kcal", secondary_y=False, showgrid=True)
             fig_vol.update_yaxes(title_text="Gramas", secondary_y=True, showgrid=False)
             st.plotly_chart(fig_vol, use_container_width=True)
@@ -344,7 +415,7 @@ with tab_dash:
                 fig_proj = go.Figure()
                 fig_proj.add_trace(go.Scatter(x=datas_proj, y=pesos_estimados, mode='lines', name='Meta Ideal', line=dict(color='#29B5E8', dash='dash')))
                 fig_proj.add_trace(go.Scatter(x=df_base['data_dt'], y=df_base['peso_kg'], mode='lines+markers', name='Realizado', line=dict(color='#FF4B4B', width=3)))
-                fig_proj.update_layout(height=300, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1), template="plotly_white")
+                fig_proj.update_layout(height=400, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1), template="plotly_white")
                 st.plotly_chart(fig_proj, use_container_width=True)
 
     with c_p2:
@@ -353,7 +424,7 @@ with tab_dash:
             fig_tr = make_subplots(specs=[[{"secondary_y": True}]])
             fig_tr.add_trace(go.Bar(x=df_merged['data'], y=df_merged['t_min'], name='Minutos', marker_color='#F1C40F'), secondary_y=False)
             fig_tr.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['t_passos'], name='Passos', mode='lines', line=dict(color='#8E44AD', width=2)), secondary_y=True)
-            fig_tr.update_layout(height=300, margin=dict(l=10,r=10,t=20,b=10), showlegend=False, template="plotly_white")
+            fig_tr.update_layout(height=400, margin=dict(l=10,r=10,t=20,b=10), showlegend=False, template="plotly_white")
             st.plotly_chart(fig_tr, use_container_width=True)
 
     st.divider()
@@ -365,7 +436,7 @@ with tab_dash:
     with col_s1:
         if not df_medidas.empty:
             fig_bf = go.Figure(go.Scatter(x=df_medidas['log_date'], y=df_medidas['body_fat_est'], mode='lines+markers', name="BF%", line=dict(color='#e67e22')))
-            fig_bf.update_layout(title="Gordura Corporal (%)", height=250, margin=dict(l=10,r=10,t=30,b=10))
+            fig_bf.update_layout(title="Gordura Corporal (%)", height=300, margin=dict(l=10,r=10,t=30,b=10))
             st.plotly_chart(fig_bf, use_container_width=True)
 
     with col_s2:
@@ -373,7 +444,7 @@ with tab_dash:
             fig_bp = go.Figure()
             fig_bp.add_trace(go.Scatter(x=df_bp['measurement_time'], y=df_bp['systolic'], name="Sys", line=dict(color='#c0392b')))
             fig_bp.add_trace(go.Scatter(x=df_bp['measurement_time'], y=df_bp['diastolic'], name="Dia", line=dict(color='#2980b9')))
-            fig_bp.update_layout(title="Pressão Arterial", height=250, margin=dict(l=10,r=10,t=30,b=10))
+            fig_bp.update_layout(title="Pressão Arterial", height=300, margin=dict(l=10,r=10,t=30,b=10))
             st.plotly_chart(fig_bp, use_container_width=True)
 
     with col_s3:
@@ -384,7 +455,7 @@ with tab_dash:
             fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tprot']*4/df_macros['tot'])*100, name='P', marker_color='#3366CC'))
             fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tgord']*9/df_macros['tot'])*100, name='G', marker_color='#DC3912'))
             fig_stack.add_trace(go.Bar(x=df_macros['data'], y=(df_macros['tcarb']*4/df_macros['tot'])*100, name='C', marker_color='#FF9900'))
-            fig_stack.update_layout(title="Distribuição Macros (%)", barmode='stack', height=250, margin=dict(l=10,r=10,t=30,b=10), yaxis=dict(range=[0, 100]), showlegend=False)
+            fig_stack.update_layout(title="Distribuição Macros (%)", barmode='stack', height=300, margin=dict(l=10,r=10,t=30,b=10), yaxis=dict(range=[0, 100]), showlegend=False)
             st.plotly_chart(fig_stack, use_container_width=True)
 
     st.divider()
@@ -426,38 +497,18 @@ with tab_dash:
 
         st.table(pd.DataFrame(eda_data))
 
-        st.markdown("##### 📈 Evolução de Macronutrientes (Gramas)")
-        fig_macros_grams = go.Figure()
-        fig_macros_grams.add_trace(go.Scatter(x=df_eda['data'], y=df_eda['tprot'], name='Proteína (g)', mode='lines+markers', line=dict(color='#3366CC', width=3)))
-        fig_macros_grams.add_trace(go.Scatter(x=df_eda['data'], y=df_eda['tcarb'], name='Carbo (g)', mode='lines+markers', line=dict(color='#FF9900', width=2)))
-        fig_macros_grams.add_trace(go.Scatter(x=df_eda['data'], y=df_eda['tgord'], name='Gordura (g)', mode='lines+markers', line=dict(color='#DC3912', width=2)))
-        fig_macros_grams.update_layout(height=350, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1), template="plotly_white", yaxis_title="Gramas")
-        st.plotly_chart(fig_macros_grams, use_container_width=True)
-
     # ============================================================================
     # 6. GLOSSÁRIO E METODOLOGIA
     # ============================================================================
     with st.expander("📚 Metodologia e Glossário Técnico (Clique para abrir)", expanded=False):
         st.markdown("""
         ### 1. Estimativa de Gasto Energético (GET)
-        * **Fórmula Base:** Equação de Mifflin-St Jeor (Padrão ouro para obesidade/perda de peso).
-        * **Ajuste:** Multiplicado pelo **Fator de Atividade** (Configurado para 1.2 - Sedentário/Escritório).
-        * **Gasto Ativo:** Adicionamos as calorias do exercício registradas no **Iron N1** (Caminhada/Musculação) sobre o basal.
+        * **Fórmula Base:** Equação de Mifflin-St Jeor.
+        * **Ajuste:** Multiplicado pelo Fator de Atividade.
         
         ### 2. Termodinâmica e Déficit
         * **Déficit Real:** Diferença entre o Gasto Total Estimado e as Calorias Ingeridas.
         * **Perda Teórica:** Déficit Acumulado / 7700 (Considerando que 1kg de gordura ≈ 7700kcal).
-        * **Índice Termodinâmico:** Razão entre a perda na balança e a perda teórica.
-            * *> 1.0:* Perda acelerada (metabolismo alto ou desidratação).
-            * *< 1.0:* Perda lenta (possível retenção hídrica, erro de contagem ou adaptação metabólica).
-        
-        ### 3. Densidade Calórica
-        * Analisa a relação entre **Volume de Comida (g)** e **Calorias (kcal)**.
-        * **Objetivo:** Manter barras de volume altas e linha de calorias baixa (Saciedade).
-        
-        ### 4. Projeção Linear
-        * Calculada com base na meta de **0.8kg/semana**.
-        * A linha tracejada mostra o caminho ideal até a meta.
         """)
 
-    st.caption("Leo Tracker Smart View v4.4 | Quantified Self Edition")
+    st.caption("Leo Tracker Smart View v4.5 | Quantified Self PRO Edition")
