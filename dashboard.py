@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 from sqlalchemy import create_engine, text
 from datetime import datetime, timedelta
 import pytz
@@ -23,7 +24,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # ============================================================================
-# 2. CONEXÃO BLINDADA (MANTIDA IGUAL)
+# 2. CONEXÃO BLINDADA
 # ============================================================================
 @st.cache_resource(ttl=600)
 def get_engine():
@@ -51,7 +52,7 @@ if st.query_params.get("token") != st.secrets.get("DASH_ACCESS_TOKEN"):
     st.error("🔒 Acesso Restrito. Token inválido."); st.stop()
 
 # ============================================================================
-# 3. ETL (EXTRAÇÃO E TRATAMENTO - MANTIDO IGUAL)
+# 3. ETL (EXTRAÇÃO E TRATAMENTO)
 # ============================================================================
 hoje = datetime.now(pytz.timezone('America/Sao_Paulo')).date()
 DATA_INICIO = pd.to_datetime("2025-12-30").date()
@@ -112,129 +113,137 @@ if not df_hist.empty and not df_peso.empty:
     df_merged['deficit_real'] = df_merged['get_total'] - df_merged['tkcal']
 
 # ============================================================================
-# 4. ORGANIZAÇÃO EM ABAS (NOVO)
+# 4. ORGANIZAÇÃO EM ABAS
 # ============================================================================
-
-# Aqui criamos a separação entre a visão de Engenharia e o seu Dashboard Original
-tab_control, tab_dash = st.tabs(["🎛️ Sala de Controle (Engenharia)", "🦁 Dashboard Original"])
+tab_qs, tab_dash = st.tabs(["🧠 Quantified Self (Engenharia Metabólica)", "🦁 Dashboard Original"])
 
 # ============================================================================
-# ABA 1: VISÃO DE ENGENHARIA DE CONTROLE (COM SIMULADOR)
+# ABA 1: QUANTIFIED SELF - DESINFLAMAÇÃO VS PERDA REAL
 # ============================================================================
-with tab_control:
-    # --- SIDEBAR: O SIMULADOR DE REFERÊNCIA ---
-    with st.sidebar:
-        st.header("🎛️ Parâmetros de Controle")
-        st.markdown("Ajuste a trajetória ideal para recalcular o erro.")
-        
-        # Simuladores (Inputs)
-        sim_meta_final = st.number_input("Meta Final (kg)", min_value=80.0, max_value=150.0, value=130.0, step=1.0)
-        sim_ritmo = st.slider("Ritmo Semanal (kg/sem)", 0.5, 2.0, 0.8, 0.1, help="Velocidade de descida da rampa.")
-        sim_kp = st.slider("Ganho Kp (Agressividade)", 100, 500, 300, 50, help="Quanto cortar de caloria por kg de erro.")
-
-    st.markdown("### 🏭 Monitoramento de Processo (Malha Fechada)")
+with tab_qs:
+    st.markdown("### 🧠 Laboratório de Termodinâmica & Turnos de Jejum")
     
-    if not df_peso.empty:
-        # --- 1. CÁLCULO DA TRAJETÓRIA SIMULADA ---
-        BASE_DATE = pd.to_datetime("2025-12-31").date()
-        df_base = df_peso[df_peso['data_dt'] >= BASE_DATE].sort_values('data_dt')
+    if not df_merged.empty:
+        # --- LÓGICA CORE: O ALGORITMO DE QUALIDADE DA PERDA ---
+        df_qs = df_merged.copy()
         
-        if not df_base.empty:
-            peso_start = float(df_base.iloc[0]['peso_kg'])
-            dias_passados = (hoje - BASE_DATE).days
-            ritmo_diario = sim_ritmo / 7  # Usa o valor do simulador
+        # 1. Delta de Peso (O que a balança diz)
+        df_qs['peso_ontem'] = df_qs['peso_kg'].shift(1)
+        # Se positivo: perdeu peso. Se negativo: ganhou peso.
+        df_qs['perda_real_kg'] = df_qs['peso_ontem'] - df_qs['peso_kg'] 
+        
+        # 2. Delta Esperado (O que a física diz)
+        df_qs['perda_esperada_kg'] = df_qs['deficit_real'] / 7700
+        
+        # 3. O Fator de Desinflamação
+        df_qs['fator_desinflamacao'] = df_qs['perda_real_kg'] - df_qs['perda_esperada_kg']
+        
+        # Classificação do Fator
+        def classificar_perda(fator):
+            if pd.isna(fator): return 'Sem Dados'
+            if fator > 0.1: return 'Água/Desinflamação (Azul)'
+            elif fator < -0.1: return 'Retenção/Glicogênio (Amarelo)'
+            else: return 'Perda de Gordura Pura (Vermelho)'
             
-            # CÁLCULO DO SP HOJE (Baseado no simulador)
-            sp_calculado = peso_start - (dias_passados * ritmo_diario)
-            # Trava: Não deixa o SP ser menor que a meta final do simulador
-            sp_hoje = max(sim_meta_final, sp_calculado) 
+        def cor_fator(fator):
+            if pd.isna(fator): return '#bdc3c7'
+            if fator > 0.1: return '#3498DB' # Azul
+            elif fator < -0.1: return '#F1C40F' # Amarelo
+            else: return '#E74C3C' # Vermelho
             
-            # PV: Onde eu estou
-            pv_hoje = peso_atual
-            
-            # Erro = SP Simulado - PV Real
-            erro_t = sp_hoje - pv_hoje
-            
-            # --- 2. CONTROLADOR (COM GANHO SIMULADO) ---
-            acao_p = sim_kp * erro_t
-            mv_sugerida = float(p['meta_kcal']) + acao_p
-            mv_sugerida = max(1200, min(3000, mv_sugerida)) # Saturação
+        df_qs['tipo_perda'] = df_qs['fator_desinflamacao'].apply(classificar_perda)
+        df_qs['cor'] = df_qs['fator_desinflamacao'].apply(cor_fator)
 
-            # --- 3. DISPLAY (HMI) ---
-            kc1, kc2, kc3, kc4 = st.columns(4)
-            
-            with kc1:
-                st.metric("🎯 Setpoint (Simulado)", f"{sp_hoje:.2f} kg", f"Alvo: {sim_meta_final} kg", 
-                         help=f"Calculado com ritmo de {sim_ritmo}kg/sem")
-            with kc2:
-                st.metric("⚖️ Process Variable (PV)", f"{pv_hoje:.2f} kg", help="Leitura atual da Balança.")
-            with kc3:
-                # Lógica do Delta:
-                # Erro Positivo (ex: 2kg) = SP(135) - PV(133). Estou LEVE (Adiantado).
-                # Erro Negativo (ex: -2kg) = SP(130) - PV(132). Estou PESADO (Atrasado).
-                lbl_status = "✅ No Alvo"
-                cor_delta = "off"
-                
-                if erro_t > 0.5: 
-                    lbl_status = "🚀 Adiantado (Leve)"
-                    cor_delta = "normal" # Verde (Bom)
-                elif erro_t < -0.5:
-                    lbl_status = "⚠️ Atrasado (Pesado)"
-                    cor_delta = "inverse" # Vermelho (Ruim)
-                
-                st.metric("📉 Erro (SP - PV)", f"{erro_t:.2f} kg", delta=lbl_status, delta_color=cor_delta)
-                
-            with kc4:
-                st.metric("🔥 MV Sugerida", f"{int(mv_sugerida)} kcal", delta=f"{int(acao_p)} kcal", 
-                         help="Ingestão sugerida para corrigir o erro atual.")
+        # 4. Variável de Jejum (Simulada temporariamente até criação da coluna real no banco)
+        if 'jejum_h' not in df_qs.columns:
+            np.random.seed(42) # Mantém visualização consistente
+            df_qs['jejum_h'] = np.random.uniform(14, 24, size=len(df_qs)).round(1)
+            st.info("💡 **Aviso Tático:** As horas de jejum estão sendo simuladas. Precisamos conectar o `timestamp` das suas refeições do banco de dados para o algoritmo ler o Shift real.")
 
-            st.markdown("---")
+        # Limpar o primeiro dia (sem 'ontem' para comparar)
+        df_qs = df_qs.dropna(subset=['perda_real_kg'])
+
+        # --- EXIBIÇÃO DE KPIs (ÚLTIMO DIA VÁLIDO) ---
+        last_day = df_qs.iloc[-1]
+        
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("⚖️ Balança (Real)", f"{last_day['perda_real_kg']*1000:.0f} g", "Variação Diária")
+        col2.metric("📐 Termodinâmica (Esperado)", f"{last_day['perda_esperada_kg']*1000:.0f} g", "Gordura Pura Calculada")
+        col3.metric("💧 Fator Desinflamação", f"{last_day['fator_desinflamacao']*1000:.0f} g", 
+                    help="Positivo = Eliminou água. Negativo = Reteu líquido/glicogênio.")
+        
+        # Status
+        status_color = "🟢" if last_day['tipo_perda'] == 'Perda de Gordura Pura (Vermelho)' else "🔵" if "Desinflamação" in last_day['tipo_perda'] else "🟡"
+        col4.markdown(f"**Qualidade da Perda (Hoje):**<br> {status_color} {last_day['tipo_perda'].split(' (')[0]}", unsafe_allow_html=True)
+
+        st.markdown("---")
+
+        # --- GRÁFICOS DO LABORATÓRIO ---
+        c_qs1, c_qs2 = st.columns([2, 1])
+
+        with c_qs1:
+            st.markdown("##### 🧬 Série Temporal: Água vs Gordura vs Retenção")
+            fig_qs_time = go.Figure()
             
-            # --- 4. GRÁFICO DINÂMICO ---
-            # Projetar 4 semanas para frente para ver onde vai dar
-            datas_ctrl = pd.date_range(start=BASE_DATE, end=hoje + timedelta(days=30))
+            # Barras representando a perda real de peso, pintadas pela "Qualidade"
+            fig_qs_time.add_trace(go.Bar(
+                x=df_qs['data_dt'], 
+                y=df_qs['perda_real_kg'], 
+                marker_color=df_qs['cor'],
+                name='Variação na Balança',
+                text=df_qs['tipo_perda'],
+                hoverinfo='x+y+text'
+            ))
             
-            # Gerar linha do SP baseada nos sliders
-            sp_line = []
-            for d in datas_ctrl:
-                dias = (d.date() - BASE_DATE).days
-                val = peso_start - (dias * ritmo_diario)
-                sp_line.append(max(sim_meta_final, val)) # Trava na meta do slider
+            # Linha tracejada do déficit teórico
+            fig_qs_time.add_trace(go.Scatter(
+                x=df_qs['data_dt'], 
+                y=df_qs['perda_esperada_kg'], 
+                mode='lines', 
+                name='Queima de Gordura Teórica', 
+                line=dict(color='#2ECC71', dash='dash', width=2)
+            ))
             
-            # Dados reais
-            df_plot_ctrl = df_peso[df_peso['data_dt'] >= BASE_DATE].copy()
+            fig_qs_time.update_layout(height=400, template="plotly_white", hovermode="x unified",
+                                      yaxis_title="Variação de Peso (kg)",
+                                      legend=dict(orientation="h", y=1.1))
+            st.plotly_chart(fig_qs_time, use_container_width=True)
+
+        with c_qs2:
+            st.markdown("##### ⏳ O 'Shift' Metabólico (Jejum vs Perda)")
+            fig_shift = go.Figure()
             
-            fig_ctrl = go.Figure()
+            # Gráfico de Dispersão para encontrar o Sweet Spot do Jejum
+            fig_shift.add_trace(go.Scatter(
+                x=df_qs['jejum_h'], 
+                y=df_qs['perda_real_kg'],
+                mode='markers',
+                marker=dict(size=10, color=df_qs['cor'], opacity=0.8, line=dict(width=1, color='black')),
+                text=df_qs['data_dt'],
+                hoverinfo='text+x+y'
+            ))
             
-            # Linha SP (Verde - Simulada)
-            fig_ctrl.add_trace(go.Scatter(x=datas_ctrl, y=sp_line, name=f'Trajetória ({sim_ritmo}kg/sem)', 
-                                         mode='lines', line=dict(color='#00FF00', dash='dash')))
-            
-            # Linha PV (Vermelha - Real)
-            fig_ctrl.add_trace(go.Scatter(x=df_plot_ctrl['data_dt'], y=df_plot_ctrl['peso_kg'], name='Você (Real)', 
-                                         mode='lines+markers', line=dict(color='#FF4B4B', width=3)))
-            
-            fig_ctrl.update_layout(
-                title=f"Simulador de Trajetória (Meta: {sim_meta_final}kg)", 
-                height=450, 
-                template="plotly_white", 
-                hovermode="x unified"
-            )
-            
-            # Marca a Meta Final
-            fig_ctrl.add_hline(y=sim_meta_final, line_dash="dot", annotation_text="Meta Final Simulado")
-            
-            st.plotly_chart(fig_ctrl, use_container_width=True)
-            
-            st.info("""
-            **Como usar o Simulador:**
-            1. Abra a barra lateral (esquerda) se estiver fechada.
-            2. Mude o **Ritmo Semanal** até a linha verde encostar na linha vermelha atual.
-            3. Isso vai te mostrar qual é o seu **ritmo real** de perda hoje.
-            """)
+            # Linha de tendência (Moving Average ou Polyfit simples)
+            if len(df_qs) > 2:
+                z = np.polyfit(df_qs['jejum_h'], df_qs['perda_real_kg'], 1)
+                p = np.poly1d(z)
+                x_trend = np.linspace(df_qs['jejum_h'].min(), df_qs['jejum_h'].max(), 100)
+                fig_shift.add_trace(go.Scatter(x=x_trend, y=p(x_trend), mode='lines', name='Tendência', line=dict(color='black', dash='dot')))
+
+            fig_shift.update_layout(height=400, template="plotly_white", 
+                                    xaxis_title="Horas de Jejum", yaxis_title="Delta de Peso (kg)",
+                                    showlegend=False)
+            st.plotly_chart(fig_shift, use_container_width=True)
+
+        st.markdown("""
+        **🔍 Como ler o seu painel:**
+        * 🔵 **Barras Azuis:** Dias de jejum pesado ou restrição severa. Você perdeu peso na balança muito além da queima calórica (Desinflamou/Perdeu água).
+        * 🔴 **Barras Vermelhas:** O peso que caiu na balança bate exatamente com as calorias que você cortou. Isso é fogo na gordura pura.
+        * 🟡 **Barras Amarelas:** A balança subiu ou estagnou, mas o seu déficit calórico existiu. Isso não é engordar. É retenção hídrica ou reabastecimento de glicogênio nos músculos.
+        """)
 
 # ============================================================================
-# ABA 2: DASHBOARD ORIGINAL (SEU CÓDIGO ORIGINAL, APENAS INDENTADO)
+# ABA 2: DASHBOARD ORIGINAL (MANTIDO)
 # ============================================================================
 with tab_dash:
     st.markdown(f"### 🦁 Leo's Performance Dashboard | {hoje.strftime('%d/%m/%Y')}")
@@ -435,4 +444,4 @@ with tab_dash:
         * A linha tracejada mostra o caminho ideal até a meta.
         """)
 
-    st.caption("Leo Tracker Smart View v4.3 | Presentation Mode")
+    st.caption("Leo Tracker Smart View v4.4 | Quantified Self Edition")
