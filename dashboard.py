@@ -224,11 +224,11 @@ with tab_qs:
             ))
             
             # Linha de tendência (Moving Average ou Polyfit simples)
-            if len(df_qs) > 2:
+           if len(df_qs) > 2:
                 z = np.polyfit(df_qs['jejum_h'], df_qs['perda_real_kg'], 1)
-                p = np.poly1d(z)
+                poly_func = np.poly1d(z) # <-- Variável isolada para não conflitar com o Perfil
                 x_trend = np.linspace(df_qs['jejum_h'].min(), df_qs['jejum_h'].max(), 100)
-                fig_shift.add_trace(go.Scatter(x=x_trend, y=p(x_trend), mode='lines', name='Tendência', line=dict(color='black', dash='dot')))
+                fig_shift.add_trace(go.Scatter(x=x_trend, y=poly_func(x_trend), mode='lines', name='Tendência', line=dict(color='black', dash='dot')))
 
             fig_shift.update_layout(height=400, template="plotly_white", 
                                     xaxis_title="Horas de Jejum", yaxis_title="Delta de Peso (kg)",
