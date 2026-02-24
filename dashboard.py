@@ -224,7 +224,7 @@ with tab_qs:
             ))
             
             # Linha de tendência (Moving Average ou Polyfit simples)
-           if len(df_qs) > 2:
+            if len(df_qs) > 2:
                 z = np.polyfit(df_qs['jejum_h'], df_qs['perda_real_kg'], 1)
                 poly_func = np.poly1d(z) # <-- Variável isolada para não conflitar com o Perfil
                 x_trend = np.linspace(df_qs['jejum_h'].min(), df_qs['jejum_h'].max(), 100)
