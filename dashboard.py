@@ -9,6 +9,9 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import statsmodels.api as sm
 from statsmodels.formula.api import ols
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error
 
 # ============================================================================
 # 1. CONFIGURAÇÃO VISUAL
@@ -121,7 +124,31 @@ if not df_hist.empty and not df_peso.empty:
     df_merged['deficit_real'] = df_merged['get_total'] - df_merged['tkcal']
 
 # ============================================================================
-# 4. ORGANIZAÇÃO EM ABAS
+# 4. MOTOR PREDITIVO (EL FAROL)
+# ============================================================================
+def torneio_el_farol(df_modelo):
+    X = df_modelo[['jejum_h', 'tprot', 'tcarb', 'tgord']]
+    y = df_modelo['delta_peso_kg']
+    
+    if len(df_modelo) < 10:
+        return None, None, None, None
+        
+    X_treino, X_teste = X[:-5], X[-5:]
+    y_treino, y_teste = y[:-5], y[-5:]
+    
+    agente_lr = LinearRegression().fit(X_treino, y_treino)
+    agente_rf = RandomForestRegressor(n_estimators=10, random_state=42).fit(X_treino, y_treino)
+    
+    erro_lr = mean_absolute_error(y_teste, agente_lr.predict(X_teste))
+    erro_rf = mean_absolute_error(y_teste, agente_rf.predict(X_teste))
+    
+    vencedor = "Random Forest" if erro_rf < erro_lr else "Regressão Linear Múltipla"
+    menor_erro = min(erro_rf, erro_lr)
+    
+    return vencedor, menor_erro, agente_lr, agente_rf
+
+# ============================================================================
+# 5. ORGANIZAÇÃO EM ABAS
 # ============================================================================
 tab_qs, tab_dash = st.tabs(["🧠 Quantified Self (Engenharia Metabólica)", "🦁 Dashboard Original"])
 
@@ -319,12 +346,12 @@ with tab_qs:
         st.markdown("---")
 
         # ============================================================================
-        # BLOCO 4: ORÁCULO METABÓLICO (DOE & REGRESSÃO MULTIVARIÁVEL)
+        # BLOCO 4: ORÁCULO METABÓLICO (DOE & REGRESSÃO MULTIVARIÁVEL + EL FAROL)
         # ============================================================================
         st.markdown("### 4️⃣ Oráculo Metabólico (DOE & Regressão Múltipla)")
         st.markdown("O algoritmo processa o banco de dados em tempo real (ANOVA contínua) para determinar o coeficiente de cada variável e prever o peso do dia seguinte.")
         
-        # Filtra dados válidos para a regressão
+        # Filtra dados válidos para a regressão e para o El Farol
         df_model = df_qs.dropna(subset=['delta_peso_kg', 'jejum_h', 'tprot', 'tcarb', 'tgord']).copy()
         
         if len(df_model) > 5:
@@ -337,7 +364,7 @@ with tab_qs:
             params = model.params
             pvalues = model.pvalues
             
-            st.markdown(f"**R² do Modelo:** {r2*100:.1f}% | **N amostral:** {len(df_model)} dias calibrados")
+            st.markdown(f"**R² do Modelo Base:** {r2*100:.1f}% | **N amostral:** {len(df_model)} dias calibrados")
             
             # Equação Metabólica
             st.latex(rf"\Delta Peso (kg) = {params['Intercept']:.3f} {params['jejum_h']:+.4f}(Jejum) {params['tprot']:+.4f}(Prot) {params['tcarb']:+.4f}(Carbo) {params['tgord']:+.4f}(Gord)")
@@ -365,22 +392,37 @@ with tab_qs:
                 st.caption("🟢 P < 0.05: Alta Relevância | 🟠 P < 0.15: Relevância Moderada | ⚪ > 0.15: Ruído Sistêmico")
                 
             with c_stats2:
-                st.markdown("##### 🔮 Simulador: O que acontece amanhã?")
-                st.markdown("Altere os valores e veja a predição termodinâmica instantânea baseada no seu DOE.")
+                st.markdown("##### 🏆 Torneio El Farol (Agente no Comando)")
                 
-                sim_col1, sim_col2 = st.columns(2)
-                with sim_col1:
-                    sim_jej = st.slider("Jejum (h)", 8.0, 24.0, 16.0, 0.5)
-                    sim_prot = st.slider("Proteína (g)", 50, 250, int(p['meta_proteina']), 5)
-                with sim_col2:
-                    sim_carb = st.slider("Carbo (g)", 20, 300, int(p['meta_carbo']), 5)
-                    sim_gord = st.slider("Gordura (g)", 20, 150, int(p['meta_gordura']), 5)
+                # Executa o torneio com o dataframe limpo
+                vencedor, menor_erro, mod_lr, mod_rf = torneio_el_farol(df_model)
                 
-                # Aplica a fórmula com os dados dos sliders
-                pred_delta = params['Intercept'] + (params['jejum_h']*sim_jej) + (params['tprot']*sim_prot) + (params['tcarb']*sim_carb) + (params['tgord']*sim_gord)
-                
-                st.metric("Predição na Balança para Amanhã", f"{pred_delta*1000:+.0f} g", delta_color="inverse", 
-                          help="Cálculo matemático: Intercepto + (Coeficientes * Sliders)")
+                if vencedor:
+                    st.info(f"**Líder Atual:** {vencedor} | **Margem de Erro:** {menor_erro*1000:.0f} g")
+                    
+                    st.markdown("##### 🔮 Simulador Preditivo")
+                    sim_col1, sim_col2 = st.columns(2)
+                    with sim_col1:
+                        sim_jej = st.slider("Jejum (h)", 8.0, 24.0, 16.0, 0.5)
+                        sim_prot = st.slider("Proteína (g)", 50, 250, int(p['meta_proteina']), 5)
+                    with sim_col2:
+                        sim_carb = st.slider("Carbo (g)", 20, 300, int(p['meta_carbo']), 5)
+                        sim_gord = st.slider("Gordura (g)", 20, 150, int(p['meta_gordura']), 5)
+                    
+                    # O Agente Vencedor assume o cálculo
+                    entrada_sim = pd.DataFrame({
+                        'jejum_h': [sim_jej], 'tprot': [sim_prot], 
+                        'tcarb': [sim_carb], 'tgord': [sim_gord]
+                    })
+                    
+                    if vencedor == "Random Forest":
+                        pred_delta = mod_rf.predict(entrada_sim)[0]
+                    else:
+                        pred_delta = mod_lr.predict(entrada_sim)[0]
+                    
+                    st.metric("Predição na Balança (Amanhã)", f"{pred_delta*1000:+.0f} g", delta_color="inverse")
+                else:
+                    st.warning("⏳ Aguardando acúmulo de dados (mínimo 10 dias) para iniciar o Torneio El Farol.")
         else:
             st.info("📊 Aguardando mais logs simultâneos de (Comida + Peso + Jejum) para gerar o modelo matemático preditivo.")
 
@@ -566,6 +608,7 @@ with tab_dash:
         ### 3. Modelo Matemático (Oráculo)
         * **Metodologia:** Regressão Linear Múltipla (Ordinary Least Squares - OLS) baseada no Design de Experimentos (DOE).
         * **Mecanismo:** Analisa o consumo (variáveis independentes) e cruza com a variação de peso do *dia seguinte* (variável dependente) para estabelecer causalidade.
+        * **Torneio El Farol:** Seleção dinâmica entre Regressão Linear e Random Forest baseada no menor MAE (Mean Absolute Error) dos últimos 5 dias.
         """)
 
-    st.caption("Leo Tracker Smart View v5.0 | Quantified Self & Predictive Edition")
+    st.caption("Leo Tracker Smart View v6.0 | Quantified Self & El Farol Predictive Edition")
