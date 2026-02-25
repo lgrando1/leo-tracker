@@ -24,7 +24,6 @@ st.markdown("""
     div[data-testid="stMetric"] { background-color: #f0f2f6; padding: 15px; border-radius: 12px; border: 1px solid #e0e0e0; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); }
     @media (prefers-color-scheme: dark) { div[data-testid="stMetric"] { background-color: #262730; border: 1px solid #464b5c; } }
     h1, h2, h3 { font-family: 'Helvetica', sans-serif; font-weight: 700; }
-    /* Estilo para aba de engenharia */
     .control-text { font-family: 'Consolas', monospace; color: #4CAF50; }
     </style>
     """, unsafe_allow_html=True)
@@ -53,7 +52,6 @@ def run_query(query, params=None, is_select=True):
     except Exception:
         return pd.DataFrame()
 
-# --- TRAVA DE SEGURANÇA (TOKEN) ---
 if st.query_params.get("token") != st.secrets.get("DASH_ACCESS_TOKEN"):
     st.error("🔒 Acesso Restrito. Token inválido."); st.stop()
 
@@ -63,13 +61,11 @@ if st.query_params.get("token") != st.secrets.get("DASH_ACCESS_TOKEN"):
 hoje = datetime.now(pytz.timezone('America/Sao_Paulo')).date()
 DATA_INICIO = pd.to_datetime("2025-12-30").date()
 
-# Fetch Data
 df_perfil = run_query("SELECT * FROM public.perfil WHERE id = 1")
 df_peso = run_query("SELECT * FROM public.peso ORDER BY data ASC")
 df_medidas = run_query("SELECT * FROM public.body_measurements ORDER BY log_date ASC")
 df_bp = run_query("SELECT * FROM public.blood_pressure ORDER BY measurement_time ASC")
 
-# Fetch com extração da Primeira e Última refeição (data_hora)
 df_hist = run_query("""
     SELECT data, SUM(kcal) as tkcal, SUM(proteina) as tprot, SUM(carbo) as tcarb, 
            SUM(gordura) as tgord, SUM(quantidade) as tqtd,
@@ -83,11 +79,9 @@ df_treino = run_query("""
     FROM public.exercicios WHERE data >= :d GROUP BY data ORDER BY data ASC
 """, {"d": DATA_INICIO})
 
-# Fetch Hoje
 df_hoje_comida = run_query("SELECT * FROM public.consumo WHERE data = :d", {"d": hoje})
 df_hoje_treino = run_query("SELECT * FROM public.exercicios WHERE data = :d", {"d": hoje})
 
-# --- SETUP PERFIL ---
 if not df_perfil.empty:
     p = df_perfil.iloc[0]
 else:
@@ -97,18 +91,15 @@ else:
 fator_atividade = float(p.get('fator_atividade') or 1.2)
 peso_atual = float(df_peso.iloc[-1]['peso_kg']) if not df_peso.empty else 140.0
 
-# --- MERGE INTELIGENTE ---
 df_merged = pd.DataFrame()
 if not df_hist.empty and not df_peso.empty:
     df_hist['data_dt'] = pd.to_datetime(df_hist['data']).dt.date
     df_peso['data_dt'] = pd.to_datetime(df_peso['data']).dt.date
     
-    # Base: Consumo + Peso
     df_merged = pd.merge(df_hist, df_peso[['data_dt', 'peso_kg']], on='data_dt', how='left').ffill()
     if df_merged['peso_kg'].isnull().any():
          df_merged['peso_kg'] = df_merged['peso_kg'].fillna(method='bfill').fillna(peso_atual)
 
-    # Add Treino
     if not df_treino.empty:
         df_treino['data_dt'] = pd.to_datetime(df_treino['data']).dt.date
         df_merged = pd.merge(df_merged, df_treino[['data_dt', 't_min', 't_passos', 't_cal_out']], on='data_dt', how='left')
@@ -116,9 +107,7 @@ if not df_hist.empty and not df_peso.empty:
     else:
         df_merged['t_min'] = 0; df_merged['t_passos'] = 0; df_merged['t_cal_out'] = 0
     
-    # Cálculos Avançados
     idade, altura = int(p.get('idade', 41)), int(p.get('altura_cm', 178))
-    # GET (Mifflin-St Jeor)
     df_merged['get_basal'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * fator_atividade
     df_merged['get_total'] = df_merged['get_basal'] + df_merged['t_cal_out']
     df_merged['deficit_real'] = df_merged['get_total'] - df_merged['tkcal']
@@ -131,41 +120,49 @@ def torneio_el_farol(df_modelo):
     y = df_modelo['delta_peso_kg']
     
     if len(df_modelo) < 10:
-        return None, None, None, None
+        return None, None, None, None, None
         
     X_treino, X_teste = X[:-5], X[-5:]
     y_treino, y_teste = y[:-5], y[-5:]
     
+    datas_teste = df_modelo['data_dt'].iloc[-5:] if 'data_dt' in df_modelo.columns else df_modelo.index[-5:]
+    
     agente_lr = LinearRegression().fit(X_treino, y_treino)
     agente_rf = RandomForestRegressor(n_estimators=10, random_state=42).fit(X_treino, y_treino)
     
-    erro_lr = mean_absolute_error(y_teste, agente_lr.predict(X_teste))
-    erro_rf = mean_absolute_error(y_teste, agente_rf.predict(X_teste))
+    preds_lr = agente_lr.predict(X_teste)
+    preds_rf = agente_rf.predict(X_teste)
+    
+    erro_lr = mean_absolute_error(y_teste, preds_lr)
+    erro_rf = mean_absolute_error(y_teste, preds_rf)
     
     vencedor = "Random Forest" if erro_rf < erro_lr else "Regressão Linear Múltipla"
     menor_erro = min(erro_rf, erro_lr)
     
-    return vencedor, menor_erro, agente_lr, agente_rf
+    df_transparencia = pd.DataFrame({
+        'Data': datas_teste,
+        'Real (g)': y_teste.values * 1000,
+        'Previsto LR (g)': preds_lr * 1000,
+        'Previsto RF (g)': preds_rf * 1000
+    })
+    df_transparencia['Erro LR (g)'] = abs(df_transparencia['Real (g)'] - df_transparencia['Previsto LR (g)'])
+    df_transparencia['Erro RF (g)'] = abs(df_transparencia['Real (g)'] - df_transparencia['Previsto RF (g)'])
+    
+    return vencedor, menor_erro, agente_lr, agente_rf, df_transparencia
 
 # ============================================================================
 # 5. ORGANIZAÇÃO EM ABAS
 # ============================================================================
 tab_qs, tab_dash = st.tabs(["🧠 Quantified Self (Engenharia Metabólica)", "🦁 Dashboard Original"])
 
-# ============================================================================
-# ABA 1: QUANTIFIED SELF - DESINFLAMAÇÃO VS PERDA REAL
-# ============================================================================
 with tab_qs:
     st.markdown("### 🧠 Laboratório de Termodinâmica & Turnos de Jejum")
     
     if not df_merged.empty:
-        # --- LÓGICA CORE: O ALGORITMO DE QUALIDADE DA PERDA ---
         df_qs = df_merged.copy()
         
-        # --- CÁLCULO DE CAUSALIDADE CORRIGIDO ---
         df_qs['peso_amanha'] = df_qs['peso_kg'].shift(-1)
         df_qs['delta_peso_kg'] = df_qs['peso_amanha'] - df_qs['peso_kg']
-        
         df_qs['delta_esperado_kg'] = - (df_qs['deficit_real'] / 7700)
         df_qs['fator_desinflamacao'] = df_qs['delta_peso_kg'] - df_qs['delta_esperado_kg']
         
@@ -184,7 +181,6 @@ with tab_qs:
         df_qs['tipo_perda'] = df_qs['fator_desinflamacao'].apply(classificar_perda)
         df_qs['cor'] = df_qs['fator_desinflamacao'].apply(cor_fator)
 
-        # 4. Motor de Cálculo Real de Jejum
         df_qs['primeira_refeicao_dt'] = pd.to_datetime(df_qs['primeira_refeicao_dt'])
         df_qs['ultima_refeicao_dt'] = pd.to_datetime(df_qs['ultima_refeicao_dt'])
         df_qs['ultima_ref_ontem'] = df_qs['ultima_refeicao_dt'].shift(1)
@@ -193,90 +189,46 @@ with tab_qs:
 
         df_qs = df_qs.dropna(subset=['delta_peso_kg'])
 
-        # --- EXIBIÇÃO DE KPIs ---
         last_day = df_qs.iloc[-1]
         
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("⚖️ Variação Diária (Real)", f"{last_day['delta_peso_kg']*1000:.0f} g", 
-                    help="Valores negativos indicam perda de peso na balança.")
-        col2.metric("📐 Termodinâmica (Esperado)", f"{last_day['delta_esperado_kg']*1000:.0f} g", 
-                    help="Gordura teórica queimada baseada no déficit.")
-        col3.metric("💧 Fator Desinflamação", f"{last_day['fator_desinflamacao']*1000:.0f} g", 
-                    help="Negativo = Eliminou água/Desinflamou. Positivo = Reteu líquido/glicogênio.")
-        
+        col1.metric("⚖️ Variação Diária (Real)", f"{last_day['delta_peso_kg']*1000:.0f} g", help="Valores negativos indicam perda de peso na balança.")
+        col2.metric("📐 Termodinâmica (Esperado)", f"{last_day['delta_esperado_kg']*1000:.0f} g", help="Gordura teórica queimada baseada no déficit.")
+        col3.metric("💧 Fator Desinflamação", f"{last_day['fator_desinflamacao']*1000:.0f} g", help="Negativo = Eliminou água/Desinflamou. Positivo = Reteu líquido/glicogênio.")
         status_color = "🔴" if last_day['tipo_perda'] == 'Perda de Gordura Pura (Vermelho)' else "🔵" if "Desinflamação" in last_day['tipo_perda'] else "🟡"
         col4.markdown(f"**Qualidade da Variação (Hoje):**<br> {status_color} {last_day['tipo_perda'].split(' (')[0]}", unsafe_allow_html=True)
 
         st.markdown("---")
 
         # ============================================================================
-        # BLOCO 1: VISÃO GERAL (PESO E CALORIAS)
+        # BLOCO 1 E 2: GRÁFICOS
         # ============================================================================
         st.markdown("### 1️⃣ Visão Macro: Peso Absoluto e Combustão Calórica")
         c_macro1, c_macro2 = st.columns(2)
 
         with c_macro1:
             fig_peso_abs = go.Figure()
-            fig_peso_abs.add_trace(go.Scatter(
-                x=df_merged['data_dt'], y=df_merged['peso_kg'],
-                mode='lines+markers', name='Peso Real (kg)', line=dict(color='#2980B9', width=4)
-            ))
-            fig_peso_abs.update_layout(
-                title="Evolução do Peso na Balança", height=500, template="plotly_white", 
-                yaxis_title="Peso (kg)", hovermode="x unified"
-            )
+            fig_peso_abs.add_trace(go.Scatter(x=df_merged['data_dt'], y=df_merged['peso_kg'], mode='lines+markers', name='Peso Real (kg)', line=dict(color='#2980B9', width=4)))
+            fig_peso_abs.update_layout(title="Evolução do Peso na Balança", height=500, template="plotly_white", yaxis_title="Peso (kg)", hovermode="x unified")
             st.plotly_chart(fig_peso_abs, use_container_width=True)
 
         with c_macro2:
             fig_cal = go.Figure()
-            fig_cal.add_trace(go.Bar(
-                x=df_merged['data_dt'], y=df_merged['tkcal'],
-                name='Calorias Ingeridas', marker_color='#E74C3C', opacity=0.8
-            ))
-            fig_cal.add_trace(go.Scatter(
-                x=df_merged['data_dt'], y=df_merged['get_total'],
-                mode='lines', name='Gasto Energético (TDEE)', line=dict(color='#27AE60', width=3, dash='dot')
-            ))
-            fig_cal.update_layout(
-                title="Déficit Calórico: Consumo vs Gasto Total", height=500, template="plotly_white", 
-                yaxis_title="Kcal", hovermode="x unified", legend=dict(orientation="h", y=1.1)
-            )
+            fig_cal.add_trace(go.Bar(x=df_merged['data_dt'], y=df_merged['tkcal'], name='Calorias Ingeridas', marker_color='#E74C3C', opacity=0.8))
+            fig_cal.add_trace(go.Scatter(x=df_merged['data_dt'], y=df_merged['get_total'], mode='lines', name='Gasto Energético (TDEE)', line=dict(color='#27AE60', width=3, dash='dot')))
+            fig_cal.update_layout(title="Déficit Calórico: Consumo vs Gasto Total", height=500, template="plotly_white", yaxis_title="Kcal", hovermode="x unified", legend=dict(orientation="h", y=1.1))
             st.plotly_chart(fig_cal, use_container_width=True)
 
         st.markdown("---")
-
-        # ============================================================================
-        # BLOCO 2: LABORATÓRIO TERMODINÂMICO
-        # ============================================================================
         st.markdown("### 2️⃣ O Laboratório: Desinflamação e o Shift de Jejum")
         c_qs1, c_qs2 = st.columns([2, 1])
 
         with c_qs1:
             st.markdown("##### 🧬 Série Temporal: Água vs Gordura vs Retenção (Eixo Invertido)")
             fig_qs_time = go.Figure()
-            
-            fig_qs_time.add_trace(go.Bar(
-                x=df_qs['data_dt'], 
-                y=df_qs['delta_peso_kg'], 
-                marker_color=df_qs['cor'],
-                name='Delta Real na Balança',
-                text=df_qs['tipo_perda'],
-                hoverinfo='x+y+text'
-            ))
-            
-            fig_qs_time.add_trace(go.Scatter(
-                x=df_qs['data_dt'], 
-                y=df_qs['delta_esperado_kg'], 
-                mode='lines', 
-                name='Delta Esperado (Teórico)', 
-                line=dict(color='#2ECC71', dash='dash', width=2)
-            ))
-            
-            fig_qs_time.update_layout(
-                height=500, template="plotly_white", hovermode="x unified",
-                yaxis_title="Variação de Peso (kg) - Perda é Negativo",
-                legend=dict(orientation="h", y=1.1)
-            )
+            fig_qs_time.add_trace(go.Bar(x=df_qs['data_dt'], y=df_qs['delta_peso_kg'], marker_color=df_qs['cor'], name='Delta Real na Balança', text=df_qs['tipo_perda'], hoverinfo='x+y+text'))
+            fig_qs_time.add_trace(go.Scatter(x=df_qs['data_dt'], y=df_qs['delta_esperado_kg'], mode='lines', name='Delta Esperado (Teórico)', line=dict(color='#2ECC71', dash='dash', width=2)))
+            fig_qs_time.update_layout(height=500, template="plotly_white", hovermode="x unified", yaxis_title="Variação de Peso (kg) - Perda é Negativo", legend=dict(orientation="h", y=1.1))
             fig_qs_time.add_hline(y=0, line_width=1, line_color="black")
             st.plotly_chart(fig_qs_time, use_container_width=True)
 
@@ -284,27 +236,13 @@ with tab_qs:
             st.markdown("##### ⏳ O 'Shift': Jejum vs Delta de Peso")
             fig_shift = go.Figure()
             df_qs_trend = df_qs.dropna(subset=['jejum_h', 'delta_peso_kg'])
-            
-            fig_shift.add_trace(go.Scatter(
-                x=df_qs_trend['jejum_h'], 
-                y=df_qs_trend['delta_peso_kg'],
-                mode='markers',
-                marker=dict(size=12, color=df_qs_trend['cor'], opacity=0.8, line=dict(width=1, color='black')),
-                text=df_qs_trend['data_dt'],
-                hoverinfo='text+x+y'
-            ))
-            
+            fig_shift.add_trace(go.Scatter(x=df_qs_trend['jejum_h'], y=df_qs_trend['delta_peso_kg'], mode='markers', marker=dict(size=12, color=df_qs_trend['cor'], opacity=0.8, line=dict(width=1, color='black')), text=df_qs_trend['data_dt'], hoverinfo='text+x+y'))
             if len(df_qs_trend) > 2:
                 z = np.polyfit(df_qs_trend['jejum_h'], df_qs_trend['delta_peso_kg'], 1)
                 poly_func = np.poly1d(z)
                 x_trend = np.linspace(df_qs_trend['jejum_h'].min(), df_qs_trend['jejum_h'].max(), 100)
                 fig_shift.add_trace(go.Scatter(x=x_trend, y=poly_func(x_trend), mode='lines', name='Tendência', line=dict(color='black', dash='dot')))
-
-            fig_shift.update_layout(
-                height=500, template="plotly_white", 
-                xaxis_title="Horas de Jejum", yaxis_title="Variação de Peso Seguinte (kg)",
-                showlegend=False
-            )
+            fig_shift.update_layout(height=500, template="plotly_white", xaxis_title="Horas de Jejum", yaxis_title="Variação de Peso Seguinte (kg)", showlegend=False)
             fig_shift.add_hline(y=0, line_width=1, line_dash="dash", line_color="gray")
             st.plotly_chart(fig_shift, use_container_width=True)
 
@@ -314,28 +252,18 @@ with tab_qs:
         # BLOCO 3: CORRELAÇÃO DE MACRONUTRIENTES
         # ============================================================================
         st.markdown("### 3️⃣ Análise de Variáveis: Influência dos Macronutrientes")
-        
         c_mac1, c_mac2, c_mac3 = st.columns(3)
         df_macros_trend = df_qs.dropna(subset=['delta_peso_kg'])
 
         def plot_macro_scatter(col_x, title, color_hex):
             fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=df_macros_trend[col_x], y=df_macros_trend['delta_peso_kg'],
-                mode='markers', marker=dict(size=10, color=color_hex, opacity=0.7, line=dict(width=1, color='black')),
-                text=df_macros_trend['data_dt'], hoverinfo='text+x+y'
-            ))
+            fig.add_trace(go.Scatter(x=df_macros_trend[col_x], y=df_macros_trend['delta_peso_kg'], mode='markers', marker=dict(size=10, color=color_hex, opacity=0.7, line=dict(width=1, color='black')), text=df_macros_trend['data_dt'], hoverinfo='text+x+y'))
             if len(df_macros_trend) > 2:
                 z = np.polyfit(df_macros_trend[col_x], df_macros_trend['delta_peso_kg'], 1)
                 p_func = np.poly1d(z)
                 x_tr = np.linspace(df_macros_trend[col_x].min(), df_macros_trend[col_x].max(), 100)
                 fig.add_trace(go.Scatter(x=x_tr, y=p_func(x_tr), mode='lines', line=dict(color='black', dash='dot')))
-            
-            fig.update_layout(
-                title=title, height=400, template="plotly_white",
-                xaxis_title=f"{title.split(' ')[0]} (g)", yaxis_title="Variação de Peso (kg)",
-                showlegend=False, margin=dict(l=10,r=10,t=40,b=10)
-            )
+            fig.update_layout(title=title, height=400, template="plotly_white", xaxis_title=f"{title.split(' ')[0]} (g)", yaxis_title="Variação de Peso (kg)", showlegend=False, margin=dict(l=10,r=10,t=40,b=10))
             fig.add_hline(y=0, line_width=1, line_dash="dash", line_color="gray")
             return fig
 
@@ -349,57 +277,50 @@ with tab_qs:
         # BLOCO 4: ORÁCULO METABÓLICO (DOE & REGRESSÃO MULTIVARIÁVEL + EL FAROL)
         # ============================================================================
         st.markdown("### 4️⃣ Oráculo Metabólico (DOE & Regressão Múltipla)")
-        st.markdown("O algoritmo processa o banco de dados em tempo real (ANOVA contínua) para determinar o coeficiente de cada variável e prever o peso do dia seguinte.")
         
-        # Filtra dados válidos para a regressão e para o El Farol
         df_model = df_qs.dropna(subset=['delta_peso_kg', 'jejum_h', 'tprot', 'tcarb', 'tgord']).copy()
         
         if len(df_model) > 5:
-            # Roda o modelo OLS
             formula = 'delta_peso_kg ~ jejum_h + tprot + tcarb + tgord'
             model = ols(formula, data=df_model).fit()
             
-            # Extrai os dados estatísticos
             r2 = model.rsquared
             params = model.params
             pvalues = model.pvalues
             
             st.markdown(f"**R² do Modelo Base:** {r2*100:.1f}% | **N amostral:** {len(df_model)} dias calibrados")
-            
-            # Equação Metabólica
             st.latex(rf"\Delta Peso (kg) = {params['Intercept']:.3f} {params['jejum_h']:+.4f}(Jejum) {params['tprot']:+.4f}(Prot) {params['tcarb']:+.4f}(Carbo) {params['tgord']:+.4f}(Gord)")
             
             c_stats1, c_stats2 = st.columns([1, 1.2])
             
             with c_stats1:
                 st.markdown("##### 🔬 Peso Estatístico (P-Valor)")
-                # Monta a tabela elegante
-                df_resumo = pd.DataFrame({
-                    'Coeficiente (kg)': params,
-                    'P-Valor': pvalues
-                }).drop('Intercept')
+                df_resumo = pd.DataFrame({'Coeficiente (kg)': params, 'P-Valor': pvalues}).drop('Intercept')
                 df_resumo.index = ['Jejum (h)', 'Proteína (g)', 'Carbo (g)', 'Gordura (g)']
                 
-                # Formatação condicional do P-Valor
                 def highlight_pval(val):
                     if val < 0.05: return 'color: #27AE60; font-weight: bold;'
                     elif val < 0.15: return 'color: #F39C12; font-weight: bold;'
                     return 'color: #7F8C8D;'
                 
-                st.dataframe(df_resumo.style.map(highlight_pval, subset=['P-Valor']).format({
-                    'Coeficiente (kg)': '{:+.4f}', 'P-Valor': '{:.3f}'
-                }), use_container_width=True)
+                st.dataframe(df_resumo.style.map(highlight_pval, subset=['P-Valor']).format({'Coeficiente (kg)': '{:+.4f}', 'P-Valor': '{:.3f}'}), use_container_width=True)
                 st.caption("🟢 P < 0.05: Alta Relevância | 🟠 P < 0.15: Relevância Moderada | ⚪ > 0.15: Ruído Sistêmico")
                 
             with c_stats2:
                 st.markdown("##### 🏆 Torneio El Farol (Agente no Comando)")
                 
-                # Executa o torneio com o dataframe limpo
-                vencedor, menor_erro, mod_lr, mod_rf = torneio_el_farol(df_model)
+                vencedor, menor_erro, mod_lr, mod_rf, df_auditoria = torneio_el_farol(df_model)
                 
                 if vencedor:
                     st.info(f"**Líder Atual:** {vencedor} | **Margem de Erro:** {menor_erro*1000:.0f} g")
                     
+                    with st.expander("🔍 Auditoria dos Agentes (Ver Histórico de Erros)", expanded=False):
+                        st.markdown("Veja o que cada modelo previu nos últimos 5 dias contra o que realmente aconteceu.")
+                        st.dataframe(df_auditoria.style.format({
+                            'Real (g)': '{:+.0f}', 'Previsto LR (g)': '{:+.0f}', 'Previsto RF (g)': '{:+.0f}',
+                            'Erro LR (g)': '{:.0f}', 'Erro RF (g)': '{:.0f}'
+                        }), use_container_width=True, hide_index=True)
+
                     st.markdown("##### 🔮 Simulador Preditivo")
                     sim_col1, sim_col2 = st.columns(2)
                     with sim_col1:
@@ -409,16 +330,10 @@ with tab_qs:
                         sim_carb = st.slider("Carbo (g)", 20, 300, int(p['meta_carbo']), 5)
                         sim_gord = st.slider("Gordura (g)", 20, 150, int(p['meta_gordura']), 5)
                     
-                    # O Agente Vencedor assume o cálculo
-                    entrada_sim = pd.DataFrame({
-                        'jejum_h': [sim_jej], 'tprot': [sim_prot], 
-                        'tcarb': [sim_carb], 'tgord': [sim_gord]
-                    })
+                    entrada_sim = pd.DataFrame({'jejum_h': [sim_jej], 'tprot': [sim_prot], 'tcarb': [sim_carb], 'tgord': [sim_gord]})
                     
-                    if vencedor == "Random Forest":
-                        pred_delta = mod_rf.predict(entrada_sim)[0]
-                    else:
-                        pred_delta = mod_lr.predict(entrada_sim)[0]
+                    if vencedor == "Random Forest": pred_delta = mod_rf.predict(entrada_sim)[0]
+                    else: pred_delta = mod_lr.predict(entrada_sim)[0]
                     
                     st.metric("Predição na Balança (Amanhã)", f"{pred_delta*1000:+.0f} g", delta_color="inverse")
                 else:
@@ -432,7 +347,6 @@ with tab_qs:
 with tab_dash:
     st.markdown(f"### 🦁 Leo's Performance Dashboard | {hoje.strftime('%d/%m/%Y')}")
 
-    # --- KPI ROW 1: DO DIA ---
     k_act = df_hoje_comida['kcal'].sum() if not df_hoje_comida.empty else 0
     p_act = df_hoje_comida['proteina'].sum() if not df_hoje_comida.empty else 0
     meta_agua = round((peso_atual * 35) / 1000, 1)
@@ -455,7 +369,6 @@ with tab_dash:
 
     st.divider()
 
-    # --- ROW 2: ENERGIA & DENSIDADE ---
     c_main1, c_main2 = st.columns([2, 1])
 
     with c_main1:
@@ -465,7 +378,6 @@ with tab_dash:
             fig_vol.add_trace(go.Bar(x=df_merged['data'], y=df_merged['tqtd'], name="Volume (g)", marker_color='#AED6F1', opacity=0.5), secondary_y=True)
             fig_vol.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['tkcal'], name="Calorias In", mode='lines+markers', line=dict(color='#C0392B', width=3)), secondary_y=False)
             fig_vol.add_trace(go.Scatter(x=df_merged['data'], y=df_merged['get_total'], name="Gasto Total (Out)", mode='lines', line=dict(color='#27AE60', width=2, dash='dot')), secondary_y=False)
-            
             fig_vol.update_layout(height=450, margin=dict(l=10,r=10,t=30,b=10), legend=dict(orientation="h", y=1.1), template="plotly_white")
             fig_vol.update_yaxes(title_text="Kcal", secondary_y=False, showgrid=True)
             fig_vol.update_yaxes(title_text="Gramas", secondary_y=True, showgrid=False)
@@ -492,7 +404,6 @@ with tab_dash:
 
     st.divider()
 
-    # --- ROW 3: PROJEÇÃO & TREINO ---
     c_p1, c_p2 = st.columns([2, 1])
 
     with c_p1:
@@ -524,7 +435,6 @@ with tab_dash:
 
     st.divider()
 
-    # --- ROW 4: SAÚDE ---
     st.markdown("##### 🧬 Indicadores de Saúde")
     col_s1, col_s2, col_s3 = st.columns(3)
 
@@ -555,9 +465,6 @@ with tab_dash:
 
     st.divider()
 
-    # ============================================================================
-    # 5. ANÁLISE ESTATÍSTICA (EDA)
-    # ============================================================================
     st.markdown("### 📊 Análise de Tendências (Médias Móveis & Extremos)")
 
     if not df_merged.empty:
@@ -592,9 +499,6 @@ with tab_dash:
 
         st.table(pd.DataFrame(eda_data))
 
-    # ============================================================================
-    # 6. GLOSSÁRIO E METODOLOGIA
-    # ============================================================================
     with st.expander("📚 Metodologia e Glossário Técnico (Clique para abrir)", expanded=False):
         st.markdown("""
         ### 1. Estimativa de Gasto Energético (GET)
@@ -608,7 +512,7 @@ with tab_dash:
         ### 3. Modelo Matemático (Oráculo)
         * **Metodologia:** Regressão Linear Múltipla (Ordinary Least Squares - OLS) baseada no Design de Experimentos (DOE).
         * **Mecanismo:** Analisa o consumo (variáveis independentes) e cruza com a variação de peso do *dia seguinte* (variável dependente) para estabelecer causalidade.
-        * **Torneio El Farol:** Seleção dinâmica entre Regressão Linear e Random Forest baseada no menor MAE (Mean Absolute Error) dos últimos 5 dias.
+        * **Torneio El Farol & Auditoria:** Seleção dinâmica entre Regressão Linear e Random Forest baseada no menor MAE (Mean Absolute Error) dos últimos 5 dias. O painel inclui um expander com a tabela cruzando os valores reais da balança contra a previsão de cada modelo.
         """)
 
-    st.caption("Leo Tracker Smart View v6.0 | Quantified Self & El Farol Predictive Edition")
+    st.caption("Leo Tracker Smart View v6.5 | Quantified Self & Transparent El Farol Edition")
