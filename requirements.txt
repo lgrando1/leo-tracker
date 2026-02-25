@@ -8,3 +8,4 @@ groq
 xlsxwriter
 fpdf2
 statsmodels
+scikit-learn
