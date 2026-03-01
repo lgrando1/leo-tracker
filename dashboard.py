@@ -96,21 +96,27 @@ if not df_hist.empty and not df_peso.empty:
     df_hist['data_dt'] = pd.to_datetime(df_hist['data']).dt.date
     df_peso['data_dt'] = pd.to_datetime(df_peso['data']).dt.date
     
-    df_merged = pd.merge(df_hist, df_peso[['data_dt', 'peso_kg']], on='data_dt', how='left').ffill()
+    # ========================================================================
+    # 🛡️ BLINDAGEM APLICADA: Tratamento de duplicidade de pesagem
+    # ========================================================================
+    # Remove as pesagens extras do mesmo dia, mantendo apenas o registro mais recente
+    df_peso_unico = df_peso.drop_duplicates(subset=['data_dt'], keep='last')
+    
+    # O merge agora é estritamente 1 para 1, evitando o "Double Counting"
+    df_merged = pd.merge(df_hist, df_peso_unico[['data_dt', 'peso_kg']], on='data_dt', how='left').ffill()
+    
+    # Atualização de sintaxe do Pandas para evitar quebras futuras
     if df_merged['peso_kg'].isnull().any():
-         df_merged['peso_kg'] = df_merged['peso_kg'].fillna(method='bfill').fillna(peso_atual)
+         df_merged['peso_kg'] = df_merged['peso_kg'].bfill().fillna(peso_atual)
 
     if not df_treino.empty:
         df_treino['data_dt'] = pd.to_datetime(df_treino['data']).dt.date
-        df_merged = pd.merge(df_merged, df_treino[['data_dt', 't_min', 't_passos', 't_cal_out']], on='data_dt', how='left')
+        
+        # Blindagem similar para os treinos (caso registre mais de um treino por dia)
+        df_treino_agg = df_treino.groupby('data_dt')[['t_min', 't_passos', 't_cal_out']].sum().reset_index()
+        
+        df_merged = pd.merge(df_merged, df_treino_agg, on='data_dt', how='left')
         df_merged[['t_min', 't_passos', 't_cal_out']] = df_merged[['t_min', 't_passos', 't_cal_out']].fillna(0)
-    else:
-        df_merged['t_min'] = 0; df_merged['t_passos'] = 0; df_merged['t_cal_out'] = 0
-    
-    idade, altura = int(p.get('idade', 41)), int(p.get('altura_cm', 178))
-    df_merged['get_basal'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * fator_atividade
-    df_merged['get_total'] = df_merged['get_basal'] + df_merged['t_cal_out']
-    df_merged['deficit_real'] = df_merged['get_total'] - df_merged['tkcal']
 
 # ============================================================================
 # 4. MOTOR PREDITIVO (EL FAROL)
