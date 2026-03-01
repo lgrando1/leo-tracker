@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 from sqlalchemy import create_engine, text
 from datetime import datetime, timedelta
 import json
@@ -9,6 +10,11 @@ import io
 import math
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
+# Imports para o Oráculo Preditivo
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error
 
 # ============================================================================
 # 1. CONFIGURAÇÃO E ACESSO
@@ -86,7 +92,6 @@ def inicializar_banco():
             id SERIAL PRIMARY KEY, data DATE, tipo TEXT, duracao_min INT, passos INT, distancia_km REAL, calorias REAL, bpm_medio INT, observacoes TEXT
         );
     """)
-    # NOVAS COLUNAS PARA O MONITORAMENTO DE PASSOS (PROFESSOR VS TOTAL)
     try: 
         executar_sql("ALTER TABLE public.exercicios ADD COLUMN IF NOT EXISTS passos_trabalho INT DEFAULT 0;")
         executar_sql("ALTER TABLE public.exercicios ADD COLUMN IF NOT EXISTS passos_total_dia INT DEFAULT 0;")
@@ -145,7 +150,6 @@ inicializar_banco()
 METAS = get_metas_do_banco()
 p = METAS 
 
-# CÁLCULOS
 def calc_bf_weltman_obese(waist, weight_kg, height_cm, gender):
     if waist <= 0 or weight_kg <= 0: return 0.0
     try:
@@ -154,7 +158,7 @@ def calc_bf_weltman_obese(waist, weight_kg, height_cm, gender):
     except: return 0.0
 
 # ============================================================================
-# 5. GROQ IA
+# 4. INTELIGÊNCIA ARTIFICIAL E PREDITORES
 # ============================================================================
 def processar_texto_ia(texto_usuario, api_key):
     client = Groq(api_key=api_key)
@@ -183,8 +187,30 @@ def processar_texto_ia(texto_usuario, api_key):
         return True, content
     except Exception as e: return False, f"Erro: {str(e)}"
 
+def torneio_el_farol(df_modelo):
+    X = df_modelo[['jejum_h', 'tprot', 'tcarb', 'tgord']]
+    y = df_modelo['delta_peso_kg']
+    
+    if len(df_modelo) < 10: return None, None, None, None
+        
+    X_treino, X_teste = X[:-5], X[-5:]
+    y_treino, y_teste = y[:-5], y[-5:]
+    
+    agente_lr = LinearRegression().fit(X_treino, y_treino)
+    agente_rf = RandomForestRegressor(n_estimators=10, random_state=42).fit(X_treino, y_treino)
+    
+    preds_lr = agente_lr.predict(X_teste)
+    preds_rf = agente_rf.predict(X_teste)
+    
+    erro_lr = mean_absolute_error(y_teste, preds_lr)
+    erro_rf = mean_absolute_error(y_teste, preds_rf)
+    
+    vencedor = "Random Forest" if erro_rf < erro_lr else "Regressão Linear Múltipla"
+    menor_erro = min(erro_rf, erro_lr)
+    return vencedor, menor_erro, agente_lr, agente_rf
+
 # ============================================================================
-# 6. GERADOR DE EXCEL
+# 5. GERADOR DE EXCEL
 # ============================================================================
 def gerar_excel_nutri(dt_ini, dt_fim):
     output = io.BytesIO()
@@ -195,17 +221,11 @@ def gerar_excel_nutri(dt_ini, dt_fim):
     df_pressao = executar_sql("SELECT measurement_time as data_hora, systolic, diastolic, pulse FROM public.blood_pressure WHERE measurement_time >= :d1 AND measurement_time <= :d2 ORDER BY measurement_time DESC", params, is_select=True)
     df_treinos_raw = executar_sql("SELECT data, tipo, duracao_min, passos, passos_trabalho, passos_total_dia, distancia_km, calorias, bpm_medio FROM public.exercicios WHERE data >= :d1 AND data <= :d2 ORDER BY data DESC", params, is_select=True)
 
-    if not df_detalhado.empty:
-        df_macros = df_detalhado.groupby('data')[['kcal', 'proteina', 'carbo', 'gordura']].sum().reset_index()
+    if not df_detalhado.empty: df_macros = df_detalhado.groupby('data')[['kcal', 'proteina', 'carbo', 'gordura']].sum().reset_index()
     else: df_macros = pd.DataFrame(columns=['data', 'kcal', 'proteina', 'carbo', 'gordura'])
 
     if not df_treinos_raw.empty:
-        df_treinos_agg = df_treinos_raw.groupby('data').agg({
-            'duracao_min': 'sum',
-            'passos_total_dia': 'max',
-            'passos_trabalho': 'max',
-            'calorias': 'sum'
-        }).reset_index()
+        df_treinos_agg = df_treinos_raw.groupby('data').agg({'duracao_min': 'sum', 'passos_total_dia': 'max', 'passos_trabalho': 'max', 'calorias': 'sum'}).reset_index()
         df_treinos_agg.columns = ['data', 'treino_min', 'passos_dia', 'passos_prof', 'treino_kcal']
     else: df_treinos_agg = pd.DataFrame(columns=['data', 'treino_min', 'passos_dia', 'passos_prof', 'treino_kcal'])
 
@@ -237,7 +257,7 @@ def gerar_excel_nutri(dt_ini, dt_fim):
     return output.getvalue()
 
 # ============================================================================
-# 7. INTERFACE
+# 6. INTERFACE
 # ============================================================================
 st.title("🦁 Leo Tracker Pro")
 data_hoje = get_now_br().date()
@@ -246,24 +266,20 @@ df_hoje = executar_sql("SELECT * FROM public.consumo WHERE data = :d", {'d': dat
 # SIDEBAR
 st.sidebar.header("🎯 Status")
 
-# --- NOVO: TIMER DE JEJUM NA SIDEBAR ---
 df_last_meal = executar_sql("SELECT data_hora FROM public.consumo ORDER BY data_hora DESC LIMIT 1", is_select=True)
 tempo_jejum = "0h 0m"
 if not df_last_meal.empty:
     last_dt = df_last_meal.iloc[0]['data_hora']
     if pd.notnull(last_dt):
-        # Cálcula a diferença (ajustando fuso se necessário, mas simplificando para 'naive' funciona bem aqui)
         now_naive = get_now_br().replace(tzinfo=None)
         last_naive = last_dt.replace(tzinfo=None) if last_dt.tzinfo else last_dt
         diff_secs = (now_naive - last_naive).total_seconds()
-        
         if diff_secs > 0:
             h = int(diff_secs // 3600)
             m = int((diff_secs % 3600) // 60)
             tempo_jejum = f"{h}h {m}m"
 
 st.sidebar.metric("⏱️ Jejum Atual", tempo_jejum)
-# ---------------------------------------
 
 ultimo_peso_df = executar_sql("SELECT peso_kg FROM public.peso ORDER BY data DESC LIMIT 1", is_select=True)
 peso_atual_sidebar = float(ultimo_peso_df.iloc[0]['peso_kg']) if not ultimo_peso_df.empty else 140.0
@@ -291,27 +307,24 @@ tab_dash, tab_daily, tab_treino, tab_hist, tab_medidas, tab_rel, tab_admin = st.
 with tab_dash:
     st.markdown("### 🧬 Leo's Analytics Hub (Visão Gerencial)")
 
-    # 1. FETCH DADOS
+    # FETCH DADOS AMPLIADO PARA O ORÁCULO
     DATA_INICIO_D = pd.to_datetime("2025-12-30").date()
-    df_hist_d = executar_sql("SELECT data, SUM(kcal) as tkcal FROM public.consumo WHERE data >= :d GROUP BY data ORDER BY data ASC", {"d": DATA_INICIO_D}, is_select=True)
+    df_hist_d = executar_sql("""
+        SELECT data, SUM(kcal) as tkcal, SUM(proteina) as tprot, SUM(carbo) as tcarb, SUM(gordura) as tgord,
+               MIN(data_hora) as primeira_refeicao_dt, 
+               MAX(data_hora) as ultima_refeicao_dt
+        FROM public.consumo WHERE data >= :d GROUP BY data ORDER BY data ASC
+    """, {"d": DATA_INICIO_D}, is_select=True)
+    
     df_peso_d = executar_sql("SELECT * FROM public.peso ORDER BY data ASC", is_select=True)
     df_treino_d = executar_sql("""
-        SELECT 
-            data, 
-            SUM(duracao_min) as t_min, 
-            MAX(passos_total_dia) as t_passos_total, 
-            SUM(passos) as t_passos_treino
-        FROM public.exercicios 
-        WHERE data >= :d 
-        GROUP BY data 
-        ORDER BY data ASC
+        SELECT data, SUM(duracao_min) as t_min, MAX(passos_total_dia) as t_passos_total, SUM(passos) as t_passos_treino
+        FROM public.exercicios WHERE data >= :d GROUP BY data ORDER BY data ASC
     """, {"d": DATA_INICIO_D}, is_select=True)
     df_bp_d = executar_sql("SELECT measurement_time, systolic, diastolic FROM public.blood_pressure WHERE measurement_time >= :d ORDER BY measurement_time ASC", {"d": DATA_INICIO_D}, is_select=True)
 
-    # Preparar Dados
     if not df_peso_d.empty:
         df_peso_d['data_dt'] = pd.to_datetime(df_peso_d['data']).dt.date
-        # Média Móvel de 7 dias para o peso
         df_peso_d['media_movel_7d'] = df_peso_d['peso_kg'].rolling(window=7, min_periods=1).mean()
     
     if not df_hist_d.empty:
@@ -322,19 +335,12 @@ with tab_dash:
         df_treino_d['t_passos_rotina'] = df_treino_d['t_passos_total'] - df_treino_d['t_passos_treino']
         df_treino_d['t_passos_rotina'] = df_treino_d['t_passos_rotina'].clip(lower=0)
 
-    # --------------------------------------------------------
-    # GRÁFICO 1: TENDÊNCIA DE PESO (A "Estrela do Norte")
-    # --------------------------------------------------------
     st.subheader("📉 Tendência de Peso (Média 7 Dias)")
     if not df_peso_d.empty:
         fig_peso = go.Figure()
-        # Pontos Reais (Fundo)
         fig_peso.add_trace(go.Scatter(x=df_peso_d['data'], y=df_peso_d['peso_kg'], mode='markers', name='Diário', marker=dict(color='#bdc3c7', size=6, opacity=0.5)))
-        # Média Móvel (Destaque)
         fig_peso.add_trace(go.Scatter(x=df_peso_d['data'], y=df_peso_d['media_movel_7d'], mode='lines', name='Média 7d', line=dict(color='#2c3e50', width=4)))
-        # Meta
         fig_peso.add_hline(y=METAS['peso_alvo'], line_dash="dash", line_color="#27ae60", annotation_text="Meta Alvo")
-        
         fig_peso.update_layout(height=350, margin=dict(l=10,r=10,t=30,b=10), showlegend=True, legend=dict(orientation="h", y=1.1))
         st.plotly_chart(fig_peso, use_container_width=True)
     else: st.info("Sem dados de peso suficientes.")
@@ -342,60 +348,82 @@ with tab_dash:
     st.divider()
 
     col_g2, col_g3 = st.columns(2)
-
-    # --------------------------------------------------------
-    # GRÁFICO 2: ALIMENTAÇÃO (Gerencial - Bateu a Meta?)
-    # --------------------------------------------------------
     with col_g2:
         st.subheader("🍽️ Consumo Calórico vs Meta")
         if not df_hist_d.empty:
-            # Cores: Verde se abaixo da meta, Vermelho se acima
             colors = ['#27ae60' if k <= METAS['kcal'] else '#c0392b' for k in df_hist_d['tkcal']]
-            
             fig_nutri = go.Figure()
             fig_nutri.add_trace(go.Bar(x=df_hist_d['data'], y=df_hist_d['tkcal'], name='Kcal', marker_color=colors))
             fig_nutri.add_hline(y=METAS['kcal'], line_dash="dash", line_color="#2c3e50", annotation_text="Teto")
-            
             fig_nutri.update_layout(height=300, margin=dict(l=10,r=10,t=30,b=10), showlegend=False)
             st.plotly_chart(fig_nutri, use_container_width=True)
         else: st.info("Sem dados de consumo.")
 
-    # --------------------------------------------------------
-    # GRÁFICO 3: EXERCÍCIOS (Rotina vs Treino)
-    # --------------------------------------------------------
     with col_g3:
         st.subheader("👟 Atividade Física")
         if not df_treino_d.empty:
             fig_treino = make_subplots(specs=[[{"secondary_y": True}]])
-            
-            # Barras Empilhadas
             fig_treino.add_trace(go.Bar(x=df_treino_d['data'], y=df_treino_d['t_passos_rotina'], name='Rotina', marker_color='#e67e22'), secondary_y=False)
             fig_treino.add_trace(go.Bar(x=df_treino_d['data'], y=df_treino_d['t_passos_treino'], name='Treino', marker_color='#8e44ad'), secondary_y=False)
-            
-            # Linha Meta de Tempo
             fig_treino.add_trace(go.Scatter(x=df_treino_d['data'], y=df_treino_d['t_min'], name='Minutos', mode='lines', line=dict(color='#f1c40f', width=2)), secondary_y=True)
-            
             fig_treino.update_layout(barmode='stack', height=300, margin=dict(l=10,r=10,t=30,b=10), legend=dict(orientation="h", y=1.1, font=dict(size=10)))
             st.plotly_chart(fig_treino, use_container_width=True)
         else: st.info("Sem dados de treino.")
 
     st.divider()
-
-    # --------------------------------------------------------
-    # GRÁFICO 4: PRESSÃO ARTERIAL (Monitoramento Saúde)
-    # --------------------------------------------------------
     st.subheader("❤️ Pressão Arterial (Histórico)")
     if not df_bp_d.empty:
         fig_bp = go.Figure()
         fig_bp.add_trace(go.Scatter(x=df_bp_d['measurement_time'], y=df_bp_d['systolic'], name='Sistólica', line=dict(color='#e74c3c')))
         fig_bp.add_trace(go.Scatter(x=df_bp_d['measurement_time'], y=df_bp_d['diastolic'], name='Diastólica', line=dict(color='#3498db')))
-        
-        # Zonas de Referência (Opcional - visual clean)
         fig_bp.add_hrect(y0=120, y1=80, line_width=0, fillcolor="green", opacity=0.1, annotation_text="Ideal")
-        
         fig_bp.update_layout(height=300, margin=dict(l=10,r=10,t=30,b=10), legend=dict(orientation="h", y=1.1))
         st.plotly_chart(fig_bp, use_container_width=True)
     else: st.info("Registre sua pressão na aba Saúde.")
+
+    # --------------------------------------------------------
+    # 🔮 O ORÁCULO METABÓLICO EMBUTIDO (Nova Feature)
+    # --------------------------------------------------------
+    st.divider()
+    st.markdown("### 🔮 Oráculo Metabólico (Machine Learning)")
+    
+    if not df_hist_d.empty and not df_peso_d.empty:
+        # Prepara a base de dados do oráculo (mescla consumo e pesos)
+        df_peso_unico = df_peso_d.drop_duplicates(subset=['data_dt'], keep='last').copy()
+        df_merged_pred = pd.merge(df_hist_d, df_peso_unico[['data_dt', 'peso_kg']], on='data_dt', how='inner')
+        
+        # Calcula horas de jejum para o modelo preditivo
+        df_merged_pred['primeira_refeicao_dt'] = pd.to_datetime(df_merged_pred['primeira_refeicao_dt'])
+        df_merged_pred['ultima_refeicao_dt'] = pd.to_datetime(df_merged_pred['ultima_refeicao_dt'])
+        df_merged_pred['ultima_ref_ontem'] = df_merged_pred['ultima_refeicao_dt'].shift(1)
+        df_merged_pred['jejum_h'] = (df_merged_pred['primeira_refeicao_dt'] - df_merged_pred['ultima_ref_ontem']).dt.total_seconds() / 3600
+        df_merged_pred['jejum_h'] = df_merged_pred['jejum_h'].apply(lambda x: x if 8 <= x <= 48 else np.nan)
+        
+        # O Delta que queremos prever: quanto o peso varia de um dia pro outro
+        df_merged_pred['peso_amanha'] = df_merged_pred['peso_kg'].shift(-1)
+        df_merged_pred['delta_peso_kg'] = df_merged_pred['peso_amanha'] - df_merged_pred['peso_kg']
+        
+        df_model = df_merged_pred.dropna(subset=['delta_peso_kg', 'jejum_h', 'tprot', 'tcarb', 'tgord']).copy()
+        
+        if len(df_model) > 5:
+            vencedor, menor_erro, mod_lr, mod_rf = torneio_el_farol(df_model)
+            if vencedor:
+                st.info(f"**Agente Preditivo Ativo:** {vencedor} (Margem de erro: ±{menor_erro*1000:.0f}g)")
+                
+                c_p1, c_p2, c_p3, c_p4 = st.columns(4)
+                sim_jej = c_p1.slider("Jejum (h)", 8.0, 24.0, 16.0, 0.5)
+                sim_prot = c_p2.number_input("Prot (g)", value=int(METAS['prot']))
+                sim_carb = c_p3.number_input("Carbo (g)", value=int(METAS['carb']))
+                sim_gord = c_p4.number_input("Gord (g)", value=int(METAS['gord']))
+                
+                entrada_sim = pd.DataFrame({'jejum_h': [sim_jej], 'tprot': [sim_prot], 'tcarb': [sim_carb], 'tgord': [sim_gord]})
+                pred_delta = mod_rf.predict(entrada_sim)[0] if vencedor == "Random Forest" else mod_lr.predict(entrada_sim)[0]
+                
+                st.metric("Predição de Peso para Amanhã (Balança)", f"{pred_delta*1000:+.0f} g", delta_color="inverse")
+        else:
+            st.caption("⏳ O Oráculo precisa de pelo menos 10 dias consecutivos de dados (Consumo + Jejum + Peso) para iniciar as previsões preditivas.")
+    else:
+        st.caption("⏳ Base de dados insuficiente para o Oráculo.")
 
 # --- ABA DIÁRIO ---
 with tab_daily:
@@ -410,37 +438,61 @@ with tab_daily:
                 if ok: st.cache_resource.clear(); st.rerun()
     st.divider()
 
+    # --------------------------------------------------------
+    # 🍎 O SMART BOX (Input Unificado IA / JSON)
+    # --------------------------------------------------------
     st.write("### 🍎 O que você comeu?")
-    texto_input = st.text_area("Descrição", height=100, label_visibility="collapsed", placeholder="Ex: 2 ovos mexidos e café preto")
-    if st.button("🚀 Processar Alimentação (IA)"):
-        api_key = st.secrets.get("GROQ_API_KEY")
-        if texto_input and api_key:
-            with st.spinner("Auditando..."):
-                ok_ia, res = processar_texto_ia(texto_input, api_key)
-                if ok_ia:
-                    st.success(res.get('analise'))
-                    for item in res.get('alimentos', []):
-                        k_final = max((item.get('p',0)*4 + item.get('c',0)*4 + item.get('g',0)*9), float(item.get('kcal', 0)))
-                        params = {'dt': item.get('data') or data_hoje, 'ali': item.get('alimento'), 'qtd': item.get('quantidade_g'), 'kc': k_final, 'pr': item.get('p'), 'ca': item.get('c'), 'go': item.get('g'), 'gl': item.get('gluten')}
-                        executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (:dt, :ali, :qtd, :kc, :pr, :ca, :go, :gl)", params)
-                    st.cache_resource.clear(); st.rerun()
-
-    with st.expander("📥 Importação JSON Manual"):
-        st.info("Cole aqui o JSON gerado externamente:")
-        json_manual = st.text_area("JSON", label_visibility="collapsed", height=150)
-        if st.button("Salvar JSON Manual"):
+    st.info("Digite o que comeu ou cole diretamente o JSON no campo abaixo. O sistema saberá o que fazer.")
+    texto_input = st.text_area("Descrição ou cole o JSON", height=120, label_visibility="collapsed", placeholder="Ex: 2 ovos com queijo e café preto\n\nOU cole um JSON como:\n[\n  {\"alimento\": \"Carne\", \"quantidade_g\": 100...}\n]")
+    
+    if st.button("🚀 Processar Alimentação", use_container_width=True):
+        if texto_input:
+            is_json = False
+            lista = None
+            
+            # Tenta decodificar como JSON primeiro
             try:
-                cleaned = json_manual.replace('```json', '').replace('```', '')
+                cleaned = texto_input.replace('```json', '').replace('```', '').strip()
+                # Localiza se é uma lista [...] ou objeto {...}
                 start, end = cleaned.find('['), cleaned.rfind(']')
-                if start != -1 and end != -1: cleaned = cleaned[start:end+1]
+                if start == -1 and cleaned.startswith('{'): 
+                    start, end = cleaned.find('{'), cleaned.rfind('}')
+                
+                if start != -1 and end != -1: 
+                    cleaned = cleaned[start:end+1]
+                
                 lista = json.loads(cleaned)
-                for item in (lista if isinstance(lista, list) else [lista]):
-                    dt = item.get('data') if item.get('data') else data_hoje
-                    k_final = max((float(item.get('p',0))*4 + float(item.get('c',0))*4 + float(item.get('g',0))*9), float(item.get('kcal', 0)))
-                    params = {'dt': dt, 'ali': item.get('alimento'), 'qtd': item.get('quantidade_g'), 'kcal': k_final, 'prot': item.get('p'), 'carb': item.get('c'), 'gord': item.get('g'), 'glut': item.get('gluten')}
-                    executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (:dt, :ali, :qtd, :kcal, :prot, :carb, :gord, :glut)", params)
-                st.success("Importado!"); st.cache_resource.clear(); st.rerun()
-            except Exception as e: st.error(f"Erro no JSON: {e}")
+                is_json = True
+            except:
+                pass # Se falhar, é texto normal e vai pra IA
+
+            if is_json:
+                with st.spinner("📦 Formato JSON detectado! Registrando direto no banco..."):
+                    try:
+                        for item in (lista if isinstance(lista, list) else [lista]):
+                            dt = item.get('data') if item.get('data') else data_hoje
+                            k_final = max((float(item.get('p',0))*4 + float(item.get('c',0))*4 + float(item.get('g',0))*9), float(item.get('kcal', 0)))
+                            params = {'dt': dt, 'ali': item.get('alimento'), 'qtd': item.get('quantidade_g'), 'kcal': k_final, 'prot': item.get('p'), 'carb': item.get('c'), 'gord': item.get('g'), 'glut': item.get('gluten')}
+                            executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (:dt, :ali, :qtd, :kcal, :prot, :carb, :gord, :glut)", params)
+                        st.success("Refeição(ões) salva(s) com sucesso!"); st.cache_resource.clear(); st.rerun()
+                    except Exception as e: 
+                        st.error(f"Erro ao processar JSON: {e}")
+            else:
+                api_key = st.secrets.get("GROQ_API_KEY")
+                if not api_key: 
+                    st.error("Chave da API GROQ não configurada no Secrets!")
+                else:
+                    with st.spinner("🧠 Texto comum detectado! Consultando a IA Llama..."):
+                        ok_ia, res = processar_texto_ia(texto_input, api_key)
+                        if ok_ia:
+                            st.success(res.get('analise'))
+                            for item in res.get('alimentos', []):
+                                k_final = max((item.get('p',0)*4 + item.get('c',0)*4 + item.get('g',0)*9), float(item.get('kcal', 0)))
+                                params = {'dt': item.get('data') or data_hoje, 'ali': item.get('alimento'), 'qtd': item.get('quantidade_g'), 'kc': k_final, 'pr': item.get('p'), 'ca': item.get('c'), 'go': item.get('g'), 'gl': item.get('gluten')}
+                                executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (:dt, :ali, :qtd, :kc, :pr, :ca, :go, :gl)", params)
+                            st.cache_resource.clear(); st.rerun()
+                        else:
+                            st.error(res)
 
     st.subheader("Hoje")
     if not df_hoje.empty:
@@ -457,34 +509,21 @@ with tab_daily:
 # --- ABA TREINO ---
 with tab_treino:
     st.markdown("### 🏃‍♂️ Monitoramento de Treino (Iron N1)")
-
-    # 1. RECUPERAR DADOS DO DIA
     df_treino_hoje = executar_sql("SELECT * FROM public.exercicios WHERE data = :d ORDER BY id DESC", {'d': data_hoje}, is_select=True)
-
-    # Separa registros
     df_fechamento = df_treino_hoje[df_treino_hoje['tipo'] == 'Fechamento Diário']
     df_atividades = df_treino_hoje[df_treino_hoje['tipo'] != 'Fechamento Diário']
 
-    # Totais de TREINO (Soma das atividades específicas)
     min_treino_hoje = int(df_atividades['duracao_min'].sum())
     cal_treino_hoje = int(df_atividades['calorias'].sum())
     passos_treino_hoje = int(df_atividades['passos'].sum())
 
-    # Se já tiver fechamento, pega o Total do Relógio salvo
-    if not df_fechamento.empty:
-        passos_total_n1 = int(df_fechamento.iloc[0]['passos_total_dia'])
-    else:
-        passos_total_n1 = 0
+    if not df_fechamento.empty: passos_total_n1 = int(df_fechamento.iloc[0]['passos_total_dia'])
+    else: passos_total_n1 = 0
 
-    # CÁLCULO AUTOMÁTICO DO "PROFESSOR/ROTINA"
-    if passos_total_n1 > 0:
-        passos_prof_rotina = max(0, passos_total_n1 - passos_treino_hoje)
-    else:
-        passos_prof_rotina = 0
+    if passos_total_n1 > 0: passos_prof_rotina = max(0, passos_total_n1 - passos_treino_hoje)
+    else: passos_prof_rotina = 0
 
-    # --- MÉTRICAS DE TOPO ---
     pct_treino = min(min_treino_hoje / 120.0, 1.0)
-
     c_m1, c_m2, c_m3 = st.columns(3)
     c_m1.metric("⏱️ Tempo Treino", f"{min_treino_hoje} min", "Meta: 120 min")
     c_m2.metric("👣 Passos Treino", f"{passos_treino_hoje}", f"Atividades registradas")
@@ -492,17 +531,13 @@ with tab_treino:
     st.progress(pct_treino)
     st.divider()
 
-    # --- FORMULÁRIO 1: FECHAMENTO SIMPLIFICADO ---
     st.subheader("🏁 Fechamento do Dia")
     st.info("Insira apenas o valor final que aparece no seu relógio.")
-
     with st.form("form_fechamento_simples"):
         col_f1, col_f2 = st.columns([2, 1])
-        with col_f1:
-            input_total_dia = st.number_input("Total de Passos (Iron N1)", 0, 60000, passos_total_n1, help="Olhe o relógio antes de dormir.")
+        with col_f1: input_total_dia = st.number_input("Total de Passos (Iron N1)", 0, 60000, passos_total_n1, help="Olhe o relógio antes de dormir.")
         with col_f2:
-            st.write("") # Espaçamento
-            st.write("") 
+            st.write(""); st.write("") 
             btn_save = st.form_submit_button("💾 Salvar Fechamento", use_container_width=True)
 
         if btn_save:
@@ -512,12 +547,10 @@ with tab_treino:
                 INSERT INTO public.exercicios (data, tipo, duracao_min, passos, passos_total_dia, passos_trabalho, calorias, observacoes)
                 VALUES (:d, 'Fechamento Diário', 0, 0, :pt, :ptr, 0, 'Total Relógio')
             """, {'d': data_hoje, 'pt': input_total_dia, 'ptr': resto_calculado})
-            st.success(f"Fechado! Total: {input_total_dia} (Sendo {resto_calculado} de Rotina)")
-            st.rerun()
+            st.success(f"Fechado! Total: {input_total_dia} (Sendo {resto_calculado} de Rotina)"); st.rerun()
 
     st.markdown("---")
 
-    # --- FORMULÁRIO 2: TREINOS ESPECÍFICOS ---
     st.subheader("➕ Adicionar Treino / Caminhada")
     with st.form("form_treino"):
         c_tr1, c_tr2 = st.columns(2)
@@ -535,10 +568,8 @@ with tab_treino:
                 INSERT INTO public.exercicios (data, tipo, duracao_min, passos, distancia_km, calorias, bpm_medio, observacoes)
                 VALUES (:d, :t, :dm, :p, :dk, :c, :bpm, :o)
             """, {'d': data_hoje, 't': tipo, 'dm': duracao, 'p': passos, 'dk': dist_est, 'c': cal, 'bpm': bpm, 'o': obs})
-            st.success("Atividade registrada!")
-            st.rerun()
+            st.success("Atividade registrada!"); st.rerun()
 
-    # --- LISTAGEM DO DIA ---
     if not df_treino_hoje.empty:
         st.write("#### 📝 Registros de Hoje")
         for i, row in df_treino_hoje.iterrows():
@@ -611,4 +642,4 @@ with tab_admin:
             executar_sql("UPDATE public.perfil SET meta_kcal=:mk, meta_proteina=:mp, meta_carbo=:mc, meta_gordura=:mg, meta_peso_alvo=:mpa, ritmo_semanal=:rit, fator_atividade=:fat WHERE id=1", {'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 'mpa': n_peso_alvo, 'rit': n_ritmo, 'fat': n_fator})
             st.cache_resource.clear(); st.rerun()
 
-st.caption("Leo Tracker Pro v8.7 | Dash Gerencial Clean 🚀")
+st.caption("Leo Tracker Pro v8.8 | ML Prediction & Smart JSON Flow 🚀")
