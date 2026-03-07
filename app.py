@@ -365,7 +365,6 @@ with tab_dash:
             fig_treino = make_subplots(specs=[[{"secondary_y": True}]])
             fig_treino.add_trace(go.Bar(x=df_treino_d['data'], y=df_treino_d['t_passos_rotina'], name='Rotina', marker_color='#e67e22'), secondary_y=False)
             fig_treino.add_trace(go.Bar(x=df_treino_d['data'], y=df_treino_d['t_passos_treino'], name='Treino', marker_color='#8e44ad'), secondary_y=False)
-            fig_treino.add_trace(go.Scatter(x=df_treino_d['data'], y=df_treino_d['t_min'], name='Minutos', mode='lines', line=dict(color='#f1c40f', width=2)), secondary_y=True)
             fig_treino.update_layout(barmode='stack', height=300, margin=dict(l=10,r=10,t=30,b=10), legend=dict(orientation="h", y=1.1, font=dict(size=10)))
             st.plotly_chart(fig_treino, use_container_width=True)
         else: st.info("Sem dados de treino.")
