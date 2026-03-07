@@ -121,12 +121,12 @@ if not df_hist.empty and not df_peso.empty:
     df_merged['deficit_real'] = df_merged['get_total'] - df_merged['tkcal']
 
 # ============================================================================
-# 4. MOTOR PREDITIVO (EL FAROL)
+# 4. MOTOR PREDITIVO (EL FAROL) - ATUALIZADO COM ALVO DINÂMICO
 # ============================================================================
-def torneio_el_farol(df_modelo):
+def torneio_el_farol(df_modelo, target_col='delta_peso_kg'):
     # Incluindo t_passos_trabalho na matriz de treinamento
     X = df_modelo[['jejum_h', 'tprot', 'tcarb', 'tgord', 't_passos_trabalho']]
-    y = df_modelo['delta_peso_kg']
+    y = df_modelo[target_col]
     
     if len(df_modelo) < 10:
         return None, None, None, None, None
@@ -170,8 +170,18 @@ with tab_qs:
     if not df_merged.empty and 'deficit_real' in df_merged.columns:
         df_qs = df_merged.copy()
         
+        # ---------------------------------------------------------
+        # FILTRO PASSA-BAIXA (MÉDIA MÓVEL DE 3 DIAS) PARA O ORÁCULO
+        # ---------------------------------------------------------
+        # O delta normal para métricas diárias continua o mesmo
         df_qs['peso_amanha'] = df_qs['peso_kg'].shift(-1)
         df_qs['delta_peso_kg'] = df_qs['peso_amanha'] - df_qs['peso_kg']
+        
+        # Nova variável suavizada para alimentar os modelos matemáticos
+        df_qs['peso_suavizado_3d'] = df_qs['peso_kg'].rolling(window=3, min_periods=1).mean()
+        df_qs['peso_suav_amanha'] = df_qs['peso_suavizado_3d'].shift(-1)
+        df_qs['delta_peso_suavizado'] = df_qs['peso_suav_amanha'] - df_qs['peso_suavizado_3d']
+        
         df_qs['delta_esperado_kg'] = - (df_qs['deficit_real'] / 7700)
         df_qs['fator_desinflamacao'] = df_qs['delta_peso_kg'] - df_qs['delta_esperado_kg']
         
@@ -262,7 +272,7 @@ with tab_qs:
             # BLOCO 3: CORRELAÇÃO DE MACRONUTRIENTES E PASSOS
             # ============================================================================
             st.markdown("### 3️⃣ Análise de Variáveis: Influência de Fatores")
-            c_mac1, c_mac2, c_mac3, c_mac4 = st.columns(4) # Expandido para 4 colunas
+            c_mac1, c_mac2, c_mac3, c_mac4 = st.columns(4)
             df_macros_trend = df_qs.dropna(subset=['delta_peso_kg'])
 
             def plot_macro_scatter(col_x, title, color_hex):
@@ -285,16 +295,16 @@ with tab_qs:
             st.markdown("---")
 
             # ============================================================================
-            # BLOCO 4: ORÁCULO METABÓLICO (DOE & REGRESSÃO MULTIVARIÁVEL + EL FAROL)
+            # BLOCO 4: ORÁCULO METABÓLICO SUAVIZADO (DOE & REGRESSÃO MULTIVARIÁVEL + EL FAROL)
             # ============================================================================
-            st.markdown("### 4️⃣ Oráculo Metabólico (DOE & Regressão Múltipla)")
+            st.markdown("### 4️⃣ Oráculo Metabólico (Sinal Suavizado via Média Móvel 3D)")
             
-            # Adicionado t_passos_trabalho no dropna
-            df_model = df_qs.dropna(subset=['delta_peso_kg', 'jejum_h', 'tprot', 'tcarb', 'tgord', 't_passos_trabalho']).copy()
+            # Usando a variável delta_peso_suavizado como Target agora
+            df_model = df_qs.dropna(subset=['delta_peso_suavizado', 'jejum_h', 'tprot', 'tcarb', 'tgord', 't_passos_trabalho']).copy()
             
             if len(df_model) > 5:
-                # Nova fórmula do modelo estatístico
-                formula = 'delta_peso_kg ~ jejum_h + tprot + tcarb + tgord + t_passos_trabalho'
+                # OLS apontando para a variável alvo suavizada
+                formula = 'delta_peso_suavizado ~ jejum_h + tprot + tcarb + tgord + t_passos_trabalho'
                 model = ols(formula, data=df_model).fit()
                 
                 r2 = model.rsquared
@@ -303,15 +313,13 @@ with tab_qs:
                 
                 st.markdown(f"**R² do Modelo Base:** {r2*100:.1f}% | **N amostral:** {len(df_model)} dias calibrados")
                 
-                # Fórmula atualizada com 5 casas decimais nos passos para refletir a proporção estatística de grandes números
-                st.latex(rf"\Delta Peso (kg) = {params['Intercept']:.3f} {params['jejum_h']:+.4f}(Jejum) {params['tprot']:+.4f}(Prot) {params['tcarb']:+.4f}(Carbo) {params['tgord']:+.4f}(Gord) {params['t_passos_trabalho']:+.6f}(Passos)")
+                st.latex(rf"\Delta Peso_f (kg) = {params['Intercept']:.3f} {params['jejum_h']:+.4f}(Jejum) {params['tprot']:+.4f}(Prot) {params['tcarb']:+.4f}(Carbo) {params['tgord']:+.4f}(Gord) {params['t_passos_trabalho']:+.6f}(Passos)")
                 
                 c_stats1, c_stats2 = st.columns([1, 1.2])
                 
                 with c_stats1:
-                    st.markdown("##### 🔬 Peso Estatístico (P-Valor)")
+                    st.markdown("##### 🔬 Peso Estatístico (P-Valor em Sinal Limpo)")
                     df_resumo = pd.DataFrame({'Coeficiente (kg)': params, 'P-Valor': pvalues}).drop('Intercept')
-                    # Adicionada a nova variável no resumo estatístico
                     df_resumo.index = ['Jejum (h)', 'Proteína (g)', 'Carbo (g)', 'Gordura (g)', 'Passos']
                     
                     def highlight_pval(val):
@@ -323,22 +331,23 @@ with tab_qs:
                     st.caption("🟢 P < 0.05: Alta Relevância | 🟠 P < 0.15: Relevância Moderada | ⚪ > 0.15: Ruído Sistêmico")
                     
                 with c_stats2:
-                    st.markdown("##### 🏆 Torneio El Farol (Agente no Comando)")
+                    st.markdown("##### 🏆 Torneio El Farol (Previsão de Tendência)")
                     
-                    vencedor, menor_erro, mod_lr, mod_rf, df_auditoria = torneio_el_farol(df_model)
+                    # Passando a nova variável alvo para o Torneio
+                    vencedor, menor_erro, mod_lr, mod_rf, df_auditoria = torneio_el_farol(df_model, target_col='delta_peso_suavizado')
                     
                     if vencedor:
-                        st.info(f"**Líder Atual:** {vencedor} | **Margem de Erro:** {menor_erro*1000:.0f} g")
+                        st.info(f"**Líder Atual:** {vencedor} | **Margem de Erro da Tendência:** {menor_erro*1000:.0f} g")
                         
                         with st.expander("🔍 Auditoria dos Agentes (Ver Histórico de Erros)", expanded=False):
-                            st.markdown("Veja o que cada modelo previu nos últimos 5 dias contra o que realmente aconteceu.")
+                            st.markdown("Previsão vs. Variação Real Suavizada (últimos 5 dias).")
                             st.dataframe(df_auditoria.style.format({
                                 'Real (g)': '{:+.0f}', 'Previsto LR (g)': '{:+.0f}', 'Previsto RF (g)': '{:+.0f}',
                                 'Erro LR (g)': '{:.0f}', 'Erro RF (g)': '{:.0f}'
                             }), use_container_width=True, hide_index=True)
 
                         st.markdown("##### 🔮 Simulador Preditivo")
-                        sim_col1, sim_col2, sim_col3 = st.columns(3) # Novo layout de colunas
+                        sim_col1, sim_col2, sim_col3 = st.columns(3) 
                         with sim_col1:
                             sim_jej = st.slider("Jejum (h)", 8.0, 24.0, 16.0, 0.5)
                             sim_prot = st.slider("Proteína (g)", 50, 250, int(p['meta_proteina']), 5)
@@ -346,7 +355,6 @@ with tab_qs:
                             sim_carb = st.slider("Carbo (g)", 20, 300, int(p['meta_carbo']), 5)
                             sim_gord = st.slider("Gordura (g)", 20, 150, int(p['meta_gordura']), 5)
                         with sim_col3:
-                            # Novo slider para os passos diários
                             sim_passos = st.slider("Passos", 0, 30000, 10000, 500)
                         
                         entrada_sim = pd.DataFrame({'jejum_h': [sim_jej], 'tprot': [sim_prot], 'tcarb': [sim_carb], 'tgord': [sim_gord], 't_passos_trabalho': [sim_passos]})
@@ -354,7 +362,7 @@ with tab_qs:
                         if vencedor == "Random Forest": pred_delta = mod_rf.predict(entrada_sim)[0]
                         else: pred_delta = mod_lr.predict(entrada_sim)[0]
                         
-                        st.metric("Predição na Balança (Amanhã)", f"{pred_delta*1000:+.0f} g", delta_color="inverse")
+                        st.metric("Tendência na Balança (Amanhã)", f"{pred_delta*1000:+.0f} g", delta_color="inverse", help="Indica o deslocamento da tendência móvel, e não a balança bruta diária.")
                     else:
                         st.warning("⏳ Aguardando acúmulo de dados (mínimo 10 dias) para iniciar o Torneio El Farol.")
             else:
@@ -537,10 +545,10 @@ with tab_dash:
         * **Déficit Real:** Diferença entre o Gasto Total Estimado e as Calorias Ingeridas.
         * **Perda Teórica:** Déficit Acumulado / 7700 (Considerando que 1kg de gordura ≈ 7700kcal).
         
-        ### 3. Modelo Matemático (Oráculo)
+        ### 3. Modelo Matemático (Oráculo com Filtro Passa-Baixa)
         * **Metodologia:** Regressão Linear Múltipla (Ordinary Least Squares - OLS) baseada no Design de Experimentos (DOE).
-        * **Mecanismo:** Analisa o consumo e gasto (variáveis independentes) e cruza com a variação de peso do *dia seguinte* (variável dependente) para estabelecer causalidade.
-        * **Torneio El Farol & Auditoria:** Seleção dinâmica entre Regressão Linear e Random Forest baseada no menor MAE (Mean Absolute Error) dos últimos 5 dias. O painel inclui um expander com a tabela cruzando os valores reais da balança contra a previsão de cada modelo.
+        * **Mecanismo:** Analisa o consumo e gasto (variáveis independentes) contra uma **Média Móvel de 3 dias do peso futuro** para mitigar o ruído da flutuação hídrica.
+        * **Torneio El Farol & Auditoria:** Seleção dinâmica entre Regressão Linear e Random Forest baseada no menor MAE (Mean Absolute Error) dos últimos 5 dias.
         """)
 
-    st.caption("Leo Tracker Smart View v6.7 | Quantified Self & Transparent El Farol Edition")
+    st.caption("Leo Tracker Smart View v6.8 | Quantified Self & Smooth Signal Edition")
