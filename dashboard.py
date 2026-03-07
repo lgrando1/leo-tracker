@@ -309,15 +309,14 @@ with tab_qs:
                 with c_stats1:
                     st.markdown("##### 🔬 Peso Estatístico (P-Valor)")
                     df_resumo = pd.DataFrame({'Coeficiente (kg)': params, 'P-Valor': pvalues}).drop('Intercept')
-                    # Atualizando a tabela para mostrar as janelas individuais
                     df_resumo.index = [f'Jejum ({win_jej}d)', f'Proteína ({win_prot}d)', f'Carbo ({win_carb}d)', f'Gordura ({win_gord}d)', f'Passos ({win_passos}d)']
                     
-                    def highlight_pval(val):
-                        if val < 0.05: return 'color: #27AE60; font-weight: bold;'
-                        elif val < 0.15: return 'color: #F39C12; font-weight: bold;'
-                        return 'color: #7F8C8D;'
+                    # Como estamos exibindo P-Valor na aba inicial, vamos formatar o dataframe para st.table para não dar erro tbm
+                    df_resumo_table = df_resumo.copy()
+                    df_resumo_table['Coeficiente (kg)'] = df_resumo_table['Coeficiente (kg)'].apply(lambda x: f"{x:+.5f}")
+                    df_resumo_table['P-Valor'] = df_resumo_table['P-Valor'].apply(lambda x: f"{x:.3f} {'(🟢)' if x < 0.05 else '(🟠)' if x < 0.15 else '(⚪)'}")
                     
-                    st.dataframe(df_resumo.style.map(highlight_pval, subset=['P-Valor']).format({'Coeficiente (kg)': '{:+.5f}', 'P-Valor': '{:.3f}'}), use_container_width=True)
+                    st.table(df_resumo_table)
                     st.caption("🟢 P < 0.05: Alta Relevância | 🟠 P < 0.15: Relevância Moderada | ⚪ > 0.15: Ruído Sistêmico")
                     
                 with c_stats2:
@@ -330,10 +329,11 @@ with tab_qs:
                         
                         with st.expander("🔍 Auditoria dos Agentes (Ver Histórico de Erros)", expanded=False):
                             st.markdown("Previsão vs. Variação Real (últimos 5 dias).")
-                            st.dataframe(df_auditoria.style.format({
-                                'Real (g)': '{:+.0f}', 'Previsto LR (g)': '{:+.0f}', 'Previsto RF (g)': '{:+.0f}',
-                                'Erro LR (g)': '{:.0f}', 'Erro RF (g)': '{:.0f}'
-                            }), use_container_width=True, hide_index=True)
+                            # Convertendo para tabela estática também para blindar contra bugs visuais
+                            df_auditoria_tb = df_auditoria.copy()
+                            for col in ['Real (g)', 'Previsto LR (g)', 'Previsto RF (g)']: df_auditoria_tb[col] = df_auditoria_tb[col].apply(lambda x: f"{x:+.0f}")
+                            for col in ['Erro LR (g)', 'Erro RF (g)']: df_auditoria_tb[col] = df_auditoria_tb[col].apply(lambda x: f"{x:.0f}")
+                            st.table(df_auditoria_tb)
 
                         st.markdown("##### 🔮 Simulador Preditivo")
                         sim_col1, sim_col2, sim_col3 = st.columns(3) 
@@ -407,8 +407,10 @@ with tab_qs:
                             df_res = pd.DataFrame(resultados).sort_values(by='R²', ascending=False).head(10)
                             st.success("Busca concluída! Visualizando os 10 melhores perfis.")
                             
-                            # Tabela com background_gradient REMOVIDO para evitar o erro do matplotlib
-                            st.dataframe(df_res.style.format({'R²': '{:.2%}'}), use_container_width=True, hide_index=True)
+                            # Tabela Formatada de Forma Nativa (Imune ao erro do Matplotlib)
+                            df_res_view = df_res.copy()
+                            df_res_view['R²'] = df_res_view['R²'].apply(lambda x: f"{x:.2%}")
+                            st.table(df_res_view)
                             
                             # Gráfico de Radar (Aranha)
                             categories = ['Filtro Peso', 'Jejum', 'Prot', 'Carbo', 'Gord', 'Passos']
