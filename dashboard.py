@@ -407,8 +407,8 @@ with tab_qs:
                             df_res = pd.DataFrame(resultados).sort_values(by='R²', ascending=False).head(10)
                             st.success("Busca concluída! Visualizando os 10 melhores perfis.")
                             
-                            # Tabela
-                            st.dataframe(df_res.style.format({'R²': '{:.2%}'}).background_gradient(subset=['R²'], cmap='Greens'), use_container_width=True, hide_index=True)
+                            # Tabela com background_gradient REMOVIDO para evitar o erro do matplotlib
+                            st.dataframe(df_res.style.format({'R²': '{:.2%}'}), use_container_width=True, hide_index=True)
                             
                             # Gráfico de Radar (Aranha)
                             categories = ['Filtro Peso', 'Jejum', 'Prot', 'Carbo', 'Gord', 'Passos']
