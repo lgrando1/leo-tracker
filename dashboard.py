@@ -443,7 +443,7 @@ with tab_dash:
         st.markdown("##### 🏃‍♂️ Consistência de Treino")
         if not df_merged.empty and 't_passos_trabalho' in df_merged.columns:
             fig_tr = make_subplots(specs=[[{"secondary_y": True}]])
-            fig_tr.add_trace(go.Scatter(x=df_merged['data_dt'], y=df_merged['t_passos_trabalho'], name='passos_trabalho', mode='lines', line=dict(color='#8E44AD', width=2)), secondary_y=False)
+            fig_tr.add_trace(go.bar(x=df_merged['data_dt'], y=df_merged['t_passos_trabalho'], name='passos_trabalho', mode='lines', line=dict(color='#8E44AD', width=2)), secondary_y=False)
             fig_tr.update_layout(height=400, margin=dict(l=10,r=10,t=20,b=10), showlegend=False, template="plotly_white")
             st.plotly_chart(fig_tr, use_container_width=True)
 
