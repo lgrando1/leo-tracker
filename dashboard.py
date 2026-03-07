@@ -75,7 +75,7 @@ df_hist = run_query("""
 """, {"d": DATA_INICIO})
 
 df_treino = run_query("""
-    SELECT data, SUM(duracao_min) as t_min, SUM(passos) as t_passos, SUM(calorias) as t_cal_out 
+    SELECT data, SUM(duracao_min) as t_min, SUM(passos_trabalho) as t_passos_trabalho, SUM(calorias) as t_cal_out 
     FROM public.exercicios WHERE data >= :d GROUP BY data ORDER BY data ASC
 """, {"d": DATA_INICIO})
 
@@ -109,11 +109,11 @@ if not df_hist.empty and not df_peso.empty:
 
     if not df_treino.empty:
         df_treino['data_dt'] = pd.to_datetime(df_treino['data']).dt.date
-        df_treino_agg = df_treino.groupby('data_dt')[['t_min', 't_passos', 't_cal_out']].sum().reset_index()
+        df_treino_agg = df_treino.groupby('data_dt')[['t_min', 't_passos_trabalho', 't_cal_out']].sum().reset_index()
         df_merged = pd.merge(df_merged, df_treino_agg, on='data_dt', how='left')
-        df_merged[['t_min', 't_passos', 't_cal_out']] = df_merged[['t_min', 't_passos', 't_cal_out']].fillna(0)
+        df_merged[['t_min', 't_passos_trabalho', 't_cal_out']] = df_merged[['t_min', 't_passos_trabalho', 't_cal_out']].fillna(0)
     else:
-        df_merged['t_min'] = 0; df_merged['t_passos'] = 0; df_merged['t_cal_out'] = 0
+        df_merged['t_min'] = 0; df_merged['t_passos_trabalho'] = 0; df_merged['t_cal_out'] = 0
     
     idade, altura = int(p.get('idade', 41)), int(p.get('altura_cm', 178))
     df_merged['get_basal'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * fator_atividade
@@ -366,14 +366,14 @@ with tab_dash:
     meta_agua = round((peso_atual * 35) / 1000, 1)
 
     treino_min = int(df_hoje_treino['duracao_min'].sum()) if not df_hoje_treino.empty else 0
-    treino_passos = int(df_hoje_treino['passos'].sum()) if not df_hoje_treino.empty else 0
+    treino_passos_trabalho = int(df_hoje_treino['passos_trabalho'].sum()) if not df_hoje_treino.empty else 0
 
     c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("⚖️ Peso Atual", f"{peso_atual} kg", f"Meta: {p['meta_peso_alvo']}")
     c2.metric("🔥 Calorias (Hoje)", f"{int(k_act)}", f"Meta: {p['meta_kcal']}")
     c3.metric("🥩 Proteína (Hoje)", f"{int(p_act)}g", f"Meta: {p['meta_proteina']}")
     c4.metric("💧 Água", f"{meta_agua}L", "Minímo")
-    c5.metric("🏃‍♂️ Treino (Hoje)", f"{treino_min} min", f"{treino_passos} passos")
+    c5.metric("🏃‍♂️ Treino (Hoje)", f"{treino_min} min", f"{treino_passos_trabalho} passos_trabalho")
 
     last_bp_txt = "--"
     if not df_bp.empty:
@@ -441,10 +441,10 @@ with tab_dash:
 
     with c_p2:
         st.markdown("##### 🏃‍♂️ Consistência de Treino")
-        if not df_merged.empty and 't_passos' in df_merged.columns:
+        if not df_merged.empty and 't_passos_trabalho' in df_merged.columns:
             fig_tr = make_subplots(specs=[[{"secondary_y": True}]])
             fig_tr.add_trace(go.Bar(x=df_merged['data_dt'], y=df_merged['t_min'], name='Minutos', marker_color='#F1C40F'), secondary_y=False)
-            fig_tr.add_trace(go.Scatter(x=df_merged['data_dt'], y=df_merged['t_passos'], name='Passos', mode='lines', line=dict(color='#8E44AD', width=2)), secondary_y=True)
+            fig_tr.add_trace(go.Scatter(x=df_merged['data_dt'], y=df_merged['t_passos_trabalho'], name='passos_trabalho', mode='lines', line=dict(color='#8E44AD', width=2)), secondary_y=True)
             fig_tr.update_layout(height=400, margin=dict(l=10,r=10,t=20,b=10), showlegend=False, template="plotly_white")
             st.plotly_chart(fig_tr, use_container_width=True)
 
@@ -483,7 +483,7 @@ with tab_dash:
     st.markdown("### 📊 Análise de Tendências (Médias Móveis & Extremos)")
 
     if not df_merged.empty and 'deficit_real' in df_merged.columns:
-        cols_eda = ['peso_kg', 'tkcal', 'tprot', 'tcarb', 'tgord', 't_min', 't_passos', 'deficit_real']
+        cols_eda = ['peso_kg', 'tkcal', 'tprot', 'tcarb', 'tgord', 't_min', 't_passos_trabalho', 'deficit_real']
         cols_present = [c for c in cols_eda if c in df_merged.columns]
         df_eda = df_merged[['data_dt', *cols_present]].copy().sort_values('data_dt').fillna(0)
 
@@ -498,7 +498,7 @@ with tab_dash:
             ("🍞 Carbo (g)", 'tcarb'),
             ("🥑 Gordura (g)", 'tgord'),
             ("⏱️ Treino (min)", 't_min'),
-            ("👣 Passos", 't_passos'),
+            ("👣 passos_trabalho", 't_passos_trabalho'),
             ("📉 Déficit Diário", 'deficit_real')
         ]
 
