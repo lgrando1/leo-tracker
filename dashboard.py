@@ -257,18 +257,21 @@ with tab_qs:
             # BLOCO 3: ORÁCULO METABÓLICO INTERATIVO (DOE & REGRESSÃO MULTIVARIÁVEL)
             # ============================================================================
             st.markdown("### 3️⃣ Oráculo Metabólico Dinâmico (Sintonizador de Sinais)")
-            st.markdown("Ajuste as janelas móveis (em dias) para ver como a inércia dos macronutrientes e passos afeta a variação na balança.")
+            st.markdown("Ajuste as janelas móveis (em dias) para sincronizar o tempo de resposta fisiológica de cada variável no seu corpo.")
             
-            # Controles Interativos de Engenharia de Features
-            panel_c1, panel_c2, panel_c3 = st.columns(3)
-            with panel_c1:
-                win_peso = st.slider("⚖️ Filtro: Peso (Variável Alvo)", 1, 7, 3, help="1 = Delta diário exato. 3 = Suavização de 3 dias para ignorar ruído hídrico.")
-            with panel_c2:
-                win_gord = st.slider("🥑 Filtro: Gordura", 1, 7, 1, help="Gordura costuma ter efeito rápido (1 a 2 dias).")
-            with panel_c3:
-                win_outros = st.slider("🍞 Filtro: Carbo, Prot, Jejum, Passos", 1, 7, 3, help="Variáveis estruturais que demoram mais para impactar a balança de forma consolidada.")
+            # Controles Interativos de Engenharia de Features - TOTALMENTE INDEPENDENTES
+            st.markdown("**🎯 Variável Alvo (Filtro Anti-Ruído)**")
+            win_peso = st.slider("⚖️ Filtro: Peso (Tendência da Balança)", 1, 7, 3, help="1 = Tenta prever a balança exata de amanhã. 3 a 7 = Previsão da média dos próximos dias (remove o ruído da retenção de água).")
             
-            # Recalculando o dataframe de modelo com base nos sliders
+            st.markdown("**⚙️ Variáveis Independentes (Atraso Fisiológico)**")
+            col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns(5)
+            with col_f1: win_jej = st.slider("⏳ Jejum", 1, 7, 1)
+            with col_f2: win_prot = st.slider("🥩 Proteína", 1, 7, 3)
+            with col_f3: win_carb = st.slider("🍞 Carbo", 1, 7, 2)
+            with col_f4: win_gord = st.slider("🥑 Gordura", 1, 7, 1)
+            with col_f5: win_passos = st.slider("👣 Passos", 1, 7, 2)
+            
+            # Recalculando o dataframe de modelo com base nos sliders independentes
             df_model = df_qs.copy()
             
             # Suavizando o Target (Peso)
@@ -276,12 +279,12 @@ with tab_qs:
             df_model['peso_suav_amanha'] = df_model['peso_suav'].shift(-1)
             df_model['target'] = df_model['peso_suav_amanha'] - df_model['peso_suav']
             
-            # Suavizando as Features (Inputs)
+            # Suavizando as Features (Inputs) individualmente
             df_model['gord_f'] = df_model['tgord'].rolling(window=win_gord, min_periods=1).mean()
-            df_model['carb_f'] = df_model['tcarb'].rolling(window=win_outros, min_periods=1).mean()
-            df_model['prot_f'] = df_model['tprot'].rolling(window=win_outros, min_periods=1).mean()
-            df_model['jejum_f'] = df_model['jejum_h'].rolling(window=win_outros, min_periods=1).mean()
-            df_model['passos_f'] = df_model['t_passos_trabalho'].rolling(window=win_outros, min_periods=1).mean()
+            df_model['carb_f'] = df_model['tcarb'].rolling(window=win_carb, min_periods=1).mean()
+            df_model['prot_f'] = df_model['tprot'].rolling(window=win_prot, min_periods=1).mean()
+            df_model['jejum_f'] = df_model['jejum_h'].rolling(window=win_jej, min_periods=1).mean()
+            df_model['passos_f'] = df_model['t_passos_trabalho'].rolling(window=win_passos, min_periods=1).mean()
             
             lista_features = ['jejum_f', 'prot_f', 'carb_f', 'gord_f', 'passos_f']
             df_model = df_model.dropna(subset=['target'] + lista_features)
@@ -305,7 +308,8 @@ with tab_qs:
                 with c_stats1:
                     st.markdown("##### 🔬 Peso Estatístico (P-Valor)")
                     df_resumo = pd.DataFrame({'Coeficiente (kg)': params, 'P-Valor': pvalues}).drop('Intercept')
-                    df_resumo.index = [f'Jejum ({win_outros}d)', f'Proteína ({win_outros}d)', f'Carbo ({win_outros}d)', f'Gordura ({win_gord}d)', f'Passos ({win_outros}d)']
+                    # Atualizando a tabela para mostrar as janelas individuais
+                    df_resumo.index = [f'Jejum ({win_jej}d)', f'Proteína ({win_prot}d)', f'Carbo ({win_carb}d)', f'Gordura ({win_gord}d)', f'Passos ({win_passos}d)']
                     
                     def highlight_pval(val):
                         if val < 0.05: return 'color: #27AE60; font-weight: bold;'
@@ -333,20 +337,20 @@ with tab_qs:
                         st.markdown("##### 🔮 Simulador Preditivo")
                         sim_col1, sim_col2, sim_col3 = st.columns(3) 
                         with sim_col1:
-                            sim_jej = st.slider("Jejum Médio", 8.0, 24.0, 16.0, 0.5)
-                            sim_prot = st.slider("Proteína Média", 50, 250, int(p['meta_proteina']), 5)
+                            sim_jej = st.slider(f"Jejum ({win_jej}d)", 8.0, 24.0, 16.0, 0.5)
+                            sim_prot = st.slider(f"Proteína ({win_prot}d)", 50, 250, int(p['meta_proteina']), 5)
                         with sim_col2:
-                            sim_carb = st.slider("Carbo Médio", 20, 300, int(p['meta_carbo']), 5)
-                            sim_gord = st.slider("Gordura Média", 20, 150, int(p['meta_gordura']), 5)
+                            sim_carb = st.slider(f"Carbo ({win_carb}d)", 20, 300, int(p['meta_carbo']), 5)
+                            sim_gord = st.slider(f"Gordura ({win_gord}d)", 20, 150, int(p['meta_gordura']), 5)
                         with sim_col3:
-                            sim_passos = st.slider("Passos Médios", 0, 30000, 10000, 500)
+                            sim_passos = st.slider(f"Passos ({win_passos}d)", 0, 30000, 10000, 500)
                         
                         entrada_sim = pd.DataFrame({'jejum_f': [sim_jej], 'prot_f': [sim_prot], 'carb_f': [sim_carb], 'gord_f': [sim_gord], 'passos_f': [sim_passos]})
                         
                         if vencedor == "Random Forest": pred_delta = mod_rf.predict(entrada_sim)[0]
                         else: pred_delta = mod_lr.predict(entrada_sim)[0]
                         
-                        st.metric("Tendência de Variação (Amanhã)", f"{pred_delta*1000:+.0f} g", delta_color="inverse")
+                        st.metric("Tendência de Variação", f"{pred_delta*1000:+.0f} g", delta_color="inverse")
                     else:
                         st.warning("⏳ Aguardando acúmulo de dados (mínimo 10 dias) para iniciar o Torneio El Farol.")
             else:
@@ -535,4 +539,4 @@ with tab_dash:
         * **Torneio El Farol & Auditoria:** Seleção dinâmica entre Regressão Linear e Random Forest baseada no menor MAE (Mean Absolute Error) dos últimos 5 dias.
         """)
 
-    st.caption("Leo Tracker Smart View v6.9 | Interactive Signal Tuning Edition")
+    st.caption("Leo Tracker Smart View v7.0 | Advanced Tuning Edition")
