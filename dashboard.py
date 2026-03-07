@@ -124,7 +124,8 @@ if not df_hist.empty and not df_peso.empty:
 # 4. MOTOR PREDITIVO (EL FAROL)
 # ============================================================================
 def torneio_el_farol(df_modelo):
-    X = df_modelo[['jejum_h', 'tprot', 'tcarb', 'tgord']]
+    # Incluindo t_passos_trabalho na matriz de treinamento
+    X = df_modelo[['jejum_h', 'tprot', 'tcarb', 'tgord', 't_passos_trabalho']]
     y = df_modelo['delta_peso_kg']
     
     if len(df_modelo) < 10:
@@ -166,7 +167,6 @@ tab_qs, tab_dash = st.tabs(["🧠 Quantified Self (Engenharia Metabólica)", "�
 with tab_qs:
     st.markdown("### 🧠 Laboratório de Termodinâmica & Turnos de Jejum")
     
-    # 🛡️ BLINDAGEM EXTRA: Verifica se 'deficit_real' existe antes de processar
     if not df_merged.empty and 'deficit_real' in df_merged.columns:
         df_qs = df_merged.copy()
         
@@ -259,10 +259,10 @@ with tab_qs:
             st.markdown("---")
 
             # ============================================================================
-            # BLOCO 3: CORRELAÇÃO DE MACRONUTRIENTES
+            # BLOCO 3: CORRELAÇÃO DE MACRONUTRIENTES E PASSOS
             # ============================================================================
-            st.markdown("### 3️⃣ Análise de Variáveis: Influência dos Macronutrientes")
-            c_mac1, c_mac2, c_mac3 = st.columns(3)
+            st.markdown("### 3️⃣ Análise de Variáveis: Influência de Fatores")
+            c_mac1, c_mac2, c_mac3, c_mac4 = st.columns(4) # Expandido para 4 colunas
             df_macros_trend = df_qs.dropna(subset=['delta_peso_kg'])
 
             def plot_macro_scatter(col_x, title, color_hex):
@@ -273,13 +273,14 @@ with tab_qs:
                     p_func = np.poly1d(z)
                     x_tr = np.linspace(df_macros_trend[col_x].min(), df_macros_trend[col_x].max(), 100)
                     fig.add_trace(go.Scatter(x=x_tr, y=p_func(x_tr), mode='lines', line=dict(color='black', dash='dot')))
-                fig.update_layout(title=title, height=400, template="plotly_white", xaxis_title=f"{title.split(' ')[0]} (g)", yaxis_title="Variação de Peso (kg)", showlegend=False, margin=dict(l=10,r=10,t=40,b=10))
+                fig.update_layout(title=title, height=400, template="plotly_white", xaxis_title=f"{title.split(' ')[0]}", yaxis_title="Variação de Peso (kg)", showlegend=False, margin=dict(l=10,r=10,t=40,b=10))
                 fig.add_hline(y=0, line_width=1, line_dash="dash", line_color="gray")
                 return fig
 
             with c_mac1: st.plotly_chart(plot_macro_scatter('tcarb', '🍞 Carboidratos vs Peso', '#F39C12'), use_container_width=True)
             with c_mac2: st.plotly_chart(plot_macro_scatter('tprot', '🥩 Proteína vs Peso', '#2980B9'), use_container_width=True)
             with c_mac3: st.plotly_chart(plot_macro_scatter('tgord', '🥑 Gordura vs Peso', '#C0392B'), use_container_width=True)
+            with c_mac4: st.plotly_chart(plot_macro_scatter('t_passos_trabalho', '👣 Passos vs Peso', '#8E44AD'), use_container_width=True)
 
             st.markdown("---")
 
@@ -288,10 +289,12 @@ with tab_qs:
             # ============================================================================
             st.markdown("### 4️⃣ Oráculo Metabólico (DOE & Regressão Múltipla)")
             
-            df_model = df_qs.dropna(subset=['delta_peso_kg', 'jejum_h', 'tprot', 'tcarb', 'tgord']).copy()
+            # Adicionado t_passos_trabalho no dropna
+            df_model = df_qs.dropna(subset=['delta_peso_kg', 'jejum_h', 'tprot', 'tcarb', 'tgord', 't_passos_trabalho']).copy()
             
             if len(df_model) > 5:
-                formula = 'delta_peso_kg ~ jejum_h + tprot + tcarb + tgord'
+                # Nova fórmula do modelo estatístico
+                formula = 'delta_peso_kg ~ jejum_h + tprot + tcarb + tgord + t_passos_trabalho'
                 model = ols(formula, data=df_model).fit()
                 
                 r2 = model.rsquared
@@ -299,21 +302,24 @@ with tab_qs:
                 pvalues = model.pvalues
                 
                 st.markdown(f"**R² do Modelo Base:** {r2*100:.1f}% | **N amostral:** {len(df_model)} dias calibrados")
-                st.latex(rf"\Delta Peso (kg) = {params['Intercept']:.3f} {params['jejum_h']:+.4f}(Jejum) {params['tprot']:+.4f}(Prot) {params['tcarb']:+.4f}(Carbo) {params['tgord']:+.4f}(Gord)")
+                
+                # Fórmula atualizada com 5 casas decimais nos passos para refletir a proporção estatística de grandes números
+                st.latex(rf"\Delta Peso (kg) = {params['Intercept']:.3f} {params['jejum_h']:+.4f}(Jejum) {params['tprot']:+.4f}(Prot) {params['tcarb']:+.4f}(Carbo) {params['tgord']:+.4f}(Gord) {params['t_passos_trabalho']:+.6f}(Passos)")
                 
                 c_stats1, c_stats2 = st.columns([1, 1.2])
                 
                 with c_stats1:
                     st.markdown("##### 🔬 Peso Estatístico (P-Valor)")
                     df_resumo = pd.DataFrame({'Coeficiente (kg)': params, 'P-Valor': pvalues}).drop('Intercept')
-                    df_resumo.index = ['Jejum (h)', 'Proteína (g)', 'Carbo (g)', 'Gordura (g)']
+                    # Adicionada a nova variável no resumo estatístico
+                    df_resumo.index = ['Jejum (h)', 'Proteína (g)', 'Carbo (g)', 'Gordura (g)', 'Passos']
                     
                     def highlight_pval(val):
                         if val < 0.05: return 'color: #27AE60; font-weight: bold;'
                         elif val < 0.15: return 'color: #F39C12; font-weight: bold;'
                         return 'color: #7F8C8D;'
                     
-                    st.dataframe(df_resumo.style.map(highlight_pval, subset=['P-Valor']).format({'Coeficiente (kg)': '{:+.4f}', 'P-Valor': '{:.3f}'}), use_container_width=True)
+                    st.dataframe(df_resumo.style.map(highlight_pval, subset=['P-Valor']).format({'Coeficiente (kg)': '{:+.5f}', 'P-Valor': '{:.3f}'}), use_container_width=True)
                     st.caption("🟢 P < 0.05: Alta Relevância | 🟠 P < 0.15: Relevância Moderada | ⚪ > 0.15: Ruído Sistêmico")
                     
                 with c_stats2:
@@ -332,15 +338,18 @@ with tab_qs:
                             }), use_container_width=True, hide_index=True)
 
                         st.markdown("##### 🔮 Simulador Preditivo")
-                        sim_col1, sim_col2 = st.columns(2)
+                        sim_col1, sim_col2, sim_col3 = st.columns(3) # Novo layout de colunas
                         with sim_col1:
                             sim_jej = st.slider("Jejum (h)", 8.0, 24.0, 16.0, 0.5)
                             sim_prot = st.slider("Proteína (g)", 50, 250, int(p['meta_proteina']), 5)
                         with sim_col2:
                             sim_carb = st.slider("Carbo (g)", 20, 300, int(p['meta_carbo']), 5)
                             sim_gord = st.slider("Gordura (g)", 20, 150, int(p['meta_gordura']), 5)
+                        with sim_col3:
+                            # Novo slider para os passos diários
+                            sim_passos = st.slider("Passos", 0, 30000, 10000, 500)
                         
-                        entrada_sim = pd.DataFrame({'jejum_h': [sim_jej], 'tprot': [sim_prot], 'tcarb': [sim_carb], 'tgord': [sim_gord]})
+                        entrada_sim = pd.DataFrame({'jejum_h': [sim_jej], 'tprot': [sim_prot], 'tcarb': [sim_carb], 'tgord': [sim_gord], 't_passos_trabalho': [sim_passos]})
                         
                         if vencedor == "Random Forest": pred_delta = mod_rf.predict(entrada_sim)[0]
                         else: pred_delta = mod_lr.predict(entrada_sim)[0]
@@ -349,7 +358,7 @@ with tab_qs:
                     else:
                         st.warning("⏳ Aguardando acúmulo de dados (mínimo 10 dias) para iniciar o Torneio El Farol.")
             else:
-                st.info("📊 Aguardando mais logs simultâneos de (Comida + Peso + Jejum) para gerar o modelo matemático preditivo.")
+                st.info("📊 Aguardando mais logs simultâneos para gerar o modelo matemático preditivo.")
         else:
             st.warning("Aguardando dados consolidados de variação de peso para processar o laboratório.")
     else:
@@ -373,7 +382,7 @@ with tab_dash:
     c2.metric("🔥 Calorias (Hoje)", f"{int(k_act)}", f"Meta: {p['meta_kcal']}")
     c3.metric("🥩 Proteína (Hoje)", f"{int(p_act)}g", f"Meta: {p['meta_proteina']}")
     c4.metric("💧 Água", f"{meta_agua}L", "Minímo")
-    c5.metric("🏃‍♂️ Treino (Hoje)", f"{treino_min} min", f"{treino_passos_trabalho} passos_trabalho")
+    c5.metric("🏃‍♂️ Treino (Hoje)", f"{treino_min} min", f"{treino_passos_trabalho} passos")
 
     last_bp_txt = "--"
     if not df_bp.empty:
@@ -443,7 +452,7 @@ with tab_dash:
         st.markdown("##### 🏃‍♂️ Consistência de Treino")
         if not df_merged.empty and 't_passos_trabalho' in df_merged.columns:
             fig_tr = make_subplots(specs=[[{"secondary_y": True}]])
-            fig_tr.add_trace(go.Scatter(x=df_merged['data_dt'], y=df_merged['t_passos_trabalho'], name='passos_trabalho', mode='lines', line=dict(color='#8E44AD', width=2)), secondary_y=False)
+            fig_tr.add_trace(go.Scatter(x=df_merged['data_dt'], y=df_merged['t_passos_trabalho'], name='Passos', mode='lines', line=dict(color='#8E44AD', width=2)), secondary_y=False)
             fig_tr.update_layout(height=400, margin=dict(l=10,r=10,t=20,b=10), showlegend=False, template="plotly_white")
             st.plotly_chart(fig_tr, use_container_width=True)
 
@@ -497,7 +506,7 @@ with tab_dash:
             ("🍞 Carbo (g)", 'tcarb'),
             ("🥑 Gordura (g)", 'tgord'),
             ("⏱️ Treino (min)", 't_min'),
-            ("👣 passos_trabalho", 't_passos_trabalho'),
+            ("👣 Passos", 't_passos_trabalho'),
             ("📉 Déficit Diário", 'deficit_real')
         ]
 
@@ -530,8 +539,8 @@ with tab_dash:
         
         ### 3. Modelo Matemático (Oráculo)
         * **Metodologia:** Regressão Linear Múltipla (Ordinary Least Squares - OLS) baseada no Design de Experimentos (DOE).
-        * **Mecanismo:** Analisa o consumo (variáveis independentes) e cruza com a variação de peso do *dia seguinte* (variável dependente) para estabelecer causalidade.
+        * **Mecanismo:** Analisa o consumo e gasto (variáveis independentes) e cruza com a variação de peso do *dia seguinte* (variável dependente) para estabelecer causalidade.
         * **Torneio El Farol & Auditoria:** Seleção dinâmica entre Regressão Linear e Random Forest baseada no menor MAE (Mean Absolute Error) dos últimos 5 dias. O painel inclui um expander com a tabela cruzando os valores reais da balança contra a previsão de cada modelo.
         """)
 
-    st.caption("Leo Tracker Smart View v6.6 | Quantified Self & Transparent El Farol Edition")
+    st.caption("Leo Tracker Smart View v6.7 | Quantified Self & Transparent El Farol Edition")
