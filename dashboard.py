@@ -12,6 +12,7 @@ from statsmodels.formula.api import ols
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error
+import itertools
 
 # ============================================================================
 # 1. CONFIGURAÇÃO VISUAL
@@ -355,8 +356,93 @@ with tab_qs:
                         st.warning("⏳ Aguardando acúmulo de dados (mínimo 10 dias) para iniciar o Torneio El Farol.")
             else:
                 st.info("📊 Aguardando mais logs simultâneos para gerar o modelo matemático preditivo.")
-        else:
-            st.warning("Aguardando dados consolidados de variação de peso para processar o laboratório.")
+        
+        # ============================================================================
+        # BOTÃO DE AUTOTUNING (GRID SEARCH COM GRÁFICO DE RADAR)
+        # ============================================================================
+        st.markdown("---")
+        with st.expander("🤖 Otimização Combinatória (Descobrir DNA Metabólico)", expanded=False):
+            st.markdown("O algoritmo testará ~15.600 combinações de filtros (de 1 a 5 dias) para encontrar a inércia fisiológica que maximiza a previsibilidade do seu peso.")
+            
+            if st.button("🚀 Iniciar Autotuning"):
+                with st.spinner("Calculando o DNA do seu metabolismo..."):
+                    range_filtros = range(1, 6) # Testando de 1 a 5 dias
+                    combinacoes = list(itertools.product(range_filtros, repeat=6))
+                    
+                    resultados = []
+                    base_df = df_qs[['peso_kg', 'jejum_h', 'tprot', 'tcarb', 'tgord', 't_passos_trabalho']].copy()
+                    
+                    progress_bar = st.progress(0)
+                    total_comb = len(combinacoes)
+                    
+                    for i, (w_peso, w_jej, w_prot, w_carb, w_gord, w_passos) in enumerate(combinacoes):
+                        if i % 500 == 0: progress_bar.progress(i / total_comb)
+                            
+                        df_temp = base_df.copy()
+                        df_temp['peso_suav'] = df_temp['peso_kg'].rolling(window=w_peso, min_periods=1).mean()
+                        df_temp['peso_suav_amanha'] = df_temp['peso_suav'].shift(-1)
+                        df_temp['target'] = df_temp['peso_suav_amanha'] - df_temp['peso_suav']
+                        
+                        df_temp['gord_f'] = df_temp['tgord'].rolling(window=w_gord, min_periods=1).mean()
+                        df_temp['carb_f'] = df_temp['tcarb'].rolling(window=w_carb, min_periods=1).mean()
+                        df_temp['prot_f'] = df_temp['tprot'].rolling(window=w_prot, min_periods=1).mean()
+                        df_temp['jejum_f'] = df_temp['jejum_h'].rolling(window=w_jej, min_periods=1).mean()
+                        df_temp['passos_f'] = df_temp['t_passos_trabalho'].rolling(window=w_passos, min_periods=1).mean()
+                        
+                        df_model_loop = df_temp.dropna()
+                        
+                        if len(df_model_loop) > 10:
+                            try:
+                                model_loop = sm.OLS(df_model_loop['target'], sm.add_constant(df_model_loop[['jejum_f', 'prot_f', 'carb_f', 'gord_f', 'passos_f']])).fit()
+                                resultados.append({
+                                    'R²': model_loop.rsquared,
+                                    'Filtro Peso': w_peso, 'Jejum': w_jej, 'Prot': w_prot, 
+                                    'Carbo': w_carb, 'Gord': w_gord, 'Passos': w_passos
+                                })
+                            except: pass
+                    
+                    progress_bar.progress(1.0)
+                    
+                    if resultados:
+                        df_res = pd.DataFrame(resultados).sort_values(by='R²', ascending=False).head(10)
+                        st.success("Busca concluída! Visualizando os 10 melhores perfis.")
+                        
+                        # Tabela
+                        st.dataframe(df_res.style.format({'R²': '{:.2%}'}).background_gradient(subset=['R²'], cmap='Greens'), use_container_width=True, hide_index=True)
+                        
+                        # Gráfico de Radar (Aranha)
+                        categories = ['Filtro Peso', 'Jejum', 'Prot', 'Carbo', 'Gord', 'Passos']
+                        fig_radar = go.Figure()
+                        
+                        colors = ['#FFD700', '#C0C0C0', '#CD7F32'] + ['#3498db'] * 7 # Ouro, Prata, Bronze, depois azul
+
+                        for i in range(len(df_res)):
+                            row = df_res.iloc[i]
+                            values = row[categories].values.tolist()
+                            values += values[:1] # Fechar o ciclo do radar
+                            
+                            fig_radar.add_trace(go.Scatterpolar(
+                                r=values,
+                                theta=categories + categories[:1],
+                                fill='toself' if i == 0 else 'none',
+                                name=f"Rank #{i+1} (R²: {row['R²']:.1%})",
+                                line=dict(color=colors[i], width=3 if i == 0 else 1),
+                                opacity=1.0 if i == 0 else 0.5
+                            ))
+
+                        fig_radar.update_layout(
+                            polar=dict(
+                                radialaxis=dict(visible=True, range=[0, 6], tickvals=[1,2,3,4,5]),
+                            ),
+                            showlegend=True, height=500, title="DNA Metabólico: Perfil dos Melhores Modelos"
+                        )
+                        st.plotly_chart(fig_radar, use_container_width=True)
+                        
+                        st.info("👆 O gráfico mostra o 'formato' das melhores configurações. O modelo #1 (Dourado) é o mais preciso. Ajuste os sliders acima com os valores dele!")
+        st.markdown("---")
+
+    else:
+        st.warning("Aguardando dados consolidados de variação de peso para processar o laboratório.")
     else:
         st.info("📊 Aguardando cruzamento de dados de peso e consumo para exibir a aba Quantified Self.")
 
@@ -533,10 +619,10 @@ with tab_dash:
         * **Déficit Real:** Diferença entre o Gasto Total Estimado e as Calorias Ingeridas.
         * **Perda Teórica:** Déficit Acumulado / 7700 (Considerando que 1kg de gordura ≈ 7700kcal).
         
-        ### 3. Modelo Matemático (Oráculo com Sintonizador)
-        * **Metodologia:** Regressão Linear Múltipla (Ordinary Least Squares - OLS) baseada no Design de Experimentos (DOE).
-        * **Mecanismo:** Analisa o consumo e gasto (variáveis independentes) aplicando janelas móveis configuráveis para respeitar o atraso fisiológico de cada variável sobre o peso futuro.
+        ### 3. Modelo Matemático (Oráculo com Sintonizador & Autotuning)
+        * **Metodologia:** Regressão Linear Múltipla (OLS) com janelas móveis independentes para cada variável.
+        * **Autotuning:** Um algoritmo de busca em grade (grid search) testa mais de 15.000 combinações de filtros para encontrar a configuração que maximiza o R² (poder preditivo).
         * **Torneio El Farol & Auditoria:** Seleção dinâmica entre Regressão Linear e Random Forest baseada no menor MAE (Mean Absolute Error) dos últimos 5 dias.
         """)
 
-    st.caption("Leo Tracker Smart View v7.0 | Advanced Tuning Edition")
+    st.caption("Leo Tracker Smart View v7.1 | Autotuning & Radar Chart Edition")
