@@ -127,7 +127,7 @@ def inicializar_banco():
         );
     """)
 
-    # --- NOVAS TABELAS DE SONO E HIDRATAÇÃO ---
+    # --- TABELAS DE SONO, HIDRATAÇÃO E EVACUAÇÃO ---
     executar_sql("""
         CREATE TABLE IF NOT EXISTS public.sono (
             data DATE PRIMARY KEY, horas REAL, qualidade INT
@@ -136,6 +136,11 @@ def inicializar_banco():
     executar_sql("""
         CREATE TABLE IF NOT EXISTS public.hidratacao (
             data DATE PRIMARY KEY, agua_ml INT DEFAULT 0, cafe_ml INT DEFAULT 0
+        );
+    """)
+    executar_sql("""
+        CREATE TABLE IF NOT EXISTS public.evacuacao (
+            data DATE PRIMARY KEY, vezes INT DEFAULT 0, bristol INT DEFAULT 4
         );
     """)
 
@@ -235,6 +240,7 @@ def gerar_excel_nutri(dt_ini, dt_fim):
     
     df_sono_exp = executar_sql("SELECT data, horas as sono_horas, qualidade as sono_qualidade FROM public.sono WHERE data >= :d1 AND data <= :d2", params, is_select=True)
     df_hidra_exp = executar_sql("SELECT data, agua_ml, cafe_ml FROM public.hidratacao WHERE data >= :d1 AND data <= :d2", params, is_select=True)
+    df_evac_exp = executar_sql("SELECT data, vezes as evac_vezes, bristol as evac_bristol FROM public.evacuacao WHERE data >= :d1 AND data <= :d2", params, is_select=True)
 
     if not df_detalhado.empty: df_macros = df_detalhado.groupby('data')[['kcal', 'proteina', 'carbo', 'gordura']].sum().reset_index()
     else: df_macros = pd.DataFrame(columns=['data', 'kcal', 'proteina', 'carbo', 'gordura'])
@@ -251,24 +257,28 @@ def gerar_excel_nutri(dt_ini, dt_fim):
     if not df_treinos_agg.empty: df_treinos_agg['data'] = pd.to_datetime(df_treinos_agg['data']).dt.normalize()
     if not df_sono_exp.empty: df_sono_exp['data'] = pd.to_datetime(df_sono_exp['data']).dt.normalize()
     if not df_hidra_exp.empty: df_hidra_exp['data'] = pd.to_datetime(df_hidra_exp['data']).dt.normalize()
+    if not df_evac_exp.empty: df_evac_exp['data'] = pd.to_datetime(df_evac_exp['data']).dt.normalize()
 
     if not df_macros.empty or not df_peso.empty:
         df_resumo = pd.merge(df_macros, df_peso, on='data', how='outer')
         df_resumo = pd.merge(df_resumo, df_treinos_agg, on='data', how='left')
         
-        # Merge Sono e Hidratação
+        # Merge Sono, Hidratação e Evacuação
         if not df_sono_exp.empty: df_resumo = pd.merge(df_resumo, df_sono_exp, on='data', how='left')
         else: df_resumo['sono_horas'] = 0; df_resumo['sono_qualidade'] = 0
         
         if not df_hidra_exp.empty: df_resumo = pd.merge(df_resumo, df_hidra_exp, on='data', how='left')
         else: df_resumo['agua_ml'] = 0; df_resumo['cafe_ml'] = 0
+
+        if not df_evac_exp.empty: df_resumo = pd.merge(df_resumo, df_evac_exp, on='data', how='left')
+        else: df_resumo['evac_vezes'] = 0; df_resumo['evac_bristol'] = 0
         
         df_resumo = df_resumo.sort_values('data', ascending=False)
-        cols_order = ['data', 'peso_kg', 'kcal', 'proteina', 'carbo', 'gordura', 'treino_min', 'passos_dia', 'passos_prof', 'treino_kcal', 'sono_horas', 'agua_ml', 'cafe_ml']
+        cols_order = ['data', 'peso_kg', 'kcal', 'proteina', 'carbo', 'gordura', 'treino_min', 'passos_dia', 'passos_prof', 'treino_kcal', 'sono_horas', 'agua_ml', 'cafe_ml', 'evac_vezes', 'evac_bristol']
         for c in cols_order: 
             if c not in df_resumo.columns: df_resumo[c] = 0
         df_resumo = df_resumo[cols_order]
-        df_resumo.columns = ['Data', 'Peso (kg)', 'Comida (kcal)', 'Prot (g)', 'Carb (g)', 'Gord (g)', 'Treino (min)', 'Passos Totais', 'Passos Prof', 'Gasto Treino (kcal)', 'Sono (h)', 'Água (ml)', 'Café (ml)']
+        df_resumo.columns = ['Data', 'Peso (kg)', 'Comida (kcal)', 'Prot (g)', 'Carb (g)', 'Gord (g)', 'Treino (min)', 'Passos Totais', 'Passos Prof', 'Gasto Treino (kcal)', 'Sono (h)', 'Água (ml)', 'Café (ml)', 'Intestino (Vezes)', 'Bristol (Qualidade)']
         df_resumo = df_resumo.dropna(subset=['Data'])
         df_resumo['Data'] = df_resumo['Data'].dt.strftime('%d/%m/%Y')
     else: df_resumo = pd.DataFrame(columns=['Data', 'Peso', 'Kcal', '...'])
@@ -317,13 +327,15 @@ p_hoje = float(df_hoje['proteina'].sum()) if not df_hoje.empty else 0.0
 c_hoje = float(df_hoje['carbo'].sum()) if not df_hoje.empty else 0.0
 g_hoje = float(df_hoje['gordura'].sum()) if not df_hoje.empty else 0.0
 
-# Busca Dados Diários de Hidratação e Sono
+# Busca Dados Diários de Hidratação, Sono e Evacuação
 df_hidra_hoje = executar_sql("SELECT agua_ml, cafe_ml FROM public.hidratacao WHERE data = :d", {'d': data_hoje}, is_select=True)
 df_sono_hoje = executar_sql("SELECT horas, qualidade FROM public.sono WHERE data = :d", {'d': data_hoje}, is_select=True)
+df_evac_hoje = executar_sql("SELECT vezes FROM public.evacuacao WHERE data = :d", {'d': data_hoje}, is_select=True)
 
 agua_hoje = int(df_hidra_hoje.iloc[0]['agua_ml']) if not df_hidra_hoje.empty else 0
 cafe_hoje = int(df_hidra_hoje.iloc[0]['cafe_ml']) if not df_hidra_hoje.empty else 0
 sono_hoje = float(df_sono_hoje.iloc[0]['horas']) if not df_sono_hoje.empty else 0.0
+evac_hoje = int(df_evac_hoje.iloc[0]['vezes']) if not df_evac_hoje.empty else 0
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("🔥 Calorias", f"{int(k_hoje)}", f"Meta: {METAS['kcal']}")
@@ -332,10 +344,11 @@ c3.metric("🍞 Carbo", f"{int(c_hoje)}g", f"Meta: {METAS['carb']}g")
 c4.metric("🥑 Gordura", f"{int(g_hoje)}g", f"Meta: {METAS['gord']}g")
 st.progress(min(k_hoje/METAS['kcal'], 1.0))
 
-c5, c6, c7 = st.columns(3)
+c5, c6, c7, c8 = st.columns(4)
 c5.metric("💧 Água", f"{agua_hoje} ml")
 c6.metric("☕ Café", f"{cafe_hoje} ml")
 c7.metric("💤 Sono", f"{sono_hoje} h")
+c8.metric("💩 Intestino", f"{evac_hoje}x")
 
 st.divider()
 
@@ -497,6 +510,25 @@ with tab_daily:
             st.success("Bebidas contabilizadas no painel!"); st.rerun()
 
     # --------------------------------------------------------
+    # 💩 TRÂNSITO INTESTINAL
+    # --------------------------------------------------------
+    st.markdown("### 💩 Trânsito Intestinal (Peso Fecal)")
+    with st.form("form_evac"):
+        c_e1, c_e2, c_e3 = st.columns([1, 2, 1])
+        add_evac = c_e1.number_input("➕ Adicionar Ida (vezes)", 0, 10, 1, help="Soma a quantidade de vezes que foi ao banheiro hoje.")
+        tipo_bristol = c_e2.select_slider("Escala de Bristol (Qualidade)", options=[1,2,3,4,5,6,7], value=4, help="1-2: Constipação severa/leve | 3-4: Ideal/Normal | 5-7: Diarreia leve/severa")
+        
+        if c_e3.form_submit_button("💾 Registrar", use_container_width=True):
+            executar_sql("""
+                INSERT INTO public.evacuacao (data, vezes, bristol) 
+                VALUES (:d, :v, :b)
+                ON CONFLICT (data) DO UPDATE 
+                SET vezes = public.evacuacao.vezes + EXCLUDED.vezes,
+                    bristol = EXCLUDED.bristol
+            """, {'d': data_hoje, 'v': add_evac, 'b': tipo_bristol})
+            st.success("Registro intestinal salvo com sucesso!"); st.rerun()
+
+    # --------------------------------------------------------
     # 💤 REGISTRO DE SONO
     # --------------------------------------------------------
     st.markdown("### 💤 Registro de Sono (Recuperação)")
@@ -504,7 +536,7 @@ with tab_daily:
         c_s1, c_s2, c_s3 = st.columns([1, 1, 2])
         d_sono = c_s1.date_input("Dormiu na noite de:", value=data_hoje - timedelta(days=1), help="Referente a noite passada.")
         h_sono = c_s2.slider("Horas", 0.0, 14.0, 7.5, 0.5)
-        q_sono = c_s3.select_slider("Qualidade", options=[1, 2, 3, 4, 5], value=3, help="1=Péssima | 5=Fantástica")
+        q_sono = c_s3.select_slider("Qualidade de Sono", options=[1, 2, 3, 4, 5], value=3, help="1=Péssima | 5=Fantástica")
         
         if st.form_submit_button("💾 Salvar Sono", use_container_width=True):
             # O sono da noite anterior afeta a fisiologia do "dia_hoje", então guardamos a data em que você ACORDOU (data_hoje) 
@@ -723,4 +755,4 @@ with tab_admin:
             executar_sql("UPDATE public.perfil SET meta_kcal=:mk, meta_proteina=:mp, meta_carbo=:mc, meta_gordura=:mg, meta_peso_alvo=:mpa, ritmo_semanal=:rit, fator_atividade=:fat WHERE id=1", {'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 'mpa': n_peso_alvo, 'rit': n_ritmo, 'fat': n_fator})
             st.cache_resource.clear(); st.rerun()
 
-st.caption("Leo Tracker Pro v8.9 | Hidratação, Sono & ML Prediction 🚀")
+st.caption("Leo Tracker Pro v9.0 | Hidratação, Sono, Trânsito Intestinal & ML 🚀")
