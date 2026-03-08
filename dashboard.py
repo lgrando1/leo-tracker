@@ -68,13 +68,14 @@ df_peso = run_query("SELECT * FROM public.peso ORDER BY data ASC")
 df_medidas = run_query("SELECT * FROM public.body_measurements ORDER BY log_date ASC")
 df_bp = run_query("SELECT * FROM public.blood_pressure ORDER BY measurement_time ASC")
 
-# V7.2: Extração atualizada para buscar Água, Intestino e Bristol
+# V7.2 PATCH: Gerando zeros temporários até conectarmos com as colunas reais do banco
 df_hist = run_query("""
-    SELECT data, SUM(kcal) as tkcal, SUM(proteina) as tprot, SUM(carbo) as tcarb, 
+    SELECT data, 
+           SUM(kcal) as tkcal, SUM(proteina) as tprot, SUM(carbo) as tcarb, 
            SUM(gordura) as tgord, SUM(quantidade) as tqtd,
-           COALESCE(SUM(agua_ml), 0) as tagua,
-           COALESCE(SUM(intestino_idas), 0) as tintestino,
-           COALESCE(MAX(bristol), 0) as tbristol,
+           0 as tagua,
+           0 as tintestino,
+           0 as tbristol,
            MIN(data_hora) as primeira_refeicao_dt, 
            MAX(data_hora) as ultima_refeicao_dt
     FROM public.consumo WHERE data >= :d GROUP BY data ORDER BY data ASC
