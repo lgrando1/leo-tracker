@@ -51,14 +51,14 @@ def run_query(query, params=None, is_select=True):
                         except: pass
                 return df
     except Exception as e:
-        st.error(f"🚨 Erro de SQL detectado: {e}") # Agora o erro vai aparecer!
+        st.error(f"🚨 Alerta de Banco de Dados: {e}")
         return pd.DataFrame()
 
 if st.query_params.get("token") != st.secrets.get("DASH_ACCESS_TOKEN"):
     st.error("🔒 Acesso Restrito. Token inválido."); st.stop()
 
 # ============================================================================
-# 3. ETL (EXTRAÇÃO E TRATAMENTO)
+# 3. ETL (EXTRAÇÃO E TRATAMENTO - V8 INTEGRAÇÃO TOTAL)
 # ============================================================================
 hoje = datetime.now(pytz.timezone('America/Sao_Paulo')).date()
 DATA_INICIO = pd.to_datetime("2025-12-30").date()
@@ -68,7 +68,7 @@ df_peso = run_query("SELECT * FROM public.peso ORDER BY data ASC")
 df_medidas = run_query("SELECT * FROM public.body_measurements ORDER BY log_date ASC")
 df_bp = run_query("SELECT * FROM public.blood_pressure ORDER BY measurement_time ASC")
 
-# Buscando Consumo
+# Query 1: Consumo
 df_hist = run_query("""
     SELECT data, SUM(kcal) as tkcal, SUM(proteina) as tprot, SUM(carbo) as tcarb, 
            SUM(gordura) as tgord, SUM(quantidade) as tqtd,
@@ -77,14 +77,16 @@ df_hist = run_query("""
     FROM public.consumo WHERE data >= :d GROUP BY data ORDER BY data ASC
 """, {"d": DATA_INICIO})
 
-# Buscando Treino
+# Query 2: Treinos
 df_treino = run_query("""
     SELECT data, SUM(duracao_min) as t_min, SUM(passos_trabalho) as t_passos_trabalho, SUM(calorias) as t_cal_out 
     FROM public.exercicios WHERE data >= :d GROUP BY data ORDER BY data ASC
 """, {"d": DATA_INICIO})
 
-# Buscando Hidratação e Evacuação (Lendo as tabelas reais do Tracker!)
+# Query 3: Hidratação (Agora lendo da tabela correta gerada pelo Tracker)
 df_hidra = run_query("SELECT data, SUM(agua_ml) as tagua FROM public.hidratacao WHERE data >= :d GROUP BY data ORDER BY data ASC", {"d": DATA_INICIO})
+
+# Query 4: Evacuação (Agora lendo da tabela correta gerada pelo Tracker)
 df_evac = run_query("SELECT data, SUM(vezes) as tintestino, MAX(bristol) as tbristol FROM public.evacuacao WHERE data >= :d GROUP BY data ORDER BY data ASC", {"d": DATA_INICIO})
 
 df_hoje_comida = run_query("SELECT * FROM public.consumo WHERE data = :d", {"d": hoje})
@@ -101,6 +103,7 @@ peso_atual = float(df_peso.iloc[-1]['peso_kg']) if not df_peso.empty else 140.0
 
 df_merged = pd.DataFrame()
 
+# MESCLAGEM INTELIGENTE DE TODOS OS DATASETS
 if not df_hist.empty and not df_peso.empty:
     df_hist['data_dt'] = pd.to_datetime(df_hist['data']).dt.date
     df_peso['data_dt'] = pd.to_datetime(df_peso['data']).dt.date
@@ -111,7 +114,7 @@ if not df_hist.empty and not df_peso.empty:
     if df_merged['peso_kg'].isnull().any():
          df_merged['peso_kg'] = df_merged['peso_kg'].bfill().fillna(peso_atual)
 
-    # Merge Treino
+    # Agregando Treino
     if not df_treino.empty:
         df_treino['data_dt'] = pd.to_datetime(df_treino['data']).dt.date
         df_treino_agg = df_treino.groupby('data_dt')[['t_min', 't_passos_trabalho', 't_cal_out']].sum().reset_index()
@@ -120,7 +123,7 @@ if not df_hist.empty and not df_peso.empty:
     else:
         df_merged['t_min'] = 0; df_merged['t_passos_trabalho'] = 0; df_merged['t_cal_out'] = 0
         
-    # Merge Hidratação
+    # Agregando Hidratação
     if not df_hidra.empty:
         df_hidra['data_dt'] = pd.to_datetime(df_hidra['data']).dt.date
         df_hidra_agg = df_hidra.groupby('data_dt')[['tagua']].sum().reset_index()
@@ -129,7 +132,7 @@ if not df_hist.empty and not df_peso.empty:
     else:
         df_merged['tagua'] = 0
         
-    # Merge Evacuação
+    # Agregando Evacuação
     if not df_evac.empty:
         df_evac['data_dt'] = pd.to_datetime(df_evac['data']).dt.date
         df_evac_agg = df_evac.groupby('data_dt')[['tintestino', 'tbristol']].max().reset_index()
@@ -138,8 +141,12 @@ if not df_hist.empty and not df_peso.empty:
         df_merged['tbristol'] = df_merged['tbristol'].fillna(0)
     else:
         df_merged['tintestino'] = 0; df_merged['tbristol'] = 0
-
+    
+    # Cálculos Finais de Termodinâmica (Se isso falhar, o Dashboard bloqueia)
     idade, altura = int(p.get('idade', 41)), int(p.get('altura_cm', 178))
+    df_merged['get_basal'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * fator_atividade
+    df_merged['get_total'] = df_merged['get_basal'] + df_merged['t_cal_out']
+    df_merged['deficit_real'] = df_merged['get_total'] - df_merged['tkcal']
 
 # ============================================================================
 # 4. MOTOR PREDITIVO (EL FAROL) - DINÂMICO
@@ -403,13 +410,12 @@ with tab_qs:
             # ============================================================================
             st.markdown("---")
             with st.expander("🤖 Otimização Combinatória (Descobrir DNA Metabólico)", expanded=False):
-                st.markdown("O algoritmo testará milhares de combinações de filtros (de 1 a 5 dias) para encontrar a inércia fisiológica que maximiza a previsibilidade do seu peso.")
+                st.markdown("O algoritmo testará milhares de combinações de filtros (de 1 a 4 dias) para encontrar a inércia fisiológica que maximiza a previsibilidade do seu peso.")
                 
                 if st.button("🚀 Iniciar Autotuning"):
                     with st.spinner("Calculando o DNA do seu metabolismo... (Isso pode demorar um pouco com as novas variáveis)"):
-                        # V7.2: Devido ao número de variáveis, vamos testar uma matriz reduzida de 1 a 4 dias para não dar Timeout
                         range_filtros = range(1, 5) 
-                        combinacoes = list(itertools.product(range_filtros, repeat=8)) # 8 variáveis agora
+                        combinacoes = list(itertools.product(range_filtros, repeat=8)) 
                         
                         resultados = []
                         base_df = df_qs[['peso_kg', 'jejum_h', 'tprot', 'tcarb', 'tgord', 't_passos_trabalho', 'tagua', 'tintestino', 'tbristol']].copy()
@@ -432,7 +438,6 @@ with tab_qs:
                             df_temp['passos_f'] = df_temp['t_passos_trabalho'].rolling(window=w_passos, min_periods=1).mean()
                             df_temp['agua_f'] = df_temp['tagua'].rolling(window=w_agua, min_periods=1).mean()
                             df_temp['int_f'] = df_temp['tintestino'].rolling(window=w_int, min_periods=1).mean()
-                            # Assumindo Bristol igual a Intestino para não explodir o combinatório
                             df_temp['bristol_f'] = df_temp['tbristol'].rolling(window=w_int, min_periods=1).mean() 
                             
                             df_model_loop = df_temp.dropna()
@@ -668,4 +673,4 @@ with tab_dash:
         * **Torneio El Farol & Auditoria:** Seleção dinâmica entre Regressão Linear e Random Forest baseada no menor MAE (Mean Absolute Error) dos últimos 5 dias.
         """)
 
-    st.caption("Leo Tracker Smart View v7.2 | Autotuning, Radar Chart & Full Biometric Suite")
+    st.caption("Leo Tracker Smart View v8.0 | Full ETL Integration")
