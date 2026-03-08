@@ -58,7 +58,7 @@ if st.query_params.get("token") != st.secrets.get("DASH_ACCESS_TOKEN"):
     st.error("🔒 Acesso Restrito. Token inválido."); st.stop()
 
 # ============================================================================
-# 3. ETL (EXTRAÇÃO E TRATAMENTO - V8 INTEGRAÇÃO TOTAL)
+# 3. ETL (EXTRAÇÃO E TRATAMENTO - V9 COM SONO)
 # ============================================================================
 hoje = datetime.now(pytz.timezone('America/Sao_Paulo')).date()
 DATA_INICIO = pd.to_datetime("2025-12-30").date()
@@ -83,11 +83,10 @@ df_treino = run_query("""
     FROM public.exercicios WHERE data >= :d GROUP BY data ORDER BY data ASC
 """, {"d": DATA_INICIO})
 
-# Query 3: Hidratação (Agora lendo da tabela correta gerada pelo Tracker)
+# Query 3, 4 e 5: Hidratação, Evacuação e SONO
 df_hidra = run_query("SELECT data, SUM(agua_ml) as tagua FROM public.hidratacao WHERE data >= :d GROUP BY data ORDER BY data ASC", {"d": DATA_INICIO})
-
-# Query 4: Evacuação (Agora lendo da tabela correta gerada pelo Tracker)
 df_evac = run_query("SELECT data, SUM(vezes) as tintestino, MAX(bristol) as tbristol FROM public.evacuacao WHERE data >= :d GROUP BY data ORDER BY data ASC", {"d": DATA_INICIO})
+df_sono = run_query("SELECT data, MAX(horas) as sono_h, MAX(qualidade) as sono_q FROM public.sono WHERE data >= :d GROUP BY data ORDER BY data ASC", {"d": DATA_INICIO})
 
 df_hoje_comida = run_query("SELECT * FROM public.consumo WHERE data = :d", {"d": hoje})
 df_hoje_treino = run_query("SELECT * FROM public.exercicios WHERE data = :d", {"d": hoje})
@@ -141,8 +140,20 @@ if not df_hist.empty and not df_peso.empty:
         df_merged['tbristol'] = df_merged['tbristol'].fillna(0)
     else:
         df_merged['tintestino'] = 0; df_merged['tbristol'] = 0
+
+    # Agregando Sono
+    if not df_sono.empty:
+        df_sono['data_dt'] = pd.to_datetime(df_sono['data']).dt.date
+        df_sono_agg = df_sono.groupby('data_dt')[['sono_h', 'sono_q']].max().reset_index()
+        df_merged = pd.merge(df_merged, df_sono_agg, on='data_dt', how='left')
+        # Preenchendo dias sem sono com valores neutros para não quebrar a matemática
+        df_merged['sono_h'] = df_merged['sono_h'].fillna(7.0) 
+        df_merged['sono_q'] = df_merged['sono_q'].fillna(3)
+    else:
+        df_merged['sono_h'] = 7.0; df_merged['sono_q'] = 3
+
     
-    # Cálculos Finais de Termodinâmica (Se isso falhar, o Dashboard bloqueia)
+    # Cálculos Finais de Termodinâmica
     idade, altura = int(p.get('idade', 41)), int(p.get('altura_cm', 178))
     df_merged['get_basal'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * fator_atividade
     df_merged['get_total'] = df_merged['get_basal'] + df_merged['t_cal_out']
@@ -197,7 +208,7 @@ with tab_qs:
     if not df_merged.empty and 'deficit_real' in df_merged.columns:
         df_qs = df_merged.copy()
         
-        # O delta normal para métricas diárias brutas (para os primeiros gráficos)
+        # O delta normal para métricas diárias brutas
         df_qs['peso_amanha'] = df_qs['peso_kg'].shift(-1)
         df_qs['delta_peso_kg'] = df_qs['peso_amanha'] - df_qs['peso_kg']
         
@@ -228,14 +239,14 @@ with tab_qs:
         if not df_qs.dropna(subset=['delta_peso_kg']).empty:
             last_day = df_qs.dropna(subset=['delta_peso_kg']).iloc[-1]
             
-            # V7.2: Mostrando Bristol na métrica de hoje
+            # Métricas diárias
             col1, col2, col3, col4, col5 = st.columns(5)
             col1.metric("⚖️ Variação Diária (Real)", f"{last_day['delta_peso_kg']*1000:.0f} g", help="Valores negativos indicam perda de peso na balança.")
             col2.metric("📐 Termodinâmica (Esperado)", f"{last_day['delta_esperado_kg']*1000:.0f} g", help="Gordura teórica queimada baseada no déficit.")
             col3.metric("💧 Fator Desinflamação", f"{last_day['fator_desinflamacao']*1000:.0f} g", help="Negativo = Eliminou água/Desinflamou. Positivo = Reteu líquido/glicogênio.")
             status_color = "🔴" if last_day['tipo_perda'] == 'Perda de Gordura Pura (Vermelho)' else "🔵" if "Desinflamação" in last_day['tipo_perda'] else "🟡"
             col4.markdown(f"**Qualidade da Variação:**<br> {status_color} {last_day['tipo_perda'].split(' (')[0]}", unsafe_allow_html=True)
-            col5.metric("🚽 Último Bristol", f"{last_day.get('tbristol', 0):.0f}", help="Qualidade da última evacuação.")
+            col5.metric("💤 Último Sono", f"{last_day.get('sono_h', 0):.1f}h", help=f"Qualidade: {last_day.get('sono_q', 0)}")
 
             st.markdown("---")
 
@@ -293,13 +304,13 @@ with tab_qs:
             st.markdown("### 3️⃣ Oráculo Metabólico Dinâmico (Sintonizador de Sinais)")
             st.markdown("Ajuste as janelas móveis (em dias) para sincronizar o tempo de resposta fisiológica de cada variável no seu corpo.")
             
-            # Controles Interativos de Engenharia de Features - TOTALMENTE INDEPENDENTES
             st.markdown("**🎯 Variável Alvo (Filtro Anti-Ruído)**")
-            win_peso = st.slider("⚖️ Filtro: Peso (Tendência da Balança)", 1, 7, 3, help="1 = Tenta prever a balança exata de amanhã. 3 a 7 = Previsão da média dos próximos dias (remove o ruído da retenção de água).")
+            win_peso = st.slider("⚖️ Filtro: Peso (Tendência da Balança)", 1, 7, 3, help="1 = Tenta prever a balança exata. 3 a 7 = Previsão da média dos próximos dias.")
             
             st.markdown("**⚙️ Variáveis Independentes (Atraso Fisiológico)**")
-            # V7.2: Layout expandido para acomodar Intestino e Água
-            col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+            
+            # V9: Layout expandido para 5 colunas para acomodar o SONO
+            col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns(5)
             with col_f1: 
                 win_jej = st.slider("⏳ Jejum", 1, 7, 1)
                 win_agua = st.slider("💧 Água", 1, 7, 2)
@@ -312,6 +323,9 @@ with tab_qs:
             with col_f4: 
                 win_gord = st.slider("🥑 Gordura", 1, 7, 1)
                 win_passos = st.slider("👣 Passos", 1, 7, 2)
+            with col_f5:
+                win_sono_h = st.slider("💤 Sono (Horas)", 1, 7, 1)
+                win_sono_q = st.slider("🌟 Sono (Qualid.)", 1, 7, 1)
             
             # Recalculando o dataframe de modelo com base nos sliders independentes
             df_model = df_qs.copy()
@@ -327,19 +341,21 @@ with tab_qs:
             df_model['prot_f'] = df_model['tprot'].rolling(window=win_prot, min_periods=1).mean()
             df_model['jejum_f'] = df_model['jejum_h'].rolling(window=win_jej, min_periods=1).mean()
             df_model['passos_f'] = df_model['t_passos_trabalho'].rolling(window=win_passos, min_periods=1).mean()
-            # V7.2 Novas features
             df_model['agua_f'] = df_model['tagua'].rolling(window=win_agua, min_periods=1).mean()
             df_model['int_f'] = df_model['tintestino'].rolling(window=win_int, min_periods=1).mean()
             df_model['bristol_f'] = df_model['tbristol'].rolling(window=win_bristol, min_periods=1).mean()
+            # V9: Novas features de sono
+            df_model['sono_h_f'] = df_model['sono_h'].rolling(window=win_sono_h, min_periods=1).mean()
+            df_model['sono_q_f'] = df_model['sono_q'].rolling(window=win_sono_q, min_periods=1).mean()
             
-            # V7.2 Nova lista de features para o OLS
-            lista_features = ['jejum_f', 'prot_f', 'carb_f', 'gord_f', 'passos_f', 'agua_f', 'int_f', 'bristol_f']
+            # V9: Lista de features incluindo Sono
+            lista_features = ['jejum_f', 'prot_f', 'carb_f', 'gord_f', 'passos_f', 'agua_f', 'int_f', 'bristol_f', 'sono_h_f', 'sono_q_f']
             df_model = df_model.dropna(subset=['target'] + lista_features)
             
             st.markdown("---")
 
             if len(df_model) > 5:
-                # OLS Dinâmico V7.2
+                # OLS Dinâmico V9
                 formula = 'target ~ ' + ' + '.join(lista_features)
                 model = ols(formula, data=df_model).fit()
                 
@@ -354,10 +370,9 @@ with tab_qs:
                 with c_stats1:
                     st.markdown("##### 🔬 Peso Estatístico (P-Valor)")
                     df_resumo = pd.DataFrame({'Coeficiente (kg)': params, 'P-Valor': pvalues}).drop('Intercept')
-                    # V7.2 Ajuste do Index para incluir as novas variáveis
-                    df_resumo.index = [f'Jejum ({win_jej}d)', f'Proteína ({win_prot}d)', f'Carbo ({win_carb}d)', f'Gordura ({win_gord}d)', f'Passos ({win_passos}d)', f'Água ({win_agua}d)', f'Intestino ({win_int}d)', f'Bristol ({win_bristol}d)']
+                    # V9 Ajuste do Index para incluir o Sono
+                    df_resumo.index = [f'Jejum ({win_jej}d)', f'Proteína ({win_prot}d)', f'Carbo ({win_carb}d)', f'Gordura ({win_gord}d)', f'Passos ({win_passos}d)', f'Água ({win_agua}d)', f'Intestino ({win_int}d)', f'Bristol ({win_bristol}d)', f'Sono H ({win_sono_h}d)', f'Sono Q ({win_sono_q}d)']
                     
-                    # Tabela formatada e protegida contra o Matplotlib
                     df_resumo_table = df_resumo.copy()
                     df_resumo_table['Coeficiente (kg)'] = df_resumo_table['Coeficiente (kg)'].apply(lambda x: f"{x:+.5f}")
                     df_resumo_table['P-Valor'] = df_resumo_table['P-Valor'].apply(lambda x: f"{x:.3f} {'(🟢)' if x < 0.05 else '(🟠)' if x < 0.15 else '(⚪)'}")
@@ -386,15 +401,17 @@ with tab_qs:
                             sim_jej = st.slider(f"Jejum ({win_jej}d)", 8.0, 24.0, 16.0, 0.5)
                             sim_prot = st.slider(f"Proteína ({win_prot}d)", 50, 250, int(p['meta_proteina']), 5)
                             sim_agua = st.slider(f"Água ml ({win_agua}d)", 1000, 5000, 3000, 100)
+                            sim_sono_h = st.slider(f"Sono h ({win_sono_h}d)", 0.0, 14.0, 7.5, 0.5)
                         with sim_col2:
                             sim_carb = st.slider(f"Carbo ({win_carb}d)", 20, 300, int(p['meta_carbo']), 5)
                             sim_gord = st.slider(f"Gordura ({win_gord}d)", 20, 150, int(p['meta_gordura']), 5)
                             sim_int = st.slider(f"Idas Intestino ({win_int}d)", 0, 5, 1, 1)
+                            sim_sono_q = st.slider(f"Qualid. Sono ({win_sono_q}d)", 1, 5, 3, 1)
                         with sim_col3:
                             sim_passos = st.slider(f"Passos ({win_passos}d)", 0, 30000, 10000, 500)
                             sim_bristol = st.slider(f"Bristol ({win_bristol}d)", 1, 7, 3, 1)
                         
-                        entrada_sim = pd.DataFrame({'jejum_f': [sim_jej], 'prot_f': [sim_prot], 'carb_f': [sim_carb], 'gord_f': [sim_gord], 'passos_f': [sim_passos], 'agua_f': [sim_agua], 'int_f': [sim_int], 'bristol_f': [sim_bristol]})
+                        entrada_sim = pd.DataFrame({'jejum_f': [sim_jej], 'prot_f': [sim_prot], 'carb_f': [sim_carb], 'gord_f': [sim_gord], 'passos_f': [sim_passos], 'agua_f': [sim_agua], 'int_f': [sim_int], 'bristol_f': [sim_bristol], 'sono_h_f': [sim_sono_h], 'sono_q_f': [sim_sono_q]})
                         
                         if vencedor == "Random Forest": pred_delta = mod_rf.predict(entrada_sim)[0]
                         else: pred_delta = mod_lr.predict(entrada_sim)[0]
@@ -406,50 +423,58 @@ with tab_qs:
                 st.info("📊 Aguardando mais logs simultâneos para gerar o modelo matemático preditivo.")
             
             # ============================================================================
-            # BOTÃO DE AUTOTUNING (GRID SEARCH COM GRÁFICO DE RADAR)
+            # BOTÃO DE AUTOTUNING (GRID SEARCH INTELIGENTE)
             # ============================================================================
             st.markdown("---")
             with st.expander("🤖 Otimização Combinatória (Descobrir DNA Metabólico)", expanded=False):
-                st.markdown("O algoritmo testará milhares de combinações de filtros (de 1 a 4 dias) para encontrar a inércia fisiológica que maximiza a previsibilidade do seu peso.")
+                st.markdown("O algoritmo agrupa suas variáveis em **Clusters Fisiológicos** e testa as melhores janelas (1 a 4 dias) para encontrar a inércia que maximiza a precisão.")
                 
                 if st.button("🚀 Iniciar Autotuning"):
-                    with st.spinner("Calculando o DNA do seu metabolismo... (Isso pode demorar um pouco com as novas variáveis)"):
+                    with st.spinner("Decodificando DNA Metabólico (Macros, Treino, Água, Intestino e Sono)..."):
                         range_filtros = range(1, 5) 
-                        combinacoes = list(itertools.product(range_filtros, repeat=8)) 
+                        
+                        # V9: Clusters Fisiológicos para evitar o travamento do servidor
+                        # 6 grupos de variáveis sendo combinadas = 4096 testes
+                        combinacoes = list(itertools.product(range_filtros, repeat=6)) 
                         
                         resultados = []
-                        base_df = df_qs[['peso_kg', 'jejum_h', 'tprot', 'tcarb', 'tgord', 't_passos_trabalho', 'tagua', 'tintestino', 'tbristol']].copy()
+                        base_df = df_qs[['peso_kg', 'jejum_h', 'tprot', 'tcarb', 'tgord', 't_passos_trabalho', 'tagua', 'tintestino', 'tbristol', 'sono_h', 'sono_q']].copy()
                         
                         progress_bar = st.progress(0)
                         total_comb = len(combinacoes)
                         
-                        for i, (w_peso, w_jej, w_prot, w_carb, w_gord, w_passos, w_agua, w_int) in enumerate(combinacoes):
-                            if i % 1000 == 0: progress_bar.progress(i / total_comb)
+                        for i, (w_peso, w_jej, w_macros, w_passos, w_agua_int, w_sono) in enumerate(combinacoes):
+                            if i % 200 == 0: progress_bar.progress(i / total_comb)
                                 
                             df_temp = base_df.copy()
                             df_temp['peso_suav'] = df_temp['peso_kg'].rolling(window=w_peso, min_periods=1).mean()
                             df_temp['peso_suav_amanha'] = df_temp['peso_suav'].shift(-1)
                             df_temp['target'] = df_temp['peso_suav_amanha'] - df_temp['peso_suav']
                             
-                            df_temp['gord_f'] = df_temp['tgord'].rolling(window=w_gord, min_periods=1).mean()
-                            df_temp['carb_f'] = df_temp['tcarb'].rolling(window=w_carb, min_periods=1).mean()
-                            df_temp['prot_f'] = df_temp['tprot'].rolling(window=w_prot, min_periods=1).mean()
+                            # Aplicando os clusters (Mesmo filtro de dias para variáveis da mesma categoria)
+                            df_temp['prot_f'] = df_temp['tprot'].rolling(window=w_macros, min_periods=1).mean()
+                            df_temp['carb_f'] = df_temp['tcarb'].rolling(window=w_macros, min_periods=1).mean()
+                            df_temp['gord_f'] = df_temp['tgord'].rolling(window=w_macros, min_periods=1).mean()
+                            
+                            df_temp['agua_f'] = df_temp['tagua'].rolling(window=w_agua_int, min_periods=1).mean()
+                            df_temp['int_f'] = df_temp['tintestino'].rolling(window=w_agua_int, min_periods=1).mean()
+                            df_temp['bristol_f'] = df_temp['tbristol'].rolling(window=w_agua_int, min_periods=1).mean() 
+                            
+                            df_temp['sono_h_f'] = df_temp['sono_h'].rolling(window=w_sono, min_periods=1).mean()
+                            df_temp['sono_q_f'] = df_temp['sono_q'].rolling(window=w_sono, min_periods=1).mean()
+                            
                             df_temp['jejum_f'] = df_temp['jejum_h'].rolling(window=w_jej, min_periods=1).mean()
                             df_temp['passos_f'] = df_temp['t_passos_trabalho'].rolling(window=w_passos, min_periods=1).mean()
-                            df_temp['agua_f'] = df_temp['tagua'].rolling(window=w_agua, min_periods=1).mean()
-                            df_temp['int_f'] = df_temp['tintestino'].rolling(window=w_int, min_periods=1).mean()
-                            df_temp['bristol_f'] = df_temp['tbristol'].rolling(window=w_int, min_periods=1).mean() 
                             
                             df_model_loop = df_temp.dropna()
                             
                             if len(df_model_loop) > 10:
                                 try:
-                                    model_loop = sm.OLS(df_model_loop['target'], sm.add_constant(df_model_loop[['jejum_f', 'prot_f', 'carb_f', 'gord_f', 'passos_f', 'agua_f', 'int_f', 'bristol_f']])).fit()
+                                    model_loop = sm.OLS(df_model_loop['target'], sm.add_constant(df_model_loop[['jejum_f', 'prot_f', 'carb_f', 'gord_f', 'passos_f', 'agua_f', 'int_f', 'bristol_f', 'sono_h_f', 'sono_q_f']])).fit()
                                     resultados.append({
                                         'R²': model_loop.rsquared,
-                                        'Filtro Peso': w_peso, 'Jejum': w_jej, 'Prot': w_prot, 
-                                        'Carbo': w_carb, 'Gord': w_gord, 'Passos': w_passos,
-                                        'Água': w_agua, 'Intestino': w_int
+                                        'Filtro Peso': w_peso, 'Jejum': w_jej, 'Macros': w_macros, 
+                                        'Passos': w_passos, 'Água/Intestino': w_agua_int, 'Sono': w_sono
                                     })
                                 except: pass
                         
@@ -457,13 +482,13 @@ with tab_qs:
                         
                         if resultados:
                             df_res = pd.DataFrame(resultados).sort_values(by='R²', ascending=False).head(10)
-                            st.success("Busca concluída! Visualizando os 10 melhores perfis.")
+                            st.success("Busca concluída! Visualizando os 10 melhores perfis fisiológicos.")
                             
                             df_res_view = df_res.copy()
                             df_res_view['R²'] = df_res_view['R²'].apply(lambda x: f"{x:.2%}")
                             st.table(df_res_view)
                             
-                            categories = ['Filtro Peso', 'Jejum', 'Prot', 'Carbo', 'Gord', 'Passos', 'Água', 'Intestino']
+                            categories = ['Filtro Peso', 'Jejum', 'Macros', 'Passos', 'Água/Intestino', 'Sono']
                             fig_radar = go.Figure()
                             colors = ['#FFD700', '#C0C0C0', '#CD7F32'] + ['#3498db'] * 7
 
@@ -486,7 +511,7 @@ with tab_qs:
                                 showlegend=True, height=500, title="DNA Metabólico: Perfil dos Melhores Modelos"
                             )
                             st.plotly_chart(fig_radar, use_container_width=True)
-                            st.info("👆 O gráfico mostra o 'formato' das melhores configurações. Ajuste os sliders acima com os valores da linha #1 (Dourado)!")
+                            st.info("👆 Ajuste os sliders lá em cima usando os números da linha #1 (Dourado) de acordo com cada categoria!")
             st.markdown("---")
 
         else:
@@ -668,9 +693,9 @@ with tab_dash:
         * **Perda Teórica:** Déficit Acumulado / 7700 (Considerando que 1kg de gordura ≈ 7700kcal).
         
         ### 3. Modelo Matemático (Oráculo com Sintonizador & Autotuning)
-        * **Metodologia:** Regressão Linear Múltipla (OLS) com janelas móveis independentes para cada variável.
-        * **Autotuning:** Um algoritmo de busca em grade (grid search) testa as combinações de filtros para encontrar a configuração que maximiza o R² (poder preditivo).
-        * **Torneio El Farol & Auditoria:** Seleção dinâmica entre Regressão Linear e Random Forest baseada no menor MAE (Mean Absolute Error) dos últimos 5 dias.
+        * **Metodologia:** Regressão Linear Múltipla (OLS) com janelas móveis independentes.
+        * **Autotuning Clusterizado:** Agrupamento de variáveis similares (Ex: Macros, Água e Intestino) em blocos de otimização combinatória para descobrir o "DNA Metabólico" sem sobrecarregar o processamento.
+        * **Torneio El Farol:** Seleção dinâmica entre Regressão Linear e Random Forest baseada no menor MAE (Mean Absolute Error).
         """)
 
-    st.caption("Leo Tracker Smart View v8.0 | Full ETL Integration")
+    st.caption("Leo Tracker Smart View v9.0 | Full ETL & Sleep Integration")
