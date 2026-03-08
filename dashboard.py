@@ -58,7 +58,7 @@ if st.query_params.get("token") != st.secrets.get("DASH_ACCESS_TOKEN"):
     st.error("🔒 Acesso Restrito. Token inválido."); st.stop()
 
 # ============================================================================
-# 3. ETL (EXTRAÇÃO E TRATAMENTO - V9 COM SONO)
+# 3. ETL (EXTRAÇÃO E TRATAMENTO - V10)
 # ============================================================================
 hoje = datetime.now(pytz.timezone('America/Sao_Paulo')).date()
 DATA_INICIO = pd.to_datetime("2025-12-30").date()
@@ -68,7 +68,6 @@ df_peso = run_query("SELECT * FROM public.peso ORDER BY data ASC")
 df_medidas = run_query("SELECT * FROM public.body_measurements ORDER BY log_date ASC")
 df_bp = run_query("SELECT * FROM public.blood_pressure ORDER BY measurement_time ASC")
 
-# Query 1: Consumo
 df_hist = run_query("""
     SELECT data, SUM(kcal) as tkcal, SUM(proteina) as tprot, SUM(carbo) as tcarb, 
            SUM(gordura) as tgord, SUM(quantidade) as tqtd,
@@ -77,13 +76,11 @@ df_hist = run_query("""
     FROM public.consumo WHERE data >= :d GROUP BY data ORDER BY data ASC
 """, {"d": DATA_INICIO})
 
-# Query 2: Treinos
 df_treino = run_query("""
     SELECT data, SUM(duracao_min) as t_min, SUM(passos_trabalho) as t_passos_trabalho, SUM(calorias) as t_cal_out 
     FROM public.exercicios WHERE data >= :d GROUP BY data ORDER BY data ASC
 """, {"d": DATA_INICIO})
 
-# Query 3, 4 e 5: Hidratação, Evacuação e SONO
 df_hidra = run_query("SELECT data, SUM(agua_ml) as tagua FROM public.hidratacao WHERE data >= :d GROUP BY data ORDER BY data ASC", {"d": DATA_INICIO})
 df_evac = run_query("SELECT data, SUM(vezes) as tintestino, MAX(bristol) as tbristol FROM public.evacuacao WHERE data >= :d GROUP BY data ORDER BY data ASC", {"d": DATA_INICIO})
 df_sono = run_query("SELECT data, MAX(horas) as sono_h, MAX(qualidade) as sono_q FROM public.sono WHERE data >= :d GROUP BY data ORDER BY data ASC", {"d": DATA_INICIO})
@@ -102,7 +99,6 @@ peso_atual = float(df_peso.iloc[-1]['peso_kg']) if not df_peso.empty else 140.0
 
 df_merged = pd.DataFrame()
 
-# MESCLAGEM INTELIGENTE DE TODOS OS DATASETS
 if not df_hist.empty and not df_peso.empty:
     df_hist['data_dt'] = pd.to_datetime(df_hist['data']).dt.date
     df_peso['data_dt'] = pd.to_datetime(df_peso['data']).dt.date
@@ -113,7 +109,6 @@ if not df_hist.empty and not df_peso.empty:
     if df_merged['peso_kg'].isnull().any():
          df_merged['peso_kg'] = df_merged['peso_kg'].bfill().fillna(peso_atual)
 
-    # Agregando Treino
     if not df_treino.empty:
         df_treino['data_dt'] = pd.to_datetime(df_treino['data']).dt.date
         df_treino_agg = df_treino.groupby('data_dt')[['t_min', 't_passos_trabalho', 't_cal_out']].sum().reset_index()
@@ -122,7 +117,6 @@ if not df_hist.empty and not df_peso.empty:
     else:
         df_merged['t_min'] = 0; df_merged['t_passos_trabalho'] = 0; df_merged['t_cal_out'] = 0
         
-    # Agregando Hidratação
     if not df_hidra.empty:
         df_hidra['data_dt'] = pd.to_datetime(df_hidra['data']).dt.date
         df_hidra_agg = df_hidra.groupby('data_dt')[['tagua']].sum().reset_index()
@@ -131,7 +125,6 @@ if not df_hist.empty and not df_peso.empty:
     else:
         df_merged['tagua'] = 0
         
-    # Agregando Evacuação
     if not df_evac.empty:
         df_evac['data_dt'] = pd.to_datetime(df_evac['data']).dt.date
         df_evac_agg = df_evac.groupby('data_dt')[['tintestino', 'tbristol']].max().reset_index()
@@ -141,19 +134,15 @@ if not df_hist.empty and not df_peso.empty:
     else:
         df_merged['tintestino'] = 0; df_merged['tbristol'] = 0
 
-    # Agregando Sono
     if not df_sono.empty:
         df_sono['data_dt'] = pd.to_datetime(df_sono['data']).dt.date
         df_sono_agg = df_sono.groupby('data_dt')[['sono_h', 'sono_q']].max().reset_index()
         df_merged = pd.merge(df_merged, df_sono_agg, on='data_dt', how='left')
-        # Preenchendo dias sem sono com valores neutros para não quebrar a matemática
         df_merged['sono_h'] = df_merged['sono_h'].fillna(7.0) 
         df_merged['sono_q'] = df_merged['sono_q'].fillna(3)
     else:
         df_merged['sono_h'] = 7.0; df_merged['sono_q'] = 3
 
-    
-    # Cálculos Finais de Termodinâmica
     idade, altura = int(p.get('idade', 41)), int(p.get('altura_cm', 178))
     df_merged['get_basal'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * fator_atividade
     df_merged['get_total'] = df_merged['get_basal'] + df_merged['t_cal_out']
@@ -208,7 +197,6 @@ with tab_qs:
     if not df_merged.empty and 'deficit_real' in df_merged.columns:
         df_qs = df_merged.copy()
         
-        # O delta normal para métricas diárias brutas
         df_qs['peso_amanha'] = df_qs['peso_kg'].shift(-1)
         df_qs['delta_peso_kg'] = df_qs['peso_amanha'] - df_qs['peso_kg']
         
@@ -239,7 +227,6 @@ with tab_qs:
         if not df_qs.dropna(subset=['delta_peso_kg']).empty:
             last_day = df_qs.dropna(subset=['delta_peso_kg']).iloc[-1]
             
-            # Métricas diárias
             col1, col2, col3, col4, col5 = st.columns(5)
             col1.metric("⚖️ Variação Diária (Real)", f"{last_day['delta_peso_kg']*1000:.0f} g", help="Valores negativos indicam perda de peso na balança.")
             col2.metric("📐 Termodinâmica (Esperado)", f"{last_day['delta_esperado_kg']*1000:.0f} g", help="Gordura teórica queimada baseada no déficit.")
@@ -302,14 +289,11 @@ with tab_qs:
             # BLOCO 3: ORÁCULO METABÓLICO INTERATIVO (DOE & REGRESSÃO MULTIVARIÁVEL)
             # ============================================================================
             st.markdown("### 3️⃣ Oráculo Metabólico Dinâmico (Sintonizador de Sinais)")
-            st.markdown("Ajuste as janelas móveis (em dias) para sincronizar o tempo de resposta fisiológica de cada variável no seu corpo.")
             
             st.markdown("**🎯 Variável Alvo (Filtro Anti-Ruído)**")
-            win_peso = st.slider("⚖️ Filtro: Peso (Tendência da Balança)", 1, 7, 3, help="1 = Tenta prever a balança exata. 3 a 7 = Previsão da média dos próximos dias.")
+            win_peso = st.slider("⚖️ Filtro: Peso (Tendência da Balança)", 1, 7, 3)
             
             st.markdown("**⚙️ Variáveis Independentes (Atraso Fisiológico)**")
-            
-            # V9: Layout expandido para 5 colunas para acomodar o SONO
             col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns(5)
             with col_f1: 
                 win_jej = st.slider("⏳ Jejum", 1, 7, 1)
@@ -327,15 +311,12 @@ with tab_qs:
                 win_sono_h = st.slider("💤 Sono (Horas)", 1, 7, 1)
                 win_sono_q = st.slider("🌟 Sono (Qualid.)", 1, 7, 1)
             
-            # Recalculando o dataframe de modelo com base nos sliders independentes
             df_model = df_qs.copy()
             
-            # Suavizando o Target (Peso)
             df_model['peso_suav'] = df_model['peso_kg'].rolling(window=win_peso, min_periods=1).mean()
             df_model['peso_suav_amanha'] = df_model['peso_suav'].shift(-1)
             df_model['target'] = df_model['peso_suav_amanha'] - df_model['peso_suav']
             
-            # Suavizando as Features (Inputs) individualmente
             df_model['gord_f'] = df_model['tgord'].rolling(window=win_gord, min_periods=1).mean()
             df_model['carb_f'] = df_model['tcarb'].rolling(window=win_carb, min_periods=1).mean()
             df_model['prot_f'] = df_model['tprot'].rolling(window=win_prot, min_periods=1).mean()
@@ -344,33 +325,31 @@ with tab_qs:
             df_model['agua_f'] = df_model['tagua'].rolling(window=win_agua, min_periods=1).mean()
             df_model['int_f'] = df_model['tintestino'].rolling(window=win_int, min_periods=1).mean()
             df_model['bristol_f'] = df_model['tbristol'].rolling(window=win_bristol, min_periods=1).mean()
-            # V9: Novas features de sono
             df_model['sono_h_f'] = df_model['sono_h'].rolling(window=win_sono_h, min_periods=1).mean()
             df_model['sono_q_f'] = df_model['sono_q'].rolling(window=win_sono_q, min_periods=1).mean()
             
-            # V9: Lista de features incluindo Sono
             lista_features = ['jejum_f', 'prot_f', 'carb_f', 'gord_f', 'passos_f', 'agua_f', 'int_f', 'bristol_f', 'sono_h_f', 'sono_q_f']
             df_model = df_model.dropna(subset=['target'] + lista_features)
             
             st.markdown("---")
 
             if len(df_model) > 5:
-                # OLS Dinâmico V9
                 formula = 'target ~ ' + ' + '.join(lista_features)
                 model = ols(formula, data=df_model).fit()
                 
                 r2 = model.rsquared
+                aic_val = model.aic
+                bic_val = model.bic
                 params = model.params
                 pvalues = model.pvalues
                 
-                st.markdown(f"**R² do Modelo Sintonizado:** {r2*100:.1f}% | **N amostral:** {len(df_model)} dias calibrados")
+                st.markdown(f"**R² Sintonizado:** {r2*100:.1f}% | **AIC:** {aic_val:.1f} | **BIC:** {bic_val:.1f} | **N:** {len(df_model)} dias")
                 
                 c_stats1, c_stats2 = st.columns([1, 1.2])
                 
                 with c_stats1:
                     st.markdown("##### 🔬 Peso Estatístico (P-Valor)")
                     df_resumo = pd.DataFrame({'Coeficiente (kg)': params, 'P-Valor': pvalues}).drop('Intercept')
-                    # V9 Ajuste do Index para incluir o Sono
                     df_resumo.index = [f'Jejum ({win_jej}d)', f'Proteína ({win_prot}d)', f'Carbo ({win_carb}d)', f'Gordura ({win_gord}d)', f'Passos ({win_passos}d)', f'Água ({win_agua}d)', f'Intestino ({win_int}d)', f'Bristol ({win_bristol}d)', f'Sono H ({win_sono_h}d)', f'Sono Q ({win_sono_q}d)']
                     
                     df_resumo_table = df_resumo.copy()
@@ -386,10 +365,9 @@ with tab_qs:
                     vencedor, menor_erro, mod_lr, mod_rf, df_auditoria = torneio_el_farol(df_model, features=lista_features, target_col='target')
                     
                     if vencedor:
-                        st.info(f"**Líder Atual:** {vencedor} | **Margem de Erro da Tendência:** {menor_erro*1000:.0f} g")
+                        st.info(f"**Líder Atual:** {vencedor} | **Erro da Tendência:** {menor_erro*1000:.0f} g")
                         
-                        with st.expander("🔍 Auditoria dos Agentes (Ver Histórico de Erros)", expanded=False):
-                            st.markdown("Previsão vs. Variação Real (últimos 5 dias).")
+                        with st.expander("🔍 Auditoria dos Agentes", expanded=False):
                             df_auditoria_tb = df_auditoria.copy()
                             for col in ['Real (g)', 'Previsto LR (g)', 'Previsto RF (g)']: df_auditoria_tb[col] = df_auditoria_tb[col].apply(lambda x: f"{x:+.0f}")
                             for col in ['Erro LR (g)', 'Erro RF (g)']: df_auditoria_tb[col] = df_auditoria_tb[col].apply(lambda x: f"{x:.0f}")
@@ -423,18 +401,16 @@ with tab_qs:
                 st.info("📊 Aguardando mais logs simultâneos para gerar o modelo matemático preditivo.")
             
             # ============================================================================
-            # BOTÃO DE AUTOTUNING (GRID SEARCH INTELIGENTE)
+            # BOTÃO DE AUTOTUNING (V10 - AVALIAÇÃO POR AIC/BIC PARA EVITAR OVERFITTING)
             # ============================================================================
             st.markdown("---")
-            with st.expander("🤖 Otimização Combinatória (Descobrir DNA Metabólico)", expanded=False):
-                st.markdown("O algoritmo agrupa suas variáveis em **Clusters Fisiológicos** e testa as melhores janelas (1 a 4 dias) para encontrar a inércia que maximiza a precisão.")
+            with st.expander("🤖 Otimização Combinatória via AIC (Prevenção de Overfitting)", expanded=False):
+                st.markdown("O algoritmo agrupa suas variáveis e testa as melhores janelas (1 a 4 dias). A seleção agora **penaliza a complexidade excessiva usando o Critério de Akaike (AIC)** para encontrar a inércia que tem o maior poder de generalização, evitando *overfitting*.")
                 
-                if st.button("🚀 Iniciar Autotuning"):
-                    with st.spinner("Decodificando DNA Metabólico (Macros, Treino, Água, Intestino e Sono)..."):
+                if st.button("🚀 Iniciar Autotuning Bayesiano/Akaike"):
+                    with st.spinner("Decodificando DNA Metabólico com penalidade estatística (AIC)..."):
                         range_filtros = range(1, 5) 
                         
-                        # V9: Clusters Fisiológicos para evitar o travamento do servidor
-                        # 6 grupos de variáveis sendo combinadas = 4096 testes
                         combinacoes = list(itertools.product(range_filtros, repeat=6)) 
                         
                         resultados = []
@@ -451,7 +427,6 @@ with tab_qs:
                             df_temp['peso_suav_amanha'] = df_temp['peso_suav'].shift(-1)
                             df_temp['target'] = df_temp['peso_suav_amanha'] - df_temp['peso_suav']
                             
-                            # Aplicando os clusters (Mesmo filtro de dias para variáveis da mesma categoria)
                             df_temp['prot_f'] = df_temp['tprot'].rolling(window=w_macros, min_periods=1).mean()
                             df_temp['carb_f'] = df_temp['tcarb'].rolling(window=w_macros, min_periods=1).mean()
                             df_temp['gord_f'] = df_temp['tgord'].rolling(window=w_macros, min_periods=1).mean()
@@ -472,6 +447,8 @@ with tab_qs:
                                 try:
                                     model_loop = sm.OLS(df_model_loop['target'], sm.add_constant(df_model_loop[['jejum_f', 'prot_f', 'carb_f', 'gord_f', 'passos_f', 'agua_f', 'int_f', 'bristol_f', 'sono_h_f', 'sono_q_f']])).fit()
                                     resultados.append({
+                                        'AIC': model_loop.aic,
+                                        'BIC': model_loop.bic,
                                         'R²': model_loop.rsquared,
                                         'Filtro Peso': w_peso, 'Jejum': w_jej, 'Macros': w_macros, 
                                         'Passos': w_passos, 'Água/Intestino': w_agua_int, 'Sono': w_sono
@@ -481,10 +458,13 @@ with tab_qs:
                         progress_bar.progress(1.0)
                         
                         if resultados:
-                            df_res = pd.DataFrame(resultados).sort_values(by='R²', ascending=False).head(10)
-                            st.success("Busca concluída! Visualizando os 10 melhores perfis fisiológicos.")
+                            # V10: Ordenação pelo menor AIC (Melhor capacidade de generalização)
+                            df_res = pd.DataFrame(resultados).sort_values(by='AIC', ascending=True).head(10)
+                            st.success("Busca concluída! Visualizando os 10 modelos mais robustos e imunes ao overfitting.")
                             
                             df_res_view = df_res.copy()
+                            df_res_view['AIC'] = df_res_view['AIC'].apply(lambda x: f"{x:.1f}")
+                            df_res_view['BIC'] = df_res_view['BIC'].apply(lambda x: f"{x:.1f}")
                             df_res_view['R²'] = df_res_view['R²'].apply(lambda x: f"{x:.2%}")
                             st.table(df_res_view)
                             
@@ -501,14 +481,14 @@ with tab_qs:
                                     r=values,
                                     theta=categories + categories[:1],
                                     fill='toself' if i == 0 else 'none',
-                                    name=f"Rank #{i+1} (R²: {row['R²']:.1%})",
+                                    name=f"Rank #{i+1} (AIC: {row['AIC']:.1f})",
                                     line=dict(color=colors[i], width=3 if i == 0 else 1),
                                     opacity=1.0 if i == 0 else 0.5
                                 ))
 
                             fig_radar.update_layout(
                                 polar=dict(radialaxis=dict(visible=True, range=[0, 5], tickvals=[1,2,3,4])),
-                                showlegend=True, height=500, title="DNA Metabólico: Perfil dos Melhores Modelos"
+                                showlegend=True, height=500, title="DNA Metabólico: Perfil dos Modelos Vencedores (Menor AIC)"
                             )
                             st.plotly_chart(fig_radar, use_container_width=True)
                             st.info("👆 Ajuste os sliders lá em cima usando os números da linha #1 (Dourado) de acordo com cada categoria!")
@@ -692,10 +672,10 @@ with tab_dash:
         * **Déficit Real:** Diferença entre o Gasto Total Estimado e as Calorias Ingeridas.
         * **Perda Teórica:** Déficit Acumulado / 7700 (Considerando que 1kg de gordura ≈ 7700kcal).
         
-        ### 3. Modelo Matemático (Oráculo com Sintonizador & Autotuning)
-        * **Metodologia:** Regressão Linear Múltipla (OLS) com janelas móveis independentes.
-        * **Autotuning Clusterizado:** Agrupamento de variáveis similares (Ex: Macros, Água e Intestino) em blocos de otimização combinatória para descobrir o "DNA Metabólico" sem sobrecarregar o processamento.
+        ### 3. Modelo Matemático (Oráculo com Avaliação Bayesiana/Akaike)
+        * **Metodologia:** Regressão Linear Múltipla (OLS) com janelas móveis.
+        * **Autotuning Clusterizado:** Teste combinatório focado em minimizar o AIC (Critério de Informação de Akaike). O modelo é penalizado pela quantidade de parâmetros ($2k$), priorizando apenas as janelas que entregam sinal real, expurgando o ruído sistêmico (*overfitting*).
         * **Torneio El Farol:** Seleção dinâmica entre Regressão Linear e Random Forest baseada no menor MAE (Mean Absolute Error).
         """)
 
-    st.caption("Leo Tracker Smart View v9.0 | Full ETL & Sleep Integration")
+    st.caption("Leo Tracker Smart View v10.0 | Full ETL, Sleep & AIC Evaluator")
