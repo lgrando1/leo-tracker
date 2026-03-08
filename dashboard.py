@@ -68,23 +68,24 @@ df_peso = run_query("SELECT * FROM public.peso ORDER BY data ASC")
 df_medidas = run_query("SELECT * FROM public.body_measurements ORDER BY log_date ASC")
 df_bp = run_query("SELECT * FROM public.blood_pressure ORDER BY measurement_time ASC")
 
-# V7.2 PATCH: Gerando zeros temporários até conectarmos com as colunas reais do banco
+# Buscando Consumo
 df_hist = run_query("""
-    SELECT data, 
-           SUM(kcal) as tkcal, SUM(proteina) as tprot, SUM(carbo) as tcarb, 
+    SELECT data, SUM(kcal) as tkcal, SUM(proteina) as tprot, SUM(carbo) as tcarb, 
            SUM(gordura) as tgord, SUM(quantidade) as tqtd,
-           0 as tagua,
-           0 as tintestino,
-           0 as tbristol,
            MIN(data_hora) as primeira_refeicao_dt, 
            MAX(data_hora) as ultima_refeicao_dt
     FROM public.consumo WHERE data >= :d GROUP BY data ORDER BY data ASC
 """, {"d": DATA_INICIO})
 
+# Buscando Treino
 df_treino = run_query("""
     SELECT data, SUM(duracao_min) as t_min, SUM(passos_trabalho) as t_passos_trabalho, SUM(calorias) as t_cal_out 
     FROM public.exercicios WHERE data >= :d GROUP BY data ORDER BY data ASC
 """, {"d": DATA_INICIO})
+
+# Buscando Hidratação e Evacuação (Lendo as tabelas reais do Tracker!)
+df_hidra = run_query("SELECT data, SUM(agua_ml) as tagua FROM public.hidratacao WHERE data >= :d GROUP BY data ORDER BY data ASC", {"d": DATA_INICIO})
+df_evac = run_query("SELECT data, SUM(vezes) as tintestino, MAX(bristol) as tbristol FROM public.evacuacao WHERE data >= :d GROUP BY data ORDER BY data ASC", {"d": DATA_INICIO})
 
 df_hoje_comida = run_query("SELECT * FROM public.consumo WHERE data = :d", {"d": hoje})
 df_hoje_treino = run_query("SELECT * FROM public.exercicios WHERE data = :d", {"d": hoje})
@@ -110,6 +111,7 @@ if not df_hist.empty and not df_peso.empty:
     if df_merged['peso_kg'].isnull().any():
          df_merged['peso_kg'] = df_merged['peso_kg'].bfill().fillna(peso_atual)
 
+    # Merge Treino
     if not df_treino.empty:
         df_treino['data_dt'] = pd.to_datetime(df_treino['data']).dt.date
         df_treino_agg = df_treino.groupby('data_dt')[['t_min', 't_passos_trabalho', 't_cal_out']].sum().reset_index()
@@ -117,11 +119,27 @@ if not df_hist.empty and not df_peso.empty:
         df_merged[['t_min', 't_passos_trabalho', 't_cal_out']] = df_merged[['t_min', 't_passos_trabalho', 't_cal_out']].fillna(0)
     else:
         df_merged['t_min'] = 0; df_merged['t_passos_trabalho'] = 0; df_merged['t_cal_out'] = 0
-    
+        
+    # Merge Hidratação
+    if not df_hidra.empty:
+        df_hidra['data_dt'] = pd.to_datetime(df_hidra['data']).dt.date
+        df_hidra_agg = df_hidra.groupby('data_dt')[['tagua']].sum().reset_index()
+        df_merged = pd.merge(df_merged, df_hidra_agg, on='data_dt', how='left')
+        df_merged['tagua'] = df_merged['tagua'].fillna(0)
+    else:
+        df_merged['tagua'] = 0
+        
+    # Merge Evacuação
+    if not df_evac.empty:
+        df_evac['data_dt'] = pd.to_datetime(df_evac['data']).dt.date
+        df_evac_agg = df_evac.groupby('data_dt')[['tintestino', 'tbristol']].max().reset_index()
+        df_merged = pd.merge(df_merged, df_evac_agg, on='data_dt', how='left')
+        df_merged['tintestino'] = df_merged['tintestino'].fillna(0)
+        df_merged['tbristol'] = df_merged['tbristol'].fillna(0)
+    else:
+        df_merged['tintestino'] = 0; df_merged['tbristol'] = 0
+
     idade, altura = int(p.get('idade', 41)), int(p.get('altura_cm', 178))
-    df_merged['get_basal'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * fator_atividade
-    df_merged['get_total'] = df_merged['get_basal'] + df_merged['t_cal_out']
-    df_merged['deficit_real'] = df_merged['get_total'] - df_merged['tkcal']
 
 # ============================================================================
 # 4. MOTOR PREDITIVO (EL FAROL) - DINÂMICO
