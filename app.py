@@ -490,43 +490,56 @@ with tab_daily:
     st.divider()
 
     # --------------------------------------------------------
-    # 💧 HIDRATAÇÃO E CAFÉ
+    # 💧 HIDRATAÇÃO E CAFÉ (SEPARADOS)
     # --------------------------------------------------------
     st.markdown("### 💧 Hidratação e ☕ Café")
     st.info("Basta informar o que bebeu agora. O sistema vai SOMANDO o valor ao longo do dia.")
-    with st.form("form_hidra"):
-        c_h1, c_h2, c_h3 = st.columns([2, 2, 1])
-        add_agua = c_h1.number_input("➕ Adicionar Água (ml)", 0, 2000, 250, step=50, help="Quanto bebeu agora?")
-        add_cafe = c_h2.number_input("➕ Adicionar Café (ml)", 0, 1000, 50, step=10, help="Sem açúcar, claro!")
-        
-        if c_h3.form_submit_button("💾 Somar", use_container_width=True):
-            executar_sql("""
-                INSERT INTO public.hidratacao (data, agua_ml, cafe_ml) 
-                VALUES (:d, :a, :c)
-                ON CONFLICT (data) DO UPDATE 
-                SET agua_ml = public.hidratacao.agua_ml + EXCLUDED.agua_ml,
-                    cafe_ml = public.hidratacao.cafe_ml + EXCLUDED.cafe_ml
-            """, {'d': data_hoje, 'a': add_agua, 'c': add_cafe})
-            st.success("Bebidas contabilizadas no painel!"); st.rerun()
+    
+    col_w1, col_w2 = st.columns(2)
+    
+    with col_w1:
+        with st.form("form_agua"):
+            add_agua = st.number_input("➕ Adicionar Água (ml)", 0, 2000, 250, step=50)
+            if st.form_submit_button("💧 Somar Água", use_container_width=True):
+                executar_sql("""
+                    INSERT INTO public.hidratacao (data, agua_ml, cafe_ml) 
+                    VALUES (:d, :a, 0)
+                    ON CONFLICT (data) DO UPDATE 
+                    SET agua_ml = public.hidratacao.agua_ml + EXCLUDED.agua_ml
+                """, {'d': data_hoje, 'a': add_agua})
+                st.success(f"+{add_agua}ml de Água!"); st.rerun()
+
+    with col_w2:
+        with st.form("form_cafe"):
+            add_cafe = st.number_input("➕ Adicionar Café (ml)", 0, 1000, 50, step=10)
+            if st.form_submit_button("☕ Somar Café", use_container_width=True):
+                executar_sql("""
+                    INSERT INTO public.hidratacao (data, agua_ml, cafe_ml) 
+                    VALUES (:d, 0, :c)
+                    ON CONFLICT (data) DO UPDATE 
+                    SET cafe_ml = public.hidratacao.cafe_ml + EXCLUDED.cafe_ml
+                """, {'d': data_hoje, 'c': add_cafe})
+                st.success(f"+{add_cafe}ml de Café!"); st.rerun()
 
     # --------------------------------------------------------
-    # 💩 TRÂNSITO INTESTINAL
+    # 💩 TRÂNSITO INTESTINAL (DINÂMICO E BINÁRIO)
     # --------------------------------------------------------
-    st.markdown("### 💩 Trânsito Intestinal (Peso Fecal)")
+    st.markdown("### 💩 Trânsito Intestinal")
     with st.form("form_evac"):
         c_e1, c_e2, c_e3 = st.columns([1, 2, 1])
-        add_evac = c_e1.number_input("➕ Adicionar Ida (vezes)", 0, 10, 1, help="Soma a quantidade de vezes que foi ao banheiro hoje.")
-        tipo_bristol = c_e2.select_slider("Escala de Bristol (Qualidade)", options=[1,2,3,4,5,6,7], value=4, help="1-2: Constipação severa/leve | 3-4: Ideal/Normal | 5-7: Diarreia leve/severa")
+        data_evac = c_e1.date_input("Data da Ida", value=data_hoje, help="Altere se estiver registrando o dia de ontem.")
+        tipo_bristol = c_e2.select_slider("Escala de Bristol", options=[1,2,3,4,5,6,7], value=4, help="1-2: Constipação | 3-4: Ideal | 5-7: Diarreia")
         
-        if c_e3.form_submit_button("💾 Registrar", use_container_width=True):
+        st.write("") # Espaçamento vertical para alinhar o botão
+        if c_e3.form_submit_button("🚽 Fui ao Banheiro (+1)", use_container_width=True):
             executar_sql("""
                 INSERT INTO public.evacuacao (data, vezes, bristol) 
-                VALUES (:d, :v, :b)
+                VALUES (:d, 1, :b)
                 ON CONFLICT (data) DO UPDATE 
-                SET vezes = public.evacuacao.vezes + EXCLUDED.vezes,
+                SET vezes = public.evacuacao.vezes + 1,
                     bristol = EXCLUDED.bristol
-            """, {'d': data_hoje, 'v': add_evac, 'b': tipo_bristol})
-            st.success("Registro intestinal salvo com sucesso!"); st.rerun()
+            """, {'d': data_evac, 'b': tipo_bristol})
+            st.success("Ida registrada no banco!"); st.rerun()
 
     # --------------------------------------------------------
     # 💤 REGISTRO DE SONO
