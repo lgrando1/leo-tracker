@@ -50,7 +50,8 @@ def run_query(query, params=None, is_select=True):
                         try: df[col] = pd.to_datetime(df[col])
                         except: pass
                 return df
-    except Exception:
+    except Exception as e:
+        st.error(f"🚨 Erro de SQL detectado: {e}") # Agora o erro vai aparecer!
         return pd.DataFrame()
 
 if st.query_params.get("token") != st.secrets.get("DASH_ACCESS_TOKEN"):
