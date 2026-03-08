@@ -81,7 +81,7 @@ def executar_sql(sql, params=None, is_select=False):
 # 3. SINCRONIZAÇÃO DO BANCO
 # ============================================================================
 def inicializar_banco():
-    # Tabela consumo
+    # Tabelas antigas...
     executar_sql("CREATE TABLE IF NOT EXISTS public.consumo (id SERIAL PRIMARY KEY, data DATE, alimento TEXT, quantidade REAL, kcal REAL, proteina REAL, carbo REAL, gordura REAL, gluten TEXT DEFAULT 'Não informado');")
     try: executar_sql("ALTER TABLE public.consumo ADD COLUMN IF NOT EXISTS data_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
     except: pass
@@ -124,6 +124,18 @@ def inicializar_banco():
     executar_sql("""
         CREATE TABLE IF NOT EXISTS public.blood_pressure (
             id SERIAL PRIMARY KEY, measurement_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP, systolic INT, diastolic INT, pulse INT, notes TEXT
+        );
+    """)
+
+    # --- NOVAS TABELAS DE SONO E HIDRATAÇÃO ---
+    executar_sql("""
+        CREATE TABLE IF NOT EXISTS public.sono (
+            data DATE PRIMARY KEY, horas REAL, qualidade INT
+        );
+    """)
+    executar_sql("""
+        CREATE TABLE IF NOT EXISTS public.hidratacao (
+            data DATE PRIMARY KEY, agua_ml INT DEFAULT 0, cafe_ml INT DEFAULT 0
         );
     """)
 
@@ -220,6 +232,9 @@ def gerar_excel_nutri(dt_ini, dt_fim):
     df_medidas = executar_sql("SELECT log_date as data, weight_kg as peso, waist_cm as cintura, body_fat_est as bf_estimado, notes FROM public.body_measurements WHERE log_date >= :d1 AND log_date <= :d2 ORDER BY log_date DESC", params, is_select=True)
     df_pressao = executar_sql("SELECT measurement_time as data_hora, systolic, diastolic, pulse FROM public.blood_pressure WHERE measurement_time >= :d1 AND measurement_time <= :d2 ORDER BY measurement_time DESC", params, is_select=True)
     df_treinos_raw = executar_sql("SELECT data, tipo, duracao_min, passos, passos_trabalho, passos_total_dia, distancia_km, calorias, bpm_medio FROM public.exercicios WHERE data >= :d1 AND data <= :d2 ORDER BY data DESC", params, is_select=True)
+    
+    df_sono_exp = executar_sql("SELECT data, horas as sono_horas, qualidade as sono_qualidade FROM public.sono WHERE data >= :d1 AND data <= :d2", params, is_select=True)
+    df_hidra_exp = executar_sql("SELECT data, agua_ml, cafe_ml FROM public.hidratacao WHERE data >= :d1 AND data <= :d2", params, is_select=True)
 
     if not df_detalhado.empty: df_macros = df_detalhado.groupby('data')[['kcal', 'proteina', 'carbo', 'gordura']].sum().reset_index()
     else: df_macros = pd.DataFrame(columns=['data', 'kcal', 'proteina', 'carbo', 'gordura'])
@@ -234,16 +249,26 @@ def gerar_excel_nutri(dt_ini, dt_fim):
         df_peso['data'] = pd.to_datetime(df_peso['data']).dt.normalize()
         df_peso = df_peso.drop_duplicates(subset='data', keep='last')
     if not df_treinos_agg.empty: df_treinos_agg['data'] = pd.to_datetime(df_treinos_agg['data']).dt.normalize()
+    if not df_sono_exp.empty: df_sono_exp['data'] = pd.to_datetime(df_sono_exp['data']).dt.normalize()
+    if not df_hidra_exp.empty: df_hidra_exp['data'] = pd.to_datetime(df_hidra_exp['data']).dt.normalize()
 
     if not df_macros.empty or not df_peso.empty:
         df_resumo = pd.merge(df_macros, df_peso, on='data', how='outer')
         df_resumo = pd.merge(df_resumo, df_treinos_agg, on='data', how='left')
+        
+        # Merge Sono e Hidratação
+        if not df_sono_exp.empty: df_resumo = pd.merge(df_resumo, df_sono_exp, on='data', how='left')
+        else: df_resumo['sono_horas'] = 0; df_resumo['sono_qualidade'] = 0
+        
+        if not df_hidra_exp.empty: df_resumo = pd.merge(df_resumo, df_hidra_exp, on='data', how='left')
+        else: df_resumo['agua_ml'] = 0; df_resumo['cafe_ml'] = 0
+        
         df_resumo = df_resumo.sort_values('data', ascending=False)
-        cols_order = ['data', 'peso_kg', 'kcal', 'proteina', 'carbo', 'gordura', 'treino_min', 'passos_dia', 'passos_prof', 'treino_kcal']
+        cols_order = ['data', 'peso_kg', 'kcal', 'proteina', 'carbo', 'gordura', 'treino_min', 'passos_dia', 'passos_prof', 'treino_kcal', 'sono_horas', 'agua_ml', 'cafe_ml']
         for c in cols_order: 
             if c not in df_resumo.columns: df_resumo[c] = 0
         df_resumo = df_resumo[cols_order]
-        df_resumo.columns = ['Data', 'Peso (kg)', 'Comida (kcal)', 'Prot (g)', 'Carb (g)', 'Gord (g)', 'Treino (min)', 'Passos Totais', 'Passos Prof', 'Gasto Treino (kcal)']
+        df_resumo.columns = ['Data', 'Peso (kg)', 'Comida (kcal)', 'Prot (g)', 'Carb (g)', 'Gord (g)', 'Treino (min)', 'Passos Totais', 'Passos Prof', 'Gasto Treino (kcal)', 'Sono (h)', 'Água (ml)', 'Café (ml)']
         df_resumo = df_resumo.dropna(subset=['Data'])
         df_resumo['Data'] = df_resumo['Data'].dt.strftime('%d/%m/%Y')
     else: df_resumo = pd.DataFrame(columns=['Data', 'Peso', 'Kcal', '...'])
@@ -292,12 +317,26 @@ p_hoje = float(df_hoje['proteina'].sum()) if not df_hoje.empty else 0.0
 c_hoje = float(df_hoje['carbo'].sum()) if not df_hoje.empty else 0.0
 g_hoje = float(df_hoje['gordura'].sum()) if not df_hoje.empty else 0.0
 
+# Busca Dados Diários de Hidratação e Sono
+df_hidra_hoje = executar_sql("SELECT agua_ml, cafe_ml FROM public.hidratacao WHERE data = :d", {'d': data_hoje}, is_select=True)
+df_sono_hoje = executar_sql("SELECT horas, qualidade FROM public.sono WHERE data = :d", {'d': data_hoje}, is_select=True)
+
+agua_hoje = int(df_hidra_hoje.iloc[0]['agua_ml']) if not df_hidra_hoje.empty else 0
+cafe_hoje = int(df_hidra_hoje.iloc[0]['cafe_ml']) if not df_hidra_hoje.empty else 0
+sono_hoje = float(df_sono_hoje.iloc[0]['horas']) if not df_sono_hoje.empty else 0.0
+
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("🔥 Calorias", f"{int(k_hoje)}", f"Meta: {METAS['kcal']}")
 c2.metric("🥩 Proteína", f"{int(p_hoje)}g", f"Meta: {METAS['prot']}g")
 c3.metric("🍞 Carbo", f"{int(c_hoje)}g", f"Meta: {METAS['carb']}g")
 c4.metric("🥑 Gordura", f"{int(g_hoje)}g", f"Meta: {METAS['gord']}g")
 st.progress(min(k_hoje/METAS['kcal'], 1.0))
+
+c5, c6, c7 = st.columns(3)
+c5.metric("💧 Água", f"{agua_hoje} ml")
+c6.metric("☕ Café", f"{cafe_hoje} ml")
+c7.metric("💤 Sono", f"{sono_hoje} h")
+
 st.divider()
 
 # ABAS
@@ -435,6 +474,49 @@ with tab_daily:
             if cp3.form_submit_button("💾 Salvar Peso", use_container_width=True):
                 ok = executar_sql("INSERT INTO public.peso (data, peso_kg) VALUES (:d, :p)", {'d': d_peso, 'p': p_val})
                 if ok: st.cache_resource.clear(); st.rerun()
+    st.divider()
+
+    # --------------------------------------------------------
+    # 💧 HIDRATAÇÃO E CAFÉ
+    # --------------------------------------------------------
+    st.markdown("### 💧 Hidratação e ☕ Café")
+    st.info("Basta informar o que bebeu agora. O sistema vai SOMANDO o valor ao longo do dia.")
+    with st.form("form_hidra"):
+        c_h1, c_h2, c_h3 = st.columns([2, 2, 1])
+        add_agua = c_h1.number_input("➕ Adicionar Água (ml)", 0, 2000, 250, step=50, help="Quanto bebeu agora?")
+        add_cafe = c_h2.number_input("➕ Adicionar Café (ml)", 0, 1000, 50, step=10, help="Sem açúcar, claro!")
+        
+        if c_h3.form_submit_button("💾 Somar", use_container_width=True):
+            executar_sql("""
+                INSERT INTO public.hidratacao (data, agua_ml, cafe_ml) 
+                VALUES (:d, :a, :c)
+                ON CONFLICT (data) DO UPDATE 
+                SET agua_ml = public.hidratacao.agua_ml + EXCLUDED.agua_ml,
+                    cafe_ml = public.hidratacao.cafe_ml + EXCLUDED.cafe_ml
+            """, {'d': data_hoje, 'a': add_agua, 'c': add_cafe})
+            st.success("Bebidas contabilizadas no painel!"); st.rerun()
+
+    # --------------------------------------------------------
+    # 💤 REGISTRO DE SONO
+    # --------------------------------------------------------
+    st.markdown("### 💤 Registro de Sono (Recuperação)")
+    with st.form("form_sono"):
+        c_s1, c_s2, c_s3 = st.columns([1, 1, 2])
+        d_sono = c_s1.date_input("Dormiu na noite de:", value=data_hoje - timedelta(days=1), help="Referente a noite passada.")
+        h_sono = c_s2.slider("Horas", 0.0, 14.0, 7.5, 0.5)
+        q_sono = c_s3.select_slider("Qualidade", options=[1, 2, 3, 4, 5], value=3, help="1=Péssima | 5=Fantástica")
+        
+        if st.form_submit_button("💾 Salvar Sono", use_container_width=True):
+            # O sono da noite anterior afeta a fisiologia do "dia_hoje", então guardamos a data em que você ACORDOU (data_hoje) 
+            # para casar perfeitamente com os treinos e refeições deste dia.
+            executar_sql("""
+                INSERT INTO public.sono (data, horas, qualidade) 
+                VALUES (:d, :h, :q)
+                ON CONFLICT (data) DO UPDATE 
+                SET horas = EXCLUDED.horas, qualidade = EXCLUDED.qualidade
+            """, {'d': data_hoje, 'h': h_sono, 'q': q_sono})
+            st.success("Sono registrado e cruzado com o dia atual!"); st.rerun()
+
     st.divider()
 
     # --------------------------------------------------------
@@ -641,4 +723,4 @@ with tab_admin:
             executar_sql("UPDATE public.perfil SET meta_kcal=:mk, meta_proteina=:mp, meta_carbo=:mc, meta_gordura=:mg, meta_peso_alvo=:mpa, ritmo_semanal=:rit, fator_atividade=:fat WHERE id=1", {'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 'mpa': n_peso_alvo, 'rit': n_ritmo, 'fat': n_fator})
             st.cache_resource.clear(); st.rerun()
 
-st.caption("Leo Tracker Pro v8.8 | ML Prediction & Smart JSON Flow 🚀")
+st.caption("Leo Tracker Pro v8.9 | Hidratação, Sono & ML Prediction 🚀")
