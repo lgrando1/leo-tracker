@@ -353,7 +353,7 @@ c8.metric("💩 Intestino", f"{evac_hoje}x")
 st.divider()
 
 # ABAS
-tab_daily, tab_treino, tab_hist, tab_medidas, tab_rel, tab_admin = st.tabs(["📊 Dash Pro", "📝 Diário", "🏃‍♂️ Treino", "📜 Histórico", "❤️ Saúde", "📄 Relatórios", "⚙️ Configurações"])
+tab_daily, tab_treino, tab_hist, tab_medidas, tab_rel, tab_admin = st.tabs(["📝 Diário", "🏃‍♂️ Treino", "📜 Histórico", "❤️ Saúde", "📄 Relatórios", "⚙️ Configurações"])
 
 
 
