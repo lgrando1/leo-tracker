@@ -125,14 +125,16 @@ if not df_hist.empty and not df_peso.empty:
     else:
         df_merged['tagua'] = 0
         
+    # No bloco onde você processa o df_evac no dashboard.py
     if not df_evac.empty:
         df_evac['data_dt'] = pd.to_datetime(df_evac['data']).dt.date
-        df_evac_agg = df_evac.groupby('data_dt')[['tintestino', 'tbristol']].max().reset_index()
+        # Agrupar por dia somando as vezes (Intestino) e tirando a média/máximo do Bristol
+        df_evac_agg = df_evac.groupby('data_dt').agg({'tintestino': 'sum', 'tbristol': 'max'}).reset_index()
         df_merged = pd.merge(df_merged, df_evac_agg, on='data_dt', how='left')
-        df_merged['tintestino'] = df_merged['tintestino'].fillna(0)
-        df_merged['tbristol'] = df_merged['tbristol'].fillna(0)
-    else:
-        df_merged['tintestino'] = 0; df_merged['tbristol'] = 0
+        
+    # O SEGREDO: Preencher com 0 (para o modelo entender que 'nada' aconteceu)
+    df_merged['tintestino'] = df_merged['tintestino'].fillna(0)
+    df_merged['tbristol'] = df_merged['tbristol'].fillna(0)
 
     if not df_sono.empty:
         df_sono['data_dt'] = pd.to_datetime(df_sono['data']).dt.date
