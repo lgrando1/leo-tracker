@@ -435,7 +435,7 @@ with tab_qs:
                     api_key = st.secrets.get("api_key")
                     
                     if not api_key:
-                        st.error("⚠️ Chave 'GROQ_API_KEY' não encontrada no arquivo .streamlit/secrets.toml")
+                        st.error("⚠️ Chave 'api_key' não encontrada no arquivo .streamlit/secrets.toml")
                     else:
                         client = Groq(api_key=api_key)
                         
