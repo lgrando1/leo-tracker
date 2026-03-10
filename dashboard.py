@@ -425,26 +425,34 @@ with tab_qs:
                     else:
                         st.warning("⏳ Aguardando acúmulo de dados (mínimo 10 dias) para iniciar o Torneio El Farol.")
 
-            # ============================================================================
+# ============================================================================
             # 🧠 IA GROQ: FEEDBACK METABÓLICO EM TEMPO REAL
             # ============================================================================
             st.markdown("---")
             st.markdown("##### 🧠 Consultoria Metabólica Especializada (IA)")
             if st.button("🩺 Pedir Feedback ao Groq (Análise de Inércia)"):
                 try:
-                    # Trava de Resiliência: Tenta achar a chave em múltiplos lugares
+                    # Trava de Resiliência
                     api_key = st.secrets.get("GROQ_API_KEY") or os.environ.get("GROQ_API_KEY") or st.secrets.get("groq_api_key")
                     
                     if not api_key:
                         st.error("🚨 ERRO CRÍTICO: O Streamlit não encontrou a chave 'GROQ_API_KEY'.")
-                        st.info("💡 **Solução:** O seu `app.py` e este `dashboard` estão rodando como dois aplicativos separados na nuvem. Vá no painel do Streamlit Cloud, clique nos 3 pontinhos **deste** aplicativo específico, abra as *Settings*, e cole a sua chave na aba *Secrets*.")
                     else:
+                        from groq import Groq
                         client = Groq(api_key=api_key)
                         
+                        # NOVO PROMPT ANTI-LERO-LERO
                         prompt_medico = f"""
-                        Atue como um endocrinologista e especialista em biologia de sistemas. 
-                        Abaixo estão os resultados do meu modelo de regressão linear multivariável (OLS) que prevê a variação diária do meu peso baseado no meu comportamento metabólico histórico.
-                        
+                        Atue como um Engenheiro de Dados focado em Bioestatística.
+                        Abaixo estão os resultados do meu modelo de regressão linear (OLS). 
+                        A variável alvo (Target) é a VARIAÇÃO DE PESO (Peso de Amanhã - Peso de Hoje).
+
+                        ⚠️ REGRAS MATEMÁTICAS OBRIGATÓRIAS (NÃO IGNORE):
+                        1. Coeficiente NEGATIVO (-): Significa perda de peso (Desinflamação/Queima). ESTE É O COMPORTAMENTO DESEJADO.
+                        2. Coeficiente POSITIVO (+): Significa ganho de peso (Retenção/Ganho). ESTE É O COMPORTAMENTO A SER EVITADO.
+                        3. Foque EXCLUSIVAMENTE nas variáveis com P-Valor < 0.05 (marcadas com 🟢). Ignore totalmente o resto.
+                        4. É PROIBIDO dar conselhos genéricos de nutrição. Sua análise deve ser anti-intuitiva se a matemática mandar. Exemplo: se o coeficiente da gordura for negativo (-), você DEVE afirmar que a gordura está auxiliando na perda de peso.
+
                         Métricas Globais de Previsibilidade:
                         - Poder de explicação (R²): {r2*100:.1f}%
                         - Ruído/Ajuste (AIC): {aic_val:.1f}
@@ -452,17 +460,16 @@ with tab_qs:
                         Sinais Vitais e Inércia Metabólica (Variável | Coeficiente de Impacto em kg | P-Valor):
                         {df_resumo_table.to_string()}
                         
-                        Considerando que P-valores < 0.05 indicam alta significância estatística (marcados com 🟢) e os coeficientes indicam impacto direto na balança:
-                        Faça uma análise clínica de exatos 2 parágrafos curtos:
-                        1. O que a inércia dos dias (ex: impacto de variáveis de 7 dias vs 1 dia) revela sobre como o meu corpo processa e retém peso atualmente? Foque nos P-valores mais relevantes (🟢).
-                        2. Com base nesses dados quantitativos, qual é a principal recomendação prática para eu otimizar a queima de gordura/desinflamação para amanhã?
+                        Faça uma análise de exatos 2 parágrafos curtos e diretos:
+                        Parágrafo 1: O que a inércia dos dias revela sobre o meu corpo? Cite os coeficientes exatos e deixe claro se estão adicionando (+) ou retirando (-) peso.
+                        Parágrafo 2: Baseado ESTRITAMENTE na regra dos sinais acima, qual é o plano de ação tático para eu aplicar nas próximas 24h para forçar um coeficiente negativo?
                         """
                         
-                        with st.spinner("Conectando ao laboratório de IA... Analisando sua bioestatística..."):
+                        with st.spinner("Conectando ao laboratório de IA... Forçando leitura matemática rigorosa..."):
                             stream = client.chat.completions.create(
                                 model="llama-3.3-70b-versatile",
                                 messages=[{"role": "user", "content": prompt_medico}],
-                                temperature=0.3,
+                                temperature=0.1, # <-- Reduzido para 0.1 para forçar a IA a ser mais lógica e menos "criativa"
                                 stream=True,
                             )
                             
