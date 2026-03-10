@@ -458,7 +458,7 @@ with tab_qs:
                         
                         with st.spinner("Conectando ao laboratório de IA... Analisando sua bioestatística..."):
                             stream = client.chat.completions.create(
-                                model="llama3-70b-8192",
+                                model="llama-3.3-70b-versatile", # <-- MODELO ALTERADO AQUI
                                 messages=[{"role": "user", "content": prompt_medico}],
                                 temperature=0.3,
                                 stream=True,
@@ -711,4 +711,4 @@ with tab_dash:
         * **Torneio El Farol:** Seleção dinâmica entre Regressão Linear e Random Forest baseada no menor MAE (Mean Absolute Error).
         """)
 
-    st.caption("Leo Tracker Smart View v10.1 | Full ETL, AG Evaluator & Groq AI")
+    st.caption("Leo Tracker Smart View v10.1 | Full ETL, AG Evaluator & Groq AI (Mixtral)")
