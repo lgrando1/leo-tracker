@@ -13,11 +13,22 @@ from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error
 import itertools
+import random
 
 # ============================================================================
-# 1. CONFIGURAÇÃO VISUAL
+# 1. CONFIGURAÇÃO VISUAL E ESTADO DA SESSÃO (PERSISTÊNCIA DOS SLIDERS)
 # ============================================================================
 st.set_page_config(page_title="Leo's Nutrition Control", page_icon="🦁", layout="wide", initial_sidebar_state="collapsed")
+
+# Inicialização do Session State para que o Algoritmo Genético possa "girar" os sliders
+defaults = {
+    'win_peso': 3, 'win_jej': 1, 'win_prot': 3, 'win_carb': 2, 
+    'win_gord': 1, 'win_passos': 2, 'win_agua': 2, 'win_int': 1, 
+    'win_bristol': 1, 'win_sono_h': 1, 'win_sono_q': 1
+}
+for key, val in defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = val
 
 st.markdown("""
     <style>
@@ -125,14 +136,11 @@ if not df_hist.empty and not df_peso.empty:
     else:
         df_merged['tagua'] = 0
         
-    # No bloco onde você processa o df_evac no dashboard.py
     if not df_evac.empty:
         df_evac['data_dt'] = pd.to_datetime(df_evac['data']).dt.date
-        # Agrupar por dia somando as vezes (Intestino) e tirando a média/máximo do Bristol
         df_evac_agg = df_evac.groupby('data_dt').agg({'tintestino': 'sum', 'tbristol': 'max'}).reset_index()
         df_merged = pd.merge(df_merged, df_evac_agg, on='data_dt', how='left')
         
-    # O SEGREDO: Preencher com 0 (para o modelo entender que 'nada' aconteceu)
     df_merged['tintestino'] = df_merged['tintestino'].fillna(0)
     df_merged['tbristol'] = df_merged['tbristol'].fillna(0)
 
@@ -293,25 +301,25 @@ with tab_qs:
             st.markdown("### 3️⃣ Oráculo Metabólico Dinâmico (Sintonizador de Sinais)")
             
             st.markdown("**🎯 Variável Alvo (Filtro Anti-Ruído)**")
-            win_peso = st.slider("⚖️ Filtro: Peso (Tendência da Balança)", 1, 7, 3)
+            win_peso = st.slider("⚖️ Filtro: Peso (Tendência da Balança)", 1, 7, key='win_peso')
             
             st.markdown("**⚙️ Variáveis Independentes (Atraso Fisiológico)**")
             col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns(5)
             with col_f1: 
-                win_jej = st.slider("⏳ Jejum", 1, 7, 1)
-                win_agua = st.slider("💧 Água", 1, 7, 2)
+                win_jej = st.slider("⏳ Jejum", 1, 7, key='win_jej')
+                win_agua = st.slider("💧 Água", 1, 7, key='win_agua')
             with col_f2: 
-                win_prot = st.slider("🥩 Proteína", 1, 7, 3)
-                win_int = st.slider("💩 Intestino", 1, 7, 1)
+                win_prot = st.slider("🥩 Proteína", 1, 7, key='win_prot')
+                win_int = st.slider("💩 Intestino", 1, 7, key='win_int')
             with col_f3: 
-                win_carb = st.slider("🍞 Carbo", 1, 7, 2)
-                win_bristol = st.slider("🧪 Bristol", 1, 7, 1)
+                win_carb = st.slider("🍞 Carbo", 1, 7, key='win_carb')
+                win_bristol = st.slider("🧪 Bristol", 1, 7, key='win_bristol')
             with col_f4: 
-                win_gord = st.slider("🥑 Gordura", 1, 7, 1)
-                win_passos = st.slider("👣 Passos", 1, 7, 2)
+                win_gord = st.slider("🥑 Gordura", 1, 7, key='win_gord')
+                win_passos = st.slider("👣 Passos", 1, 7, key='win_passos')
             with col_f5:
-                win_sono_h = st.slider("💤 Sono (Horas)", 1, 7, 1)
-                win_sono_q = st.slider("🌟 Sono (Qualid.)", 1, 7, 1)
+                win_sono_h = st.slider("💤 Sono (Horas)", 1, 7, key='win_sono_h')
+                win_sono_q = st.slider("🌟 Sono (Qualid.)", 1, 7, key='win_sono_q')
             
             df_model = df_qs.copy()
             
@@ -403,97 +411,68 @@ with tab_qs:
                 st.info("📊 Aguardando mais logs simultâneos para gerar o modelo matemático preditivo.")
             
             # ============================================================================
-            # BOTÃO DE AUTOTUNING (V10 - AVALIAÇÃO POR AIC/BIC PARA EVITAR OVERFITTING)
+            # 🧬 BLOCO EVOLUTIVO V12.1 (ALGORITMO GENÉTICO) - COM ATUALIZAÇÃO DE UI
             # ============================================================================
             st.markdown("---")
-            with st.expander("🤖 Otimização Combinatória via AIC (Prevenção de Overfitting)", expanded=False):
-                st.markdown("O algoritmo agrupa suas variáveis e testa as melhores janelas (1 a 4 dias). A seleção agora **penaliza a complexidade excessiva usando o Critério de Akaike (AIC)** para encontrar a inércia que tem o maior poder de generalização, evitando *overfitting*.")
-                
-                if st.button("🚀 Iniciar Autotuning Bayesiano/Akaike"):
-                    with st.spinner("Decodificando DNA Metabólico com penalidade estatística (AIC)..."):
-                        range_filtros = range(1, 5) 
+            with st.expander("🧬 Evolução Genética do DNA Metabólico (AIC Evaluator)", expanded=False):
+                st.markdown("O Algoritmo Genético busca a **Inércia de Ouro** simulando a seleção natural. Ele testa cruzamentos e mutações de janelas (1 a 7 dias) e converge para as combinações de menor AIC (Akaike Information Criterion).")
+                if st.button("🚀 Iniciar Evolução Biométrica"):
+                    with st.spinner("Decodificando DNA Metabólico através de algoritmos genéticos..."):
+                        TAM_POP = 50
+                        GERACOES = 15
+                        JANELA_MAX = 7
                         
-                        combinacoes = list(itertools.product(range_filtros, repeat=6)) 
-                        
-                        resultados = []
                         base_df = df_qs[['peso_kg', 'jejum_h', 'tprot', 'tcarb', 'tgord', 't_passos_trabalho', 'tagua', 'tintestino', 'tbristol', 'sono_h', 'sono_q']].copy()
                         
+                        pre_calc = {}
+                        for w in range(1, JANELA_MAX + 1):
+                            pre_calc[f't_{w}'] = base_df['peso_kg'].rolling(window=w, min_periods=1).mean().shift(-1) - base_df['peso_kg'].rolling(window=w, min_periods=1).mean()
+                            for c in ['tprot', 'tcarb', 'tgord', 'tagua', 'tintestino', 'tbristol', 'sono_h', 'sono_q', 'jejum_h', 't_passos_trabalho']:
+                                pre_calc[f'{c}_{w}'] = base_df[c].rolling(window=w, min_periods=1).mean()
+                        df_pre = pd.DataFrame(pre_calc)
+
+                        def fitness(ind):
+                            cols = [f'jejum_h_{ind[1]}', f'tprot_{ind[2]}', f'tcarb_{ind[3]}', f'tgord_{ind[4]}', f't_passos_trabalho_{ind[5]}', f'tagua_{ind[6]}', f'tintestino_{ind[7]}', f'tbristol_{ind[8]}', f'sono_h_{ind[9]}', f'sono_q_{ind[9]}']
+                            d = df_pre[[f't_{ind[0]}'] + cols].dropna()
+                            if len(d) < 15: return 9999
+                            try:
+                                return sm.OLS(d[f't_{ind[0]}'], sm.add_constant(d[cols])).fit().aic
+                            except:
+                                return 9999
+
+                        pop = [[random.randint(1, JANELA_MAX) for _ in range(10)] for _ in range(TAM_POP)]
                         progress_bar = st.progress(0)
-                        total_comb = len(combinacoes)
                         
-                        for i, (w_peso, w_jej, w_macros, w_passos, w_agua_int, w_sono) in enumerate(combinacoes):
-                            if i % 200 == 0: progress_bar.progress(i / total_comb)
-                                
-                            df_temp = base_df.copy()
-                            df_temp['peso_suav'] = df_temp['peso_kg'].rolling(window=w_peso, min_periods=1).mean()
-                            df_temp['peso_suav_amanha'] = df_temp['peso_suav'].shift(-1)
-                            df_temp['target'] = df_temp['peso_suav_amanha'] - df_temp['peso_suav']
-                            
-                            df_temp['prot_f'] = df_temp['tprot'].rolling(window=w_macros, min_periods=1).mean()
-                            df_temp['carb_f'] = df_temp['tcarb'].rolling(window=w_macros, min_periods=1).mean()
-                            df_temp['gord_f'] = df_temp['tgord'].rolling(window=w_macros, min_periods=1).mean()
-                            
-                            df_temp['agua_f'] = df_temp['tagua'].rolling(window=w_agua_int, min_periods=1).mean()
-                            df_temp['int_f'] = df_temp['tintestino'].rolling(window=w_agua_int, min_periods=1).mean()
-                            df_temp['bristol_f'] = df_temp['tbristol'].rolling(window=w_agua_int, min_periods=1).mean() 
-                            
-                            df_temp['sono_h_f'] = df_temp['sono_h'].rolling(window=w_sono, min_periods=1).mean()
-                            df_temp['sono_q_f'] = df_temp['sono_q'].rolling(window=w_sono, min_periods=1).mean()
-                            
-                            df_temp['jejum_f'] = df_temp['jejum_h'].rolling(window=w_jej, min_periods=1).mean()
-                            df_temp['passos_f'] = df_temp['t_passos_trabalho'].rolling(window=w_passos, min_periods=1).mean()
-                            
-                            df_model_loop = df_temp.dropna()
-                            
-                            if len(df_model_loop) > 10:
-                                try:
-                                    model_loop = sm.OLS(df_model_loop['target'], sm.add_constant(df_model_loop[['jejum_f', 'prot_f', 'carb_f', 'gord_f', 'passos_f', 'agua_f', 'int_f', 'bristol_f', 'sono_h_f', 'sono_q_f']])).fit()
-                                    resultados.append({
-                                        'AIC': model_loop.aic,
-                                        'BIC': model_loop.bic,
-                                        'R²': model_loop.rsquared,
-                                        'Filtro Peso': w_peso, 'Jejum': w_jej, 'Macros': w_macros, 
-                                        'Passos': w_passos, 'Água/Intestino': w_agua_int, 'Sono': w_sono
-                                    })
-                                except: pass
+                        for g in range(GERACOES):
+                            pop = sorted(pop, key=lambda i: fitness(i))
+                            nova_pop = pop[:5] # Elite
+                            while len(nova_pop) < TAM_POP:
+                                p1, p2 = random.sample(pop[:20], 2)
+                                filho = [p1[i] if random.random() > 0.5 else p2[i] for i in range(10)]
+                                if random.random() < 0.2: 
+                                    filho[random.randint(0,9)] = random.randint(1, JANELA_MAX)
+                                nova_pop.append(filho)
+                            pop = nova_pop
+                            progress_bar.progress((g + 1) / GERACOES)
                         
-                        progress_bar.progress(1.0)
+                        best = pop[0]
+                        melhor_aic = fitness(best)
+                        st.success(f"Evolução concluída! O melhor DNA Metabólico atingiu um AIC de: {melhor_aic:.2f}")
                         
-                        if resultados:
-                            # V10: Ordenação pelo menor AIC (Melhor capacidade de generalização)
-                            df_res = pd.DataFrame(resultados).sort_values(by='AIC', ascending=True).head(10)
-                            st.success("Busca concluída! Visualizando os 10 modelos mais robustos e imunes ao overfitting.")
-                            
-                            df_res_view = df_res.copy()
-                            df_res_view['AIC'] = df_res_view['AIC'].apply(lambda x: f"{x:.1f}")
-                            df_res_view['BIC'] = df_res_view['BIC'].apply(lambda x: f"{x:.1f}")
-                            df_res_view['R²'] = df_res_view['R²'].apply(lambda x: f"{x:.2%}")
-                            st.table(df_res_view)
-                            
-                            categories = ['Filtro Peso', 'Jejum', 'Macros', 'Passos', 'Água/Intestino', 'Sono']
-                            fig_radar = go.Figure()
-                            colors = ['#FFD700', '#C0C0C0', '#CD7F32'] + ['#3498db'] * 7
-
-                            for i in range(len(df_res)):
-                                row = df_res.iloc[i]
-                                values = row[categories].values.tolist()
-                                values += values[:1] 
-                                
-                                fig_radar.add_trace(go.Scatterpolar(
-                                    r=values,
-                                    theta=categories + categories[:1],
-                                    fill='toself' if i == 0 else 'none',
-                                    name=f"Rank #{i+1} (AIC: {row['AIC']:.1f})",
-                                    line=dict(color=colors[i], width=3 if i == 0 else 1),
-                                    opacity=1.0 if i == 0 else 0.5
-                                ))
-
-                            fig_radar.update_layout(
-                                polar=dict(radialaxis=dict(visible=True, range=[0, 5], tickvals=[1,2,3,4])),
-                                showlegend=True, height=500, title="DNA Metabólico: Perfil dos Modelos Vencedores (Menor AIC)"
-                            )
-                            st.plotly_chart(fig_radar, use_container_width=True)
-                            st.info("👆 Ajuste os sliders lá em cima usando os números da linha #1 (Dourado) de acordo com cada categoria!")
+                        # Atualizar o session_state com os genes vencedores para transportar para os sliders
+                        st.session_state['win_peso'] = best[0]
+                        st.session_state['win_jej'] = best[1]
+                        st.session_state['win_prot'] = best[2]
+                        st.session_state['win_carb'] = best[3]
+                        st.session_state['win_gord'] = best[4]
+                        st.session_state['win_passos'] = best[5]
+                        st.session_state['win_agua'] = best[6]
+                        st.session_state['win_int'] = best[7]
+                        st.session_state['win_bristol'] = best[8]
+                        st.session_state['win_sono_h'] = best[9]
+                        st.session_state['win_sono_q'] = best[9]
+                        
+                        st.rerun()
             st.markdown("---")
 
         else:
@@ -676,8 +655,8 @@ with tab_dash:
         
         ### 3. Modelo Matemático (Oráculo com Avaliação Bayesiana/Akaike)
         * **Metodologia:** Regressão Linear Múltipla (OLS) com janelas móveis.
-        * **Autotuning Clusterizado:** Teste combinatório focado em minimizar o AIC (Critério de Informação de Akaike). O modelo é penalizado pela quantidade de parâmetros ($2k$), priorizando apenas as janelas que entregam sinal real, expurgando o ruído sistêmico (*overfitting*).
+        * **Autotuning Evolutivo:** Teste genético simulando a evolução natural focado em minimizar o AIC (Critério de Informação de Akaike). O modelo é penalizado pela quantidade de parâmetros ($2k$), priorizando apenas as janelas que entregam sinal real, expurgando o ruído sistêmico (*overfitting*).
         * **Torneio El Farol:** Seleção dinâmica entre Regressão Linear e Random Forest baseada no menor MAE (Mean Absolute Error).
         """)
 
-    st.caption("Leo Tracker Smart View v10.0 | Full ETL, Sleep & AIC Evaluator")
+    st.caption("Leo Tracker Smart View v10.1 | Full ETL, Sleep & AG Evaluator")
