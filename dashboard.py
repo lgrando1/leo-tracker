@@ -432,7 +432,7 @@ with tab_qs:
             if st.button("🩺 Pedir Feedback ao Groq (Análise de Inércia)"):
                 try:
                     from groq import Groq
-                    api_key = st.secrets.get("GROQ_API_KEY") # <-- NOME DA CHAVE CORRIGIDO AQUI
+                    api_key = st.secrets.get("GROQ_API_KEY") # Chave corrigida!
                     
                     if not api_key:
                         st.error("⚠️ Chave 'GROQ_API_KEY' não encontrada no arquivo .streamlit/secrets.toml")
@@ -458,7 +458,7 @@ with tab_qs:
                         
                         with st.spinner("Conectando ao laboratório de IA... Analisando sua bioestatística..."):
                             stream = client.chat.completions.create(
-                                model="mixtral-8x7b-32768",
+                                model="llama-3.3-70b-versatile", # <-- MODELO ORIGINAL DO SEU APP RESTAURADO AQUI
                                 messages=[{"role": "user", "content": prompt_medico}],
                                 temperature=0.3,
                                 stream=True,
@@ -711,4 +711,4 @@ with tab_dash:
         * **Torneio El Farol:** Seleção dinâmica entre Regressão Linear e Random Forest baseada no menor MAE (Mean Absolute Error).
         """)
 
-    st.caption("Leo Tracker Smart View v10.1 | Full ETL, AG Evaluator & Groq AI (Mixtral)")
+    st.caption("Leo Tracker Smart View v10.1 | Full ETL, AG Evaluator & Groq AI (Llama-3.3-70b)")
