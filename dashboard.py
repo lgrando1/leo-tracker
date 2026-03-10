@@ -15,6 +15,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error
 import itertools
 import random
+from groq import Groq  # <-- MOVIDO PARA O TOPO, IGUAL AO SEU APP.PY
 
 # ============================================================================
 # 1. CONFIGURAÇÃO VISUAL E ESTADO DA SESSÃO (PERSISTÊNCIA DOS SLIDERS)
@@ -431,48 +432,41 @@ with tab_qs:
             st.markdown("##### 🧠 Consultoria Metabólica Especializada (IA)")
             if st.button("🩺 Pedir Feedback ao Groq (Análise de Inércia)"):
                 try:
-                    from groq import Groq
-                    api_key = st.secrets.get("GROQ_API_KEY") # Chave corrigida!
+                    # Inicializa o cliente pegando a chave diretamente, exatamente igual ao app.py
+                    client = Groq(api_key=st.secrets.get("GROQ_API_KEY"))
                     
-                    if not api_key:
-                        st.error("⚠️ Chave 'GROQ_API_KEY' não encontrada no arquivo .streamlit/secrets.toml")
-                    else:
-                        client = Groq(api_key=api_key)
+                    prompt_medico = f"""
+                    Atue como um endocrinologista e especialista em biologia de sistemas. 
+                    Abaixo estão os resultados do meu modelo de regressão linear multivariável (OLS) que prevê a variação diária do meu peso baseado no meu comportamento metabólico histórico.
+                    
+                    Métricas Globais de Previsibilidade:
+                    - Poder de explicação (R²): {r2*100:.1f}%
+                    - Ruído/Ajuste (AIC): {aic_val:.1f}
+                    
+                    Sinais Vitais e Inércia Metabólica (Variável | Coeficiente de Impacto em kg | P-Valor):
+                    {df_resumo_table.to_string()}
+                    
+                    Considerando que P-valores < 0.05 indicam alta significância estatística (marcados com 🟢) e os coeficientes indicam impacto direto na balança:
+                    Faça uma análise clínica de exatos 2 parágrafos curtos:
+                    1. O que a inércia dos dias (ex: impacto de variáveis de 7 dias vs 1 dia) revela sobre como o meu corpo processa e retém peso atualmente? Foque nos P-valores mais relevantes (🟢).
+                    2. Com base nesses dados quantitativos, qual é a principal recomendação prática para eu otimizar a queima de gordura/desinflamação para amanhã?
+                    """
+                    
+                    with st.spinner("Conectando ao laboratório de IA... Analisando sua bioestatística..."):
+                        stream = client.chat.completions.create(
+                            model="llama-3.3-70b-versatile", # <-- MODELO ORIGINAL Llama
+                            messages=[{"role": "user", "content": prompt_medico}],
+                            temperature=0.3,
+                            stream=True,
+                        )
                         
-                        prompt_medico = f"""
-                        Atue como um endocrinologista e especialista em biologia de sistemas. 
-                        Abaixo estão os resultados do meu modelo de regressão linear multivariável (OLS) que prevê a variação diária do meu peso baseado no meu comportamento metabólico histórico.
+                        def generate_groq_stream(stream_obj):
+                            for chunk in stream_obj:
+                                if chunk.choices[0].delta.content is not None:
+                                    yield chunk.choices[0].delta.content
+                                    
+                        st.write_stream(generate_groq_stream(stream))
                         
-                        Métricas Globais de Previsibilidade:
-                        - Poder de explicação (R²): {r2*100:.1f}%
-                        - Ruído/Ajuste (AIC): {aic_val:.1f}
-                        
-                        Sinais Vitais e Inércia Metabólica (Variável | Coeficiente de Impacto em kg | P-Valor):
-                        {df_resumo_table.to_string()}
-                        
-                        Considerando que P-valores < 0.05 indicam alta significância estatística (marcados com 🟢) e os coeficientes indicam impacto direto na balança:
-                        Faça uma análise clínica de exatos 2 parágrafos curtos:
-                        1. O que a inércia dos dias (ex: impacto de variáveis de 7 dias vs 1 dia) revela sobre como o meu corpo processa e retém peso atualmente? Foque nos P-valores mais relevantes (🟢).
-                        2. Com base nesses dados quantitativos, qual é a principal recomendação prática para eu otimizar a queima de gordura/desinflamação para amanhã?
-                        """
-                        
-                        with st.spinner("Conectando ao laboratório de IA... Analisando sua bioestatística..."):
-                            stream = client.chat.completions.create(
-                                model="llama-3.3-70b-versatile", # <-- MODELO ORIGINAL DO SEU APP RESTAURADO AQUI
-                                messages=[{"role": "user", "content": prompt_medico}],
-                                temperature=0.3,
-                                stream=True,
-                            )
-                            
-                            def generate_groq_stream(stream_obj):
-                                for chunk in stream_obj:
-                                    if chunk.choices[0].delta.content is not None:
-                                        yield chunk.choices[0].delta.content
-                                        
-                            st.write_stream(generate_groq_stream(stream))
-                            
-                except ImportError:
-                    st.error("⚠️ Biblioteca 'groq' não instalada. Abra o terminal e execute: pip install groq")
                 except Exception as e:
                     st.error(f"🚨 Erro na comunicação com a API do Groq: {e}")
             
