@@ -432,7 +432,7 @@ with tab_qs:
             if st.button("🩺 Pedir Feedback ao Groq (Análise de Inércia)"):
                 try:
                     from groq import Groq
-                    api_key = st.secrets.get("GROQ_API_KEY")
+                    api_key = st.secrets.get("GROQ_API_KEY") # <-- NOME DA CHAVE CORRIGIDO AQUI
                     
                     if not api_key:
                         st.error("⚠️ Chave 'GROQ_API_KEY' não encontrada no arquivo .streamlit/secrets.toml")
@@ -458,7 +458,7 @@ with tab_qs:
                         
                         with st.spinner("Conectando ao laboratório de IA... Analisando sua bioestatística..."):
                             stream = client.chat.completions.create(
-                                model="llama-3.3-70b-versatile", # <-- MODELO ALTERADO AQUI
+                                model="mixtral-8x7b-32768",
                                 messages=[{"role": "user", "content": prompt_medico}],
                                 temperature=0.3,
                                 stream=True,
