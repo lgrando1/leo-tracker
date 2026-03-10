@@ -298,6 +298,24 @@ with tab_qs:
             # ============================================================================
             # BLOCO 3: ORÁCULO METABÓLICO INTERATIVO (DOE & REGRESSÃO MULTIVARIÁVEL)
             # ============================================================================
+            
+            # 🧬 APLICADOR DE DNA (Bypass para StreamlitAPIException)
+            # Este bloco intercepta os dados do Algoritmo Genético ANTES dos sliders serem renderizados,
+            # atualizando o st.session_state nativamente e evitando o crash do Streamlit.
+            if 'novo_dna_metabolico' in st.session_state:
+                dna = st.session_state.pop('novo_dna_metabolico')
+                st.session_state['win_peso'] = dna[0]
+                st.session_state['win_jej'] = dna[1]
+                st.session_state['win_prot'] = dna[2]
+                st.session_state['win_carb'] = dna[3]
+                st.session_state['win_gord'] = dna[4]
+                st.session_state['win_passos'] = dna[5]
+                st.session_state['win_agua'] = dna[6]
+                st.session_state['win_int'] = dna[7]
+                st.session_state['win_bristol'] = dna[8]
+                st.session_state['win_sono_h'] = dna[9]
+                st.session_state['win_sono_q'] = dna[9]
+
             st.markdown("### 3️⃣ Oráculo Metabólico Dinâmico (Sintonizador de Sinais)")
             
             st.markdown("**🎯 Variável Alvo (Filtro Anti-Ruído)**")
@@ -411,7 +429,7 @@ with tab_qs:
                 st.info("📊 Aguardando mais logs simultâneos para gerar o modelo matemático preditivo.")
             
             # ============================================================================
-            # 🧬 BLOCO EVOLUTIVO V12.1 (ALGORITMO GENÉTICO) - COM ATUALIZAÇÃO DE UI
+            # 🧬 BLOCO EVOLUTIVO V12.1 (ALGORITMO GENÉTICO) - COM SOLUÇÃO DE UI
             # ============================================================================
             st.markdown("---")
             with st.expander("🧬 Evolução Genética do DNA Metabólico (AIC Evaluator)", expanded=False):
@@ -456,23 +474,12 @@ with tab_qs:
                             progress_bar.progress((g + 1) / GERACOES)
                         
                         best = pop[0]
-                        melhor_aic = fitness(best)
-                        st.success(f"Evolução concluída! O melhor DNA Metabólico atingiu um AIC de: {melhor_aic:.2f}")
                         
-                        # Atualizar o session_state com os genes vencedores para transportar para os sliders
-                        st.session_state['win_peso'] = best[0]
-                        st.session_state['win_jej'] = best[1]
-                        st.session_state['win_prot'] = best[2]
-                        st.session_state['win_carb'] = best[3]
-                        st.session_state['win_gord'] = best[4]
-                        st.session_state['win_passos'] = best[5]
-                        st.session_state['win_agua'] = best[6]
-                        st.session_state['win_int'] = best[7]
-                        st.session_state['win_bristol'] = best[8]
-                        st.session_state['win_sono_h'] = best[9]
-                        st.session_state['win_sono_q'] = best[9]
-                        
+                        # Salva no buffer em vez de tentar mudar o widget já renderizado e chama o rerun.
+                        # Na próxima leitura, o código lá em cima aplica os dados aos sliders com segurança.
+                        st.session_state['novo_dna_metabolico'] = best
                         st.rerun()
+
             st.markdown("---")
 
         else:
