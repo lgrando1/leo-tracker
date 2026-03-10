@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -299,9 +300,6 @@ with tab_qs:
             # BLOCO 3: ORÁCULO METABÓLICO INTERATIVO (DOE & REGRESSÃO MULTIVARIÁVEL)
             # ============================================================================
             
-            # 🧬 APLICADOR DE DNA (Bypass para StreamlitAPIException)
-            # Este bloco intercepta os dados do Algoritmo Genético ANTES dos sliders serem renderizados,
-            # atualizando o st.session_state nativamente e evitando o crash do Streamlit.
             if 'novo_dna_metabolico' in st.session_state:
                 dna = st.session_state.pop('novo_dna_metabolico')
                 st.session_state['win_peso'] = dna[0]
@@ -425,11 +423,61 @@ with tab_qs:
                         st.metric("Tendência de Variação", f"{pred_delta*1000:+.0f} g", delta_color="inverse")
                     else:
                         st.warning("⏳ Aguardando acúmulo de dados (mínimo 10 dias) para iniciar o Torneio El Farol.")
-            else:
-                st.info("📊 Aguardando mais logs simultâneos para gerar o modelo matemático preditivo.")
+
+            # ============================================================================
+            # 🧠 IA GROQ: FEEDBACK METABÓLICO EM TEMPO REAL
+            # ============================================================================
+            st.markdown("---")
+            st.markdown("##### 🧠 Consultoria Metabólica Especializada (IA)")
+            if st.button("🩺 Pedir Feedback ao Groq (Análise de Inércia)"):
+                try:
+                    from groq import Groq
+                    api_key = st.secrets.get("GROQ_API_KEY")
+                    
+                    if not api_key:
+                        st.error("⚠️ Chave 'GROQ_API_KEY' não encontrada no arquivo .streamlit/secrets.toml")
+                    else:
+                        client = Groq(api_key=api_key)
+                        
+                        prompt_medico = f"""
+                        Atue como um endocrinologista e especialista em biologia de sistemas. 
+                        Abaixo estão os resultados do meu modelo de regressão linear multivariável (OLS) que prevê a variação diária do meu peso baseado no meu comportamento metabólico histórico.
+                        
+                        Métricas Globais de Previsibilidade:
+                        - Poder de explicação (R²): {r2*100:.1f}%
+                        - Ruído/Ajuste (AIC): {aic_val:.1f}
+                        
+                        Sinais Vitais e Inércia Metabólica (Variável | Coeficiente de Impacto em kg | P-Valor):
+                        {df_resumo_table.to_string()}
+                        
+                        Considerando que P-valores < 0.05 indicam alta significância estatística (marcados com 🟢) e os coeficientes indicam impacto direto na balança:
+                        Faça uma análise clínica de exatos 2 parágrafos curtos:
+                        1. O que a inércia dos dias (ex: impacto de variáveis de 7 dias vs 1 dia) revela sobre como o meu corpo processa e retém peso atualmente? Foque nos P-valores mais relevantes (🟢).
+                        2. Com base nesses dados quantitativos, qual é a principal recomendação prática para eu otimizar a queima de gordura/desinflamação para amanhã?
+                        """
+                        
+                        with st.spinner("Conectando ao laboratório de IA... Analisando sua bioestatística..."):
+                            stream = client.chat.completions.create(
+                                model="llama3-70b-8192",
+                                messages=[{"role": "user", "content": prompt_medico}],
+                                temperature=0.3,
+                                stream=True,
+                            )
+                            
+                            def generate_groq_stream(stream_obj):
+                                for chunk in stream_obj:
+                                    if chunk.choices[0].delta.content is not None:
+                                        yield chunk.choices[0].delta.content
+                                        
+                            st.write_stream(generate_groq_stream(stream))
+                            
+                except ImportError:
+                    st.error("⚠️ Biblioteca 'groq' não instalada. Abra o terminal e execute: pip install groq")
+                except Exception as e:
+                    st.error(f"🚨 Erro na comunicação com a API do Groq: {e}")
             
             # ============================================================================
-            # 🧬 BLOCO EVOLUTIVO V12.1 (ALGORITMO GENÉTICO) - COM SOLUÇÃO DE UI
+            # 🧬 BLOCO EVOLUTIVO V12.1 (ALGORITMO GENÉTICO)
             # ============================================================================
             st.markdown("---")
             with st.expander("🧬 Evolução Genética do DNA Metabólico (AIC Evaluator)", expanded=False):
@@ -463,7 +511,7 @@ with tab_qs:
                         
                         for g in range(GERACOES):
                             pop = sorted(pop, key=lambda i: fitness(i))
-                            nova_pop = pop[:5] # Elite
+                            nova_pop = pop[:5] 
                             while len(nova_pop) < TAM_POP:
                                 p1, p2 = random.sample(pop[:20], 2)
                                 filho = [p1[i] if random.random() > 0.5 else p2[i] for i in range(10)]
@@ -474,9 +522,6 @@ with tab_qs:
                             progress_bar.progress((g + 1) / GERACOES)
                         
                         best = pop[0]
-                        
-                        # Salva no buffer em vez de tentar mudar o widget já renderizado e chama o rerun.
-                        # Na próxima leitura, o código lá em cima aplica os dados aos sliders com segurança.
                         st.session_state['novo_dna_metabolico'] = best
                         st.rerun()
 
@@ -666,4 +711,4 @@ with tab_dash:
         * **Torneio El Farol:** Seleção dinâmica entre Regressão Linear e Random Forest baseada no menor MAE (Mean Absolute Error).
         """)
 
-    st.caption("Leo Tracker Smart View v10.1 | Full ETL, Sleep & AG Evaluator")
+    st.caption("Leo Tracker Smart View v10.1 | Full ETL, AG Evaluator & Groq AI")
