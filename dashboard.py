@@ -432,10 +432,10 @@ with tab_qs:
             if st.button("🩺 Pedir Feedback ao Groq (Análise de Inércia)"):
                 try:
                     from groq import Groq
-                    api_key = st.secrets.get("api_key")
+                    api_key = st.secrets.get("GROQ_API_KEY")
                     
                     if not api_key:
-                        st.error("⚠️ Chave 'api_key' não encontrada no arquivo .streamlit/secrets.toml")
+                        st.error("⚠️ Chave 'GROQ_API_KEY' não encontrada no arquivo .streamlit/secrets.toml")
                     else:
                         client = Groq(api_key=api_key)
                         
