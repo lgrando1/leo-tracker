@@ -71,7 +71,7 @@ if st.query_params.get("token") != st.secrets.get("DASH_ACCESS_TOKEN"):
     st.error("🔒 Acesso Restrito. Token inválido."); st.stop()
 
 # ============================================================================
-# 3. ETL (EXTRAÇÃO E TRATAMENTO - V10)
+# 3. ETL (EXTRAÇÃO E TRATAMENTO - V10 + HACKER'S DIET)
 # ============================================================================
 hoje = datetime.now(pytz.timezone('America/Sao_Paulo')).date()
 DATA_INICIO = pd.to_datetime("2025-12-30").date()
@@ -159,6 +159,19 @@ if not df_hist.empty and not df_peso.empty:
     df_merged['get_basal'] = ((10 * df_merged['peso_kg']) + (6.25 * altura) - (5 * idade) + 5) * fator_atividade
     df_merged['get_total'] = df_merged['get_basal'] + df_merged['t_cal_out']
     df_merged['deficit_real'] = df_merged['get_total'] - df_merged['tkcal']
+
+    # ---------------------------------------------------------
+    # HACKER'S DIET: MÉDIA MÓVEL EXPONENCIAL (TREND WEIGHT) & CINTURA
+    # ---------------------------------------------------------
+    df_merged['peso_tendencia'] = df_merged['peso_kg'].ewm(span=10, adjust=False).mean()
+
+    if not df_medidas.empty:
+        df_medidas['data_dt'] = pd.to_datetime(df_medidas['log_date']).dt.date
+        df_med_agg = df_medidas.groupby('data_dt')[['waist_cm']].last().reset_index()
+        df_merged = pd.merge(df_merged, df_med_agg, on='data_dt', how='left')
+        df_merged['waist_cm'] = df_merged['waist_cm'].ffill()
+    else:
+        df_merged['waist_cm'] = np.nan
 
 # ============================================================================
 # 4. MOTOR PREDITIVO (EL FAROL) - DINÂMICO
@@ -250,16 +263,38 @@ with tab_qs:
             st.markdown("---")
 
             # ============================================================================
-            # BLOCO 1 E 2: GRÁFICOS
+            # BLOCO 1 E 2: GRÁFICOS (ATUALIZADO PARA HACKER'S DIET)
             # ============================================================================
-            st.markdown("### 1️⃣ Visão Macro: Peso Absoluto e Combustão Calórica")
+            st.markdown("### 1️⃣ Visão Macro: Peso Absoluto, Tendência e Combustão Calórica")
             c_macro1, c_macro2 = st.columns(2)
 
             with c_macro1:
                 fig_peso_abs = go.Figure()
-                fig_peso_abs.add_trace(go.Scatter(x=df_merged['data_dt'], y=df_merged['peso_kg'], mode='lines+markers', name='Peso Real (kg)', line=dict(color='#2980B9', width=4)))
-                fig_peso_abs.update_layout(title="Evolução do Peso na Balança", height=500, template="plotly_white", yaxis_title="Peso (kg)", hovermode="x unified")
+                
+                # Hacker's Diet: Peso Diário (Ruído)
+                fig_peso_abs.add_trace(go.Scatter(x=df_merged['data_dt'], y=df_merged['peso_kg'], 
+                                                  mode='markers+lines', name='Balança Diária (Ruído)', 
+                                                  line=dict(color='rgba(41, 128, 185, 0.3)', width=2),
+                                                  marker=dict(size=6, color='rgba(41, 128, 185, 0.5)')))
+                                                  
+                # Hacker's Diet: Trend Weight (Sinal Verdadeiro - EWMA)
+                fig_peso_abs.add_trace(go.Scatter(x=df_merged['data_dt'], y=df_merged['peso_tendencia'], 
+                                                  mode='lines', name='Tendência Real (EWMA)', 
+                                                  line=dict(color='#E74C3C', width=4)))
+                
+                fig_peso_abs.update_layout(title="Hacker's Diet: Sinal (Vermelho) vs Ruído (Azul)", 
+                                           height=400, template="plotly_white", yaxis_title="Peso (kg)", hovermode="x unified")
                 st.plotly_chart(fig_peso_abs, use_container_width=True)
+
+                # Gráfico extra: Cintura estrutural
+                if 'waist_cm' in df_merged.columns and not df_merged['waist_cm'].isna().all():
+                    fig_cintura = go.Figure()
+                    fig_cintura.add_trace(go.Scatter(x=df_merged['data_dt'], y=df_merged['waist_cm'], 
+                                                     mode='lines+markers', name='Cintura (cm)', 
+                                                     line=dict(color='#27AE60', width=4, shape='spline')))
+                    fig_cintura.update_layout(title="Redução Estrutural (Cintura em cm)", 
+                                              height=250, template="plotly_white", yaxis_title="Centímetros")
+                    st.plotly_chart(fig_cintura, use_container_width=True)
 
             with c_macro2:
                 fig_cal = go.Figure()
@@ -318,25 +353,26 @@ with tab_qs:
             st.markdown("### 3️⃣ Oráculo Metabólico Dinâmico (Sintonizador de Sinais)")
             
             st.markdown("**🎯 Variável Alvo (Filtro Anti-Ruído)**")
-            win_peso = st.slider("⚖️ Filtro: Peso (Tendência da Balança)", 1, 7, key='win_peso')
+            # JANELA ATUALIZADA PARA 15 DIAS
+            win_peso = st.slider("⚖️ Filtro: Peso (Tendência da Balança)", 1, 15, key='win_peso')
             
-            st.markdown("**⚙️ Variáveis Independentes (Atraso Fisiológico)**")
+            st.markdown("**⚙️ Variáveis Independentes (Atraso Fisiológico - Janela de até 15 dias)**")
             col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns(5)
             with col_f1: 
-                win_jej = st.slider("⏳ Jejum", 1, 7, key='win_jej')
-                win_agua = st.slider("💧 Água", 1, 7, key='win_agua')
+                win_jej = st.slider("⏳ Jejum", 1, 15, key='win_jej')
+                win_agua = st.slider("💧 Água", 1, 15, key='win_agua')
             with col_f2: 
-                win_prot = st.slider("🥩 Proteína", 1, 7, key='win_prot')
-                win_int = st.slider("💩 Intestino", 1, 7, key='win_int')
+                win_prot = st.slider("🥩 Proteína", 1, 15, key='win_prot')
+                win_int = st.slider("💩 Intestino", 1, 15, key='win_int')
             with col_f3: 
-                win_carb = st.slider("🍞 Carbo", 1, 7, key='win_carb')
-                win_bristol = st.slider("🧪 Bristol", 1, 7, key='win_bristol')
+                win_carb = st.slider("🍞 Carbo", 1, 15, key='win_carb')
+                win_bristol = st.slider("🧪 Bristol", 1, 15, key='win_bristol')
             with col_f4: 
-                win_gord = st.slider("🥑 Gordura", 1, 7, key='win_gord')
-                win_passos = st.slider("👣 Passos", 1, 7, key='win_passos')
+                win_gord = st.slider("🥑 Gordura", 1, 15, key='win_gord')
+                win_passos = st.slider("👣 Passos", 1, 15, key='win_passos')
             with col_f5:
-                win_sono_h = st.slider("💤 Sono (Horas)", 1, 7, key='win_sono_h')
-                win_sono_q = st.slider("🌟 Sono (Qualid.)", 1, 7, key='win_sono_q')
+                win_sono_h = st.slider("💤 Sono (Horas)", 1, 15, key='win_sono_h')
+                win_sono_q = st.slider("🌟 Sono (Qualid.)", 1, 15, key='win_sono_q')
             
             df_model = df_qs.copy()
             
@@ -425,7 +461,7 @@ with tab_qs:
                     else:
                         st.warning("⏳ Aguardando acúmulo de dados (mínimo 10 dias) para iniciar o Torneio El Farol.")
 
-# ============================================================================
+            # ============================================================================
             # 🧠 IA GROQ: FEEDBACK METABÓLICO EM TEMPO REAL
             # ============================================================================
             st.markdown("---")
@@ -469,7 +505,7 @@ with tab_qs:
                             stream = client.chat.completions.create(
                                 model="llama-3.3-70b-versatile",
                                 messages=[{"role": "user", "content": prompt_medico}],
-                                temperature=0.1, # <-- Reduzido para 0.1 para forçar a IA a ser mais lógica e menos "criativa"
+                                temperature=0.1,
                                 stream=True,
                             )
                             
@@ -484,16 +520,16 @@ with tab_qs:
                     st.error(f"🚨 Erro na comunicação com a API do Groq: {e}")
             
             # ============================================================================
-            # 🧬 BLOCO EVOLUTIVO V12.1 (ALGORITMO GENÉTICO)
+            # 🧬 BLOCO EVOLUTIVO V13 (ALGORITMO GENÉTICO - ATUALIZADO PARA 15 DIAS)
             # ============================================================================
             st.markdown("---")
             with st.expander("🧬 Evolução Genética do DNA Metabólico (AIC Evaluator)", expanded=False):
-                st.markdown("O Algoritmo Genético busca a **Inércia de Ouro** simulando a seleção natural. Ele testa cruzamentos e mutações de janelas (1 a 7 dias) e converge para as combinações de menor AIC (Akaike Information Criterion).")
+                st.markdown("O Algoritmo Genético busca a **Inércia de Ouro** simulando a seleção natural. Ele testa cruzamentos e mutações de janelas (1 a 15 dias) e converge para as combinações de menor AIC (Akaike Information Criterion).")
                 if st.button("🚀 Iniciar Evolução Biométrica"):
                     with st.spinner("Decodificando DNA Metabólico através de algoritmos genéticos..."):
                         TAM_POP = 50
                         GERACOES = 15
-                        JANELA_MAX = 7
+                        JANELA_MAX = 15 # Atualizado para 15 dias
                         
                         base_df = df_qs[['peso_kg', 'jejum_h', 'tprot', 'tcarb', 'tgord', 't_passos_trabalho', 'tagua', 'tintestino', 'tbristol', 'sono_h', 'sono_q']].copy()
                         
@@ -713,9 +749,10 @@ with tab_dash:
         * **Perda Teórica:** Déficit Acumulado / 7700 (Considerando que 1kg de gordura ≈ 7700kcal).
         
         ### 3. Modelo Matemático (Oráculo com Avaliação Bayesiana/Akaike)
-        * **Metodologia:** Regressão Linear Múltipla (OLS) com janelas móveis.
+        * **Metodologia:** Regressão Linear Múltipla (OLS) com janelas móveis (Agora analisando rastros longos de até 15 dias).
         * **Autotuning Evolutivo:** Teste genético simulando a evolução natural focado em minimizar o AIC (Critério de Informação de Akaike). O modelo é penalizado pela quantidade de parâmetros ($2k$), priorizando apenas as janelas que entregam sinal real, expurgando o ruído sistêmico (*overfitting*).
         * **Torneio El Farol:** Seleção dinâmica entre Regressão Linear e Random Forest baseada no menor MAE (Mean Absolute Error).
+        * **The Hacker's Diet:** Integração da técnica de *Trend Weight* através de Média Móvel Exponencial (EWMA) para isolar a oscilação hídrica do peso real.
         """)
 
-    st.caption("Leo Tracker Smart View v10.1 | Full ETL, AG Evaluator & Groq AI (Llama-3.3-70b)")
+    st.caption("Leo Tracker Smart View v11.0 | Hacker's Diet + 15-Day AG Evaluator")
