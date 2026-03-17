@@ -660,7 +660,7 @@ with tab_dash:
                 st.plotly_chart(fig_proj, use_container_width=True)
 
     # ============================================================================
-    # 🤖 ROBÔ PID DE AJUSTE CALÓRICO (MODO ENFÁTICO)
+    # 🤖 ROBÔ PID DE AJUSTE CALÓRICO (MODO ASSIMÉTRICO / EFEITO CATRACA)
     # ============================================================================
     st.divider()
     st.markdown("### 🤖 Robô PID de Controle Calórico")
@@ -682,33 +682,35 @@ with tab_dash:
             # 2. O Erro (Positivo = Atrasado/Gordo | Negativo = Adiantado/Magro)
             erro_kg = pv_hoje - sp_hoje
             
-            # 3. Constantes do PID (Modo Enfático)
+            # 3. Constantes do PID
             Kp = 1000  # Proporcional: Corta 1000 kcal para cada 1kg de erro
-            Ki = 50    # Integral: (Simplificado) Punição extra se a média histórica for ruim
-            
-            # Cálculo da Intervenção
-            ajuste_calorico = -(erro_kg * Kp) 
-            
-            # Limites de Segurança do Chassi (Para não zerar as calorias)
             meta_base_kcal = int(p['meta_kcal'])
-            kcal_recomendada = meta_base_kcal + ajuste_calorico
             
-            # Trava de segurança: Nunca menos de 1000 kcal (risco de perda muscular) e nunca mais que GET
-            kcal_recomendada = max(1000, min(kcal_recomendada, df_merged.iloc[-1]['get_total']))
-            
-            # 4. Interface do Robô
             col_pid1, col_pid2, col_pid3, col_pid4 = st.columns(4)
+            col_pid1.metric("🎯 Setpoint (Rampa Admin)", f"{sp_hoje:.2f} kg")
+            col_pid2.metric("📊 Variável (EWMA)", f"{pv_hoje:.2f} kg")
             
-            col_pid1.metric("🎯 Setpoint (Rampa)", f"{sp_hoje:.2f} kg", help="Onde a matemática diz que você deveria estar hoje.")
-            col_pid2.metric("📊 Variável (EWMA)", f"{pv_hoje:.2f} kg", help="Seu peso real hoje, sem o ruído hídrico.")
+            # 4. Lógica Assimétrica (O Pulo do Gato)
+            if erro_kg < 0:
+                # O usuário está MELHOR que a meta. Não adicione calorias!
+                ajuste_calorico = 0
+                kcal_recomendada = meta_base_kcal
+                
+                col_pid3.metric("🏆 Vantagem (Delta)", f"{erro_kg*1000:+.0f} g", delta_color="normal")
+                
+                st.success(f"🏆 **SISTEMA QUEBRADO COM SUCESSO!** O motor detectou que você está **{abs(erro_kg):.2f} kg MAIS MAGRO** do que a matemática original exigia para hoje. O Robô desativou a injeção extra de combustível. Você humilhou a inércia projetada!")
+                st.info(f"✅ **PLANO TÁTICO:** Mantendo a meta base de **{meta_base_kcal} kcal**. Siga o voo de cruzeiro.")
             
-            cor_erro = "inverse" if erro_kg > 0 else "normal"
-            col_pid3.metric("⚠️ Erro (Delta)", f"{erro_kg*1000:+.0f} g", delta_color=cor_erro)
-            
-            st.info(f"**Ação do PID:** O motor detectou um desvio de {erro_kg*1000:+.0f}g da rampa de queima ideal. O fator Proporcional (Kp) calculou uma intervenção de **{ajuste_calorico:+.0f} kcal**.")
-            
-            st.warning(f"🔥 **COMBUSTÍVEL RECALIBRADO PARA HOJE:** A sua meta calórica original era {meta_base_kcal} kcal. O Robô PID determinou que você deve consumir **{int(kcal_recomendada)} kcal** nas próximas 24h para forçar a linha de volta para o Setpoint.")
-
+            else:
+                # O usuário está ATRASADO. Aja com agressividade!
+                ajuste_calorico = -(erro_kg * Kp)
+                kcal_recomendada = meta_base_kcal + ajuste_calorico
+                kcal_recomendada = max(1000, min(kcal_recomendada, df_merged.iloc[-1]['get_total'])) # Trava de segurança
+                
+                col_pid3.metric("⚠️ Erro (Delta)", f"{erro_kg*1000:+.0f} g", delta_color="inverse")
+                
+                st.error(f"⚠️ **AÇÃO DO PID:** O motor detectou um atraso de {erro_kg*1000:+.0f}g na rampa. O controlador aplicou um corte de **{ajuste_calorico:+.0f} kcal** na sua cota diária.")
+                st.warning(f"🔥 **COMBUSTÍVEL RECALIBRADO PARA HOJE:** A sua meta calórica original era {meta_base_kcal} kcal. O Robô PID determinou que você deve consumir **{int(kcal_recomendada)} kcal** nas próximas 24h para forçar a linha de volta para o Setpoint.")
     with c_p2:
         st.markdown("##### 🏃‍♂️ Consistência de Treino")
         if not df_merged.empty and 't_passos_trabalho' in df_merged.columns:
