@@ -659,6 +659,56 @@ with tab_dash:
                 fig_proj.update_layout(height=400, margin=dict(l=10,r=10,t=20,b=10), legend=dict(orientation="h", y=1.1), template="plotly_white")
                 st.plotly_chart(fig_proj, use_container_width=True)
 
+    # ============================================================================
+    # 🤖 ROBÔ PID DE AJUSTE CALÓRICO (MODO ENFÁTICO)
+    # ============================================================================
+    st.divider()
+    st.markdown("### 🤖 Robô PID de Controle Calórico")
+    
+    if not df_peso.empty and not df_merged.empty and 'peso_tendencia' in df_merged.columns:
+        # 1. Calcular o Setpoint (SP) de Hoje - Onde você deveria estar na rampa
+        BASE_DATE_PID = pd.to_datetime("2025-12-31").date()
+        df_base_pid = df_peso[df_peso['data_dt'] >= BASE_DATE_PID].sort_values('data_dt')
+        
+        if not df_base_pid.empty:
+            peso_start_pid = float(df_base_pid.iloc[0]['peso_kg'])
+            dias_passados = (hoje - BASE_DATE_PID).days
+            ritmo_diario_pid = float(p['ritmo_semanal']) / 7
+            
+            # SP (Meta de hoje) e PV (Realidade de hoje baseada na EWMA)
+            sp_hoje = peso_start_pid - (dias_passados * ritmo_diario_pid)
+            pv_hoje = df_merged.iloc[-1]['peso_tendencia']
+            
+            # 2. O Erro (Positivo = Atrasado/Gordo | Negativo = Adiantado/Magro)
+            erro_kg = pv_hoje - sp_hoje
+            
+            # 3. Constantes do PID (Modo Enfático)
+            Kp = 1000  # Proporcional: Corta 1000 kcal para cada 1kg de erro
+            Ki = 50    # Integral: (Simplificado) Punição extra se a média histórica for ruim
+            
+            # Cálculo da Intervenção
+            ajuste_calorico = -(erro_kg * Kp) 
+            
+            # Limites de Segurança do Chassi (Para não zerar as calorias)
+            meta_base_kcal = int(p['meta_kcal'])
+            kcal_recomendada = meta_base_kcal + ajuste_calorico
+            
+            # Trava de segurança: Nunca menos de 1000 kcal (risco de perda muscular) e nunca mais que GET
+            kcal_recomendada = max(1000, min(kcal_recomendada, df_merged.iloc[-1]['get_total']))
+            
+            # 4. Interface do Robô
+            col_pid1, col_pid2, col_pid3, col_pid4 = st.columns(4)
+            
+            col_pid1.metric("🎯 Setpoint (Rampa)", f"{sp_hoje:.2f} kg", help="Onde a matemática diz que você deveria estar hoje.")
+            col_pid2.metric("📊 Variável (EWMA)", f"{pv_hoje:.2f} kg", help="Seu peso real hoje, sem o ruído hídrico.")
+            
+            cor_erro = "inverse" if erro_kg > 0 else "normal"
+            col_pid3.metric("⚠️ Erro (Delta)", f"{erro_kg*1000:+.0f} g", delta_color=cor_erro)
+            
+            st.info(f"**Ação do PID:** O motor detectou um desvio de {erro_kg*1000:+.0f}g da rampa de queima ideal. O fator Proporcional (Kp) calculou uma intervenção de **{ajuste_calorico:+.0f} kcal**.")
+            
+            st.warning(f"🔥 **COMBUSTÍVEL RECALIBRADO PARA HOJE:** A sua meta calórica original era {meta_base_kcal} kcal. O Robô PID determinou que você deve consumir **{int(kcal_recomendada)} kcal** nas próximas 24h para forçar a linha de volta para o Setpoint.")
+
     with c_p2:
         st.markdown("##### 🏃‍♂️ Consistência de Treino")
         if not df_merged.empty and 't_passos_trabalho' in df_merged.columns:
