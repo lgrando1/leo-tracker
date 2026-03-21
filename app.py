@@ -85,6 +85,11 @@ def inicializar_banco():
     executar_sql("CREATE TABLE IF NOT EXISTS public.consumo (id SERIAL PRIMARY KEY, data DATE, alimento TEXT, quantidade REAL, kcal REAL, proteina REAL, carbo REAL, gordura REAL, gluten TEXT DEFAULT 'Não informado');")
     try: executar_sql("ALTER TABLE public.consumo ADD COLUMN IF NOT EXISTS data_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
     except: pass
+    
+    # Adicionando colunas de Micronutrientes (Blindagem do Chassi)
+    for c in ['ferro_mg', 'b12_mcg', 'zinco_mg', 'magnesio_mg']:
+        try: executar_sql(f"ALTER TABLE public.consumo ADD COLUMN IF NOT EXISTS {c} REAL DEFAULT 0;")
+        except: pass
 
     executar_sql("CREATE TABLE IF NOT EXISTS public.peso (id SERIAL PRIMARY KEY, data DATE, peso_kg REAL);")
     executar_sql("""
@@ -183,15 +188,11 @@ def processar_texto_ia(texto_usuario, api_key):
     Aja como Nutricionista Matemático. Hoje: {get_now_br().strftime('%Y-%m-%d')}.
     DIRETRIZES RÍGIDAS DE CÁLCULO:
     1. Identifique o alimento e sua densidade calórica padrão (kcal/g).
-       - Vegetais: ~0.3 kcal/g
-       - Arroz/Massas cozidos: ~1.3 kcal/g
-       - Carnes magras: ~1.5 kcal/g
-       - Bolos simples: ~3.0 kcal/g
-       - Queijos/Gorduras: ~4.0 a 9.0 kcal/g
     2. MULTIPLIQUE a densidade pelo peso informado pelo usuário.
-    3. GORDURA OCULTA: Se for fritura/grelhado de restaurante, adicione +5g a +10g de gordura.
+    3. GORDURA OCULTA: Se for fritura/grelhado, adicione gordura extra.
+    4. MICRONUTRIENTES: Faça uma engenharia reversa para estimar Ferro, B12, Zinco e Magnésio.
     SAÍDA: Retorne APENAS um JSON válido.
-    Formato: {{ "analise": "Texto curto explicando o cálculo", "alimentos": [ {{ "data": "YYYY-MM-DD", "alimento": "Nome", "quantidade_g": 0, "kcal": 0, "p": 0, "c": 0, "g": 0, "gluten": "txt" }} ] }}
+    Formato: {{ "analise": "Texto curto", "alimentos": [ {{ "data": "YYYY-MM-DD", "alimento": "Nome", "quantidade_g": 0, "kcal": 0, "p": 0, "c": 0, "g": 0, "gluten": "txt", "ferro_mg": 0, "b12_mcg": 0, "zinco_mg": 0, "magnesio_mg": 0 }} ] }}
     """
     try:
         completion = client.chat.completions.create(messages=[{"role": "system", "content": prompt_system}, {"role": "user", "content": texto_usuario}], model="llama-3.3-70b-versatile", response_format={"type": "json_object"})
@@ -232,7 +233,7 @@ def torneio_el_farol(df_modelo):
 def gerar_excel_nutri(dt_ini, dt_fim):
     output = io.BytesIO()
     params = {'d1': dt_ini, 'd2': dt_fim}
-    df_detalhado = executar_sql("SELECT data, data_hora, alimento, quantidade, kcal, proteina, carbo, gordura FROM public.consumo WHERE data >= :d1 AND data <= :d2 ORDER BY data DESC", params, is_select=True)
+    df_detalhado = executar_sql("SELECT data, data_hora, alimento, quantidade, kcal, proteina, carbo, gordura, ferro_mg, b12_mcg, zinco_mg, magnesio_mg FROM public.consumo WHERE data >= :d1 AND data <= :d2 ORDER BY data DESC", params, is_select=True)
     df_peso = executar_sql("SELECT data, peso_kg FROM public.peso WHERE data >= :d1 AND data <= :d2 ORDER BY data ASC", params, is_select=True)
     df_medidas = executar_sql("SELECT log_date as data, weight_kg as peso, waist_cm as cintura, body_fat_est as bf_estimado, notes FROM public.body_measurements WHERE log_date >= :d1 AND log_date <= :d2 ORDER BY log_date DESC", params, is_select=True)
     df_pressao = executar_sql("SELECT measurement_time as data_hora, systolic, diastolic, pulse FROM public.blood_pressure WHERE measurement_time >= :d1 AND measurement_time <= :d2 ORDER BY measurement_time DESC", params, is_select=True)
@@ -322,6 +323,31 @@ st.sidebar.metric("Peso Atual", f"{peso_atual_sidebar} kg", f"Meta: {METAS['peso
 st.sidebar.caption(f"Fator Ativ: {METAS['fator']}x")
 st.sidebar.progress(min(max(0.0, (150 - peso_atual_sidebar) / (150 - METAS['peso_alvo'])), 1.0))
 
+# --- NOVO: AUDITORIA DE DIAS FALTANTES NO SIDEBAR ---
+st.sidebar.divider()
+st.sidebar.markdown("#### 📅 Auditoria (30 dias)")
+dt_30d_atras = data_hoje - timedelta(days=30)
+df_auditoria = executar_sql("SELECT DISTINCT data FROM public.consumo WHERE data >= :d", {'d': dt_30d_atras}, is_select=True)
+
+dias_lancados = []
+if not df_auditoria.empty:
+    dias_lancados = pd.to_datetime(df_auditoria['data']).dt.date.tolist()
+    
+dias_faltantes = []
+# Verifica do dia -30 até ontem (não cobra o dia de hoje se ainda não acabou)
+for i in range(30):
+    d_check = dt_30d_atras + timedelta(days=i)
+    if d_check not in dias_lancados:
+        dias_faltantes.append(d_check)
+        
+if dias_faltantes:
+    with st.sidebar.expander(f"⚠️ {len(dias_faltantes)} Dias Pendentes", expanded=False):
+        for dfalt in sorted(dias_faltantes, reverse=True):
+            st.markdown(f"❌ {dfalt.strftime('%d/%m')}")
+else:
+    st.sidebar.success("✅ Histórico blindado!")
+
+# CONTINUAÇÃO DOS DADOS DO DIA
 k_hoje = float(df_hoje['kcal'].sum()) if not df_hoje.empty else 0.0
 p_hoje = float(df_hoje['proteina'].sum()) if not df_hoje.empty else 0.0
 c_hoje = float(df_hoje['carbo'].sum()) if not df_hoje.empty else 0.0
@@ -354,8 +380,6 @@ st.divider()
 
 # ABAS
 tab_daily, tab_treino, tab_hist, tab_medidas, tab_rel, tab_admin = st.tabs(["📝 Diário", "🏃‍♂️ Treino", "📜 Histórico", "❤️ Saúde", "📄 Relatórios", "⚙️ Configurações"])
-
-
 
 # --- ABA DIÁRIO ---
 with tab_daily:
@@ -433,8 +457,6 @@ with tab_daily:
         q_sono = c_s3.select_slider("Qualidade de Sono", options=[1, 2, 3, 4, 5], value=3, help="1=Péssima | 5=Fantástica")
         
         if st.form_submit_button("💾 Salvar Sono", use_container_width=True):
-            # O sono da noite anterior afeta a fisiologia do "dia_hoje", então guardamos a data em que você ACORDOU (data_hoje) 
-            # para casar perfeitamente com os treinos e refeições deste dia.
             executar_sql("""
                 INSERT INTO public.sono (data, horas, qualidade) 
                 VALUES (:d, :h, :q)
@@ -460,7 +482,6 @@ with tab_daily:
             # Tenta decodificar como JSON primeiro
             try:
                 cleaned = texto_input.replace('```json', '').replace('```', '').strip()
-                # Localiza se é uma lista [...] ou objeto {...}
                 start, end = cleaned.find('['), cleaned.rfind(']')
                 if start == -1 and cleaned.startswith('{'): 
                     start, end = cleaned.find('{'), cleaned.rfind('}')
@@ -479,8 +500,12 @@ with tab_daily:
                         for item in (lista if isinstance(lista, list) else [lista]):
                             dt = item.get('data') if item.get('data') else data_hoje
                             k_final = max((float(item.get('p',0))*4 + float(item.get('c',0))*4 + float(item.get('g',0))*9), float(item.get('kcal', 0)))
-                            params = {'dt': dt, 'ali': item.get('alimento'), 'qtd': item.get('quantidade_g'), 'kcal': k_final, 'prot': item.get('p'), 'carb': item.get('c'), 'gord': item.get('g'), 'glut': item.get('gluten')}
-                            executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (:dt, :ali, :qtd, :kcal, :prot, :carb, :gord, :glut)", params)
+                            params = {
+                                'dt': dt, 'ali': item.get('alimento'), 'qtd': item.get('quantidade_g'), 'kcal': k_final, 
+                                'prot': item.get('p'), 'carb': item.get('c'), 'gord': item.get('g'), 'glut': item.get('gluten'),
+                                'fe': item.get('ferro_mg', 0), 'b12': item.get('b12_mcg', 0), 'zn': item.get('zinco_mg', 0), 'mg': item.get('magnesio_mg', 0)
+                            }
+                            executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten, ferro_mg, b12_mcg, zinco_mg, magnesio_mg) VALUES (:dt, :ali, :qtd, :kcal, :prot, :carb, :gord, :glut, :fe, :b12, :zn, :mg)", params)
                         st.success("Refeição(ões) salva(s) com sucesso!"); st.cache_resource.clear(); st.rerun()
                     except Exception as e: 
                         st.error(f"Erro ao processar JSON: {e}")
@@ -495,8 +520,12 @@ with tab_daily:
                             st.success(res.get('analise'))
                             for item in res.get('alimentos', []):
                                 k_final = max((item.get('p',0)*4 + item.get('c',0)*4 + item.get('g',0)*9), float(item.get('kcal', 0)))
-                                params = {'dt': item.get('data') or data_hoje, 'ali': item.get('alimento'), 'qtd': item.get('quantidade_g'), 'kc': k_final, 'pr': item.get('p'), 'ca': item.get('c'), 'go': item.get('g'), 'gl': item.get('gluten')}
-                                executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten) VALUES (:dt, :ali, :qtd, :kc, :pr, :ca, :go, :gl)", params)
+                                params = {
+                                    'dt': item.get('data') or data_hoje, 'ali': item.get('alimento'), 'qtd': item.get('quantidade_g'), 
+                                    'kc': k_final, 'pr': item.get('p'), 'ca': item.get('c'), 'go': item.get('g'), 'gl': item.get('gluten'),
+                                    'fe': item.get('ferro_mg', 0), 'b12': item.get('b12_mcg', 0), 'zn': item.get('zinco_mg', 0), 'mg': item.get('magnesio_mg', 0)
+                                }
+                                executar_sql("INSERT INTO public.consumo (data, alimento, quantidade, kcal, proteina, carbo, gordura, gluten, ferro_mg, b12_mcg, zinco_mg, magnesio_mg) VALUES (:dt, :ali, :qtd, :kc, :pr, :ca, :go, :gl, :fe, :b12, :zn, :mg)", params)
                             st.cache_resource.clear(); st.rerun()
                         else:
                             st.error(res)
@@ -516,13 +545,17 @@ with tab_daily:
 # --- ABA TREINO ---
 with tab_treino:
     st.markdown("### 🏃‍♂️ Monitoramento de Treino (Iron N1)")
-    df_treino_hoje = executar_sql("SELECT * FROM public.exercicios WHERE data = :d ORDER BY id DESC", {'d': data_hoje}, is_select=True)
-    df_fechamento = df_treino_hoje[df_treino_hoje['tipo'] == 'Fechamento Diário']
-    df_atividades = df_treino_hoje[df_treino_hoje['tipo'] != 'Fechamento Diário']
+    
+    # --- NOVO: Seletor de Data Retroativa para Treinos ---
+    data_treino_alvo = st.date_input("📅 Data do Treino/Fechamento:", value=data_hoje, key="dt_treino", help="Altere esta data para lançar passos e treinos de dias passados.")
+    
+    df_treino_alvo = executar_sql("SELECT * FROM public.exercicios WHERE data = :d ORDER BY id DESC", {'d': data_treino_alvo}, is_select=True)
+    df_fechamento = df_treino_alvo[df_treino_alvo['tipo'] == 'Fechamento Diário']
+    df_atividades = df_treino_alvo[df_treino_alvo['tipo'] != 'Fechamento Diário']
 
-    min_treino_hoje = int(df_atividades['duracao_min'].sum())
-    cal_treino_hoje = int(df_atividades['calorias'].sum())
-    passos_treino_hoje = int(df_atividades['passos'].sum())
+    min_treino_hoje = int(df_atividades['duracao_min'].sum()) if not df_atividades.empty else 0
+    cal_treino_hoje = int(df_atividades['calorias'].sum()) if not df_atividades.empty else 0
+    passos_treino_hoje = int(df_atividades['passos'].sum()) if not df_atividades.empty else 0
 
     if not df_fechamento.empty: passos_total_n1 = int(df_fechamento.iloc[0]['passos_total_dia'])
     else: passos_total_n1 = 0
@@ -549,12 +582,12 @@ with tab_treino:
 
         if btn_save:
             resto_calculado = max(0, input_total_dia - passos_treino_hoje)
-            executar_sql("DELETE FROM public.exercicios WHERE data = :d AND tipo = 'Fechamento Diário'", {'d': data_hoje})
+            executar_sql("DELETE FROM public.exercicios WHERE data = :d AND tipo = 'Fechamento Diário'", {'d': data_treino_alvo})
             executar_sql("""
                 INSERT INTO public.exercicios (data, tipo, duracao_min, passos, passos_total_dia, passos_trabalho, calorias, observacoes)
                 VALUES (:d, 'Fechamento Diário', 0, 0, :pt, :ptr, 0, 'Total Relógio')
-            """, {'d': data_hoje, 'pt': input_total_dia, 'ptr': resto_calculado})
-            st.success(f"Fechado! Total: {input_total_dia} (Sendo {resto_calculado} de Rotina)"); st.rerun()
+            """, {'d': data_treino_alvo, 'pt': input_total_dia, 'ptr': resto_calculado})
+            st.success(f"Fechado para o dia {data_treino_alvo.strftime('%d/%m')}! Total: {input_total_dia}"); st.rerun()
 
     st.markdown("---")
 
@@ -574,12 +607,12 @@ with tab_treino:
             executar_sql("""
                 INSERT INTO public.exercicios (data, tipo, duracao_min, passos, distancia_km, calorias, bpm_medio, observacoes)
                 VALUES (:d, :t, :dm, :p, :dk, :c, :bpm, :o)
-            """, {'d': data_hoje, 't': tipo, 'dm': duracao, 'p': passos, 'dk': dist_est, 'c': cal, 'bpm': bpm, 'o': obs})
-            st.success("Atividade registrada!"); st.rerun()
+            """, {'d': data_treino_alvo, 't': tipo, 'dm': duracao, 'p': passos, 'dk': dist_est, 'c': cal, 'bpm': bpm, 'o': obs})
+            st.success(f"Atividade registrada para o dia {data_treino_alvo.strftime('%d/%m')}!"); st.rerun()
 
-    if not df_treino_hoje.empty:
-        st.write("#### 📝 Registros de Hoje")
-        for i, row in df_treino_hoje.iterrows():
+    if not df_treino_alvo.empty:
+        st.write(f"#### 📝 Registros ({data_treino_alvo.strftime('%d/%m/%Y')})")
+        for i, row in df_treino_alvo.iterrows():
             with st.container():
                 ct1, ct2, ct3 = st.columns([3, 2, 0.5])
                 if row['tipo'] == 'Fechamento Diário':
@@ -649,4 +682,4 @@ with tab_admin:
             executar_sql("UPDATE public.perfil SET meta_kcal=:mk, meta_proteina=:mp, meta_carbo=:mc, meta_gordura=:mg, meta_peso_alvo=:mpa, ritmo_semanal=:rit, fator_atividade=:fat WHERE id=1", {'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 'mpa': n_peso_alvo, 'rit': n_ritmo, 'fat': n_fator})
             st.cache_resource.clear(); st.rerun()
 
-st.caption("Leo Tracker Pro v9.0 | Hidratação, Sono, Trânsito Intestinal & ML 🚀")
+st.caption("Leo Tracker Pro v10.0 | Iron N1 Retroativo, Auditoria 30d & Micros na IA 🚀")
