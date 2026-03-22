@@ -378,8 +378,8 @@ c8.metric("💩 Intestino", f"{evac_hoje}x")
 
 st.divider()
 
-# ABAS
-tab_daily, tab_treino, tab_hist, tab_medidas, tab_rel, tab_admin = st.tabs(["📝 Diário", "🏃‍♂️ Treino", "📜 Histórico", "❤️ Saúde", "📄 Relatórios", "⚙️ Configurações"])
+# ABAS - ADICIONADA ABA DE MICRONUTRIENTES
+tab_daily, tab_treino, tab_hist, tab_medidas, tab_micros, tab_rel, tab_admin = st.tabs(["📝 Diário", "🏃‍♂️ Treino", "📜 Histórico", "❤️ Saúde", "🥦 Micronutrientes", "📄 Relatórios", "⚙️ Configurações"])
 
 # --- ABA DIÁRIO ---
 with tab_daily:
@@ -656,6 +656,65 @@ with tab_medidas:
             executar_sql("UPDATE public.perfil SET ultima_cintura=:wa WHERE id=1", {'wa': waist})
             st.cache_resource.clear(); st.rerun()
 
+# --- ABA MICRONUTRIENTES ---
+with tab_micros:
+    st.header("🥦 Painel de Micronutrientes (Blindagem)")
+    st.info("Acompanhe os nutrientes extraídos pela Inteligência Artificial e compare com a cota diária (RDA).")
+    
+    col_m1, col_m2 = st.columns(2)
+    dt_ini_m = col_m1.date_input("Data Inicial", value=data_hoje - timedelta(days=7), key="dt_ini_micros")
+    dt_fim_m = col_m2.date_input("Data Final", value=data_hoje, key="dt_fim_micros")
+    
+    df_micros = executar_sql("SELECT data, ferro_mg, b12_mcg, zinco_mg, magnesio_mg FROM public.consumo WHERE data >= :d1 AND data <= :d2", {'d1': dt_ini_m, 'd2': dt_fim_m}, is_select=True)
+    
+    if not df_micros.empty:
+        # Agrupar por dia e somar os valores diários
+        df_micros_diario = df_micros.groupby('data')[['ferro_mg', 'b12_mcg', 'zinco_mg', 'magnesio_mg']].sum().reset_index()
+        
+        # Calcular a média diária dentro do período
+        media_fe = df_micros_diario['ferro_mg'].mean()
+        media_b12 = df_micros_diario['b12_mcg'].mean()
+        media_zn = df_micros_diario['zinco_mg'].mean()
+        media_mg = df_micros_diario['magnesio_mg'].mean()
+        
+        # Metas padrão (RDA Homens Adultos)
+        meta_fe = 8.0
+        meta_b12 = 2.4
+        meta_zn = 11.0
+        meta_mg = 400.0
+        
+        st.subheader(f"📊 Média Diária ({len(df_micros_diario)} dias processados)")
+        
+        c_mi1, c_mi2, c_mi3, c_mi4 = st.columns(4)
+        
+        # Ferro
+        pct_fe = min(media_fe / meta_fe, 1.0)
+        c_mi1.metric("🩸 Ferro (mg)", f"{media_fe:.1f}", f"Meta: {meta_fe}")
+        c_mi1.progress(pct_fe)
+        
+        # B12
+        pct_b12 = min(media_b12 / meta_b12, 1.0)
+        c_mi2.metric("⚡ Vitamina B12 (mcg)", f"{media_b12:.1f}", f"Meta: {meta_b12}")
+        c_mi2.progress(pct_b12)
+        
+        # Zinco
+        pct_zn = min(media_zn / meta_zn, 1.0)
+        c_mi3.metric("🛡️ Zinco (mg)", f"{media_zn:.1f}", f"Meta: {meta_zn}")
+        c_mi3.progress(pct_zn)
+        
+        # Magnésio
+        pct_mg = min(media_mg / meta_mg, 1.0)
+        c_mi4.metric("💤 Magnésio (mg)", f"{media_mg:.1f}", f"Meta: {meta_mg}")
+        c_mi4.progress(pct_mg)
+        
+        st.divider()
+        st.write("#### 📅 Histórico de Absorção Diária")
+        df_micros_diario['data'] = df_micros_diario['data'].dt.strftime('%d/%m/%Y')
+        df_micros_diario.columns = ['Data', 'Ferro (mg)', 'B12 (mcg)', 'Zinco (mg)', 'Magnésio (mg)']
+        st.dataframe(df_micros_diario, use_container_width=True)
+    else:
+        st.warning("Nenhum dado de micronutriente processado neste período. Insira novas refeições para a IA analisar.")
+
 # --- ABA RELATÓRIOS ---
 with tab_rel:
     st.header("📄 Relatórios")
@@ -682,4 +741,4 @@ with tab_admin:
             executar_sql("UPDATE public.perfil SET meta_kcal=:mk, meta_proteina=:mp, meta_carbo=:mc, meta_gordura=:mg, meta_peso_alvo=:mpa, ritmo_semanal=:rit, fator_atividade=:fat WHERE id=1", {'mk': n_kcal, 'mp': n_prot, 'mc': n_carb, 'mg': n_gord, 'mpa': n_peso_alvo, 'rit': n_ritmo, 'fat': n_fator})
             st.cache_resource.clear(); st.rerun()
 
-st.caption("Leo Tracker Pro v10.0 | Iron N1 Retroativo, Auditoria 30d & Micros na IA 🚀")
+st.caption("Leo Tracker Pro v11.0 | Micros Dashboard & Engenharia Reversa 🚀")
