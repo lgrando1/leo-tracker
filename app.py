@@ -18,8 +18,9 @@ import random
 
 import requests
 
+import requests
+
 def conectar_strava():
-    # 1. Busca as credenciais de forma segura no Streamlit
     try:
         CLIENT_ID = st.secrets["strava"]["STRAVA_CLIENT_ID"]
         CLIENT_SECRET = st.secrets["strava"]["STRAVA_CLIENT_SECRET"]
@@ -28,7 +29,6 @@ def conectar_strava():
         st.error("Credenciais do Strava não encontradas no st.secrets!")
         return None
 
-    # 2. Renovar o Access Token
     auth_url = "https://www.strava.com/oauth/token"
     payload = {
         'client_id': CLIENT_ID,
@@ -43,6 +43,36 @@ def conectar_strava():
     
     if not access_token:
         st.error(f"Erro na autenticação com o Strava: {res.json()}")
+        return None
+
+    activities_url = "https://www.strava.com/api/v3/athlete/activities"
+    header = {'Authorization': 'Bearer ' + access_token}
+    param = {'per_page': 1, 'page': 1} 
+
+    dataset = requests.get(activities_url, headers=header, params=param).json()
+
+    if dataset and isinstance(dataset, list) and len(dataset) > 0:
+        atividade = dataset[0]
+        
+        # Correção 1: Buscar direto do campo 'calories' que o smartwatch envia
+        kcal_relógio = atividade.get('calories')
+        if not kcal_relógio:
+            kj = atividade.get('kilojoules', 0)
+            kcal_relógio = kj * 0.239006
+            
+        dados_treino = {
+            'nome_treino': atividade.get('name', 'Treino sem nome'),
+            'tipo': atividade.get('sport_type', 'Workout'),
+            'tempo_movimento_min': round(atividade.get('moving_time', 0) / 60, 1),
+            'bpm_medio': round(atividade.get('average_heartrate', 0), 1),
+            'bpm_max': round(atividade.get('max_heartrate', 0), 1),
+            'calorias_kcal': round(kcal_relógio, 2),
+            'data': atividade.get('start_date_local')[:10] 
+        }
+        
+        return dados_treino
+    else:
+        st.warning("Nenhuma atividade encontrada.")
         return None
 
     # 3. Buscar a última atividade
@@ -731,7 +761,7 @@ with tab_treino:
             st.markdown("---")
 
 st.subheader("Integração Automática")
-if st.button("🚴‍♂️ Puxar Último Treino do Bip 6 (Strava)"):
+if st.button("🚴‍♂️ Puxar Último Treino (Strava)"):
     with st.spinner("Buscando telemetria..."):
         dados = conectar_strava()
         
@@ -739,26 +769,25 @@ if st.button("🚴‍♂️ Puxar Último Treino do Bip 6 (Strava)"):
             st.write(f"**Treino encontrado:** {dados['nome_treino']} ({dados['tempo_movimento_min']} min)")
             st.write(f"🔥 {dados['calorias_kcal']} kcal | ❤️ {dados['bpm_medio']} bpm médio")
             
-            # Aqui fazemos o insert no Neon DB usando o seu motor SQLAlchemy
-            sql_insert = text("""
+            # Correção 2: Utilizando a função nativa executar_sql() do seu painel
+            sql_insert = """
                 INSERT INTO public.exercicios (data, nome, tipo, duracao_min, kcal, bpm_medio)
                 VALUES (:data, :nome, :tipo, :tempo, :kcal, :bpm)
-            """)
+            """
             
-            try:
-                with engine.begin() as conn:
-                    conn.execute(sql_insert, {
-                        "data": dados['data'],
-                        "nome": dados['nome_treino'],
-                        "tipo": dados['tipo'],
-                        "tempo": dados['tempo_movimento_min'],
-                        "kcal": dados['calorias_kcal'],
-                        "bpm": dados['bpm_medio']
-                    })
+            # A função executar_sql já trata o engine e o commit internamente
+            if executar_sql(sql_insert, {
+                "data": dados['data'],
+                "nome": dados['nome_treino'],
+                "tipo": dados['tipo'],
+                "tempo": dados['tempo_movimento_min'],
+                "kcal": dados['calorias_kcal'],
+                "bpm": dados['bpm_medio']
+            }):
                 st.success("Telemetria salva no banco com sucesso!")
-                st.rerun() # Recarrega os gráficos da tela com os dados novos
-            except Exception as e:
-                st.error(f"Erro ao salvar no banco: {e}")
+                st.rerun()
+            else:
+                st.error("Erro ao salvar no banco. Verifique os logs.")
 
 # ============================================================================
 # TAB: QS LAB
