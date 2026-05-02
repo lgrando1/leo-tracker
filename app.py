@@ -508,7 +508,8 @@ c_hoje     = float(df_hoje['carbo'].sum())    if not df_hoje.empty else 0.0
 g_hoje     = float(df_hoje['gordura'].sum())  if not df_hoje.empty else 0.0
 
 df_hid_hj  = executar_sql("SELECT agua_ml, cafe_ml FROM public.hidratacao WHERE data = :d", {'d': data_hoje}, is_select=True)
-df_sno_hj  = executar_sql("SELECT horas, qualidade FROM public.sono WHERE data = :d", {'d': data_hoje}, is_select=True)
+data_ontem = data_hoje - timedelta(days=1)
+df_sno_hj  = executar_sql("SELECT horas, qualidade FROM public.sono WHERE data = :d", {'d': data_ontem}, is_select=True)
 df_evc_hj  = executar_sql("SELECT vezes FROM public.evacuacao WHERE data = :d", {'d': data_hoje}, is_select=True)
 
 agua_hj  = int(df_hid_hj.iloc[0]['agua_ml'])  if not df_hid_hj.empty else 0
