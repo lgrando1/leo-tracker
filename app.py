@@ -760,37 +760,43 @@ with tab_treino:
                 executar_sql("DELETE FROM public.exercicios WHERE id=:id", {'id': row['id']}); st.rerun()
             st.markdown("---")
 
-st.subheader("Integração Automática")
-if st.button("🚴‍♂️ Puxar Último Treino (Strava)"):
-    with st.spinner("Buscando telemetria..."):
-        dados = conectar_strava()
-        
-        if dados:
-            st.write(f"**Treino encontrado:** {dados['nome_treino']} ({dados['tempo_movimento_min']} min)")
-            st.write(f"🔥 {dados['calorias_kcal']} kcal | ❤️ {dados['bpm_medio']} bpm médio")
+st.subheader("🛠️ Modo Desenvolvedor: Raio-X do Strava")
+if st.button("🔍 Ver JSON Bruto (Último Treino)"):
+    with st.spinner("Interceptando pacote de dados..."):
+        try:
+            # Puxa as chaves do cofre
+            CLIENT_ID = st.secrets["strava"]["STRAVA_CLIENT_ID"]
+            CLIENT_SECRET = st.secrets["strava"]["STRAVA_CLIENT_SECRET"]
+            REFRESH_TOKEN = st.secrets["strava"]["STRAVA_REFRESH_TOKEN"]
             
-            # Ajuste de mapeamento: conectando ao schema real da tabela public.exercicios
-            sql_insert = """
-                INSERT INTO public.exercicios 
-                (data, tipo, duracao_min, calorias, bpm_medio, observacoes)
-                VALUES (:data, :tipo, :tempo, :cal, :bpm, :obs)
-            """
+            # 1. Renova o Token
+            auth_url = "https://www.strava.com/oauth/token"
+            payload = {
+                'client_id': CLIENT_ID,
+                'client_secret': CLIENT_SECRET,
+                'refresh_token': REFRESH_TOKEN,
+                'grant_type': 'refresh_token',
+                'f': 'json'
+            }
+            res = requests.post(auth_url, data=payload, verify=False)
+            access_token = res.json().get('access_token')
             
-            # Dispara a injeção utilizando a sua função nativa
-            sucesso = executar_sql(sql_insert, {
-                "data": dados['data'],
-                "tipo": "Strava - " + dados['tipo'],
-                "tempo": dados['tempo_movimento_min'],
-                "cal": dados['calorias_kcal'],
-                "bpm": dados['bpm_medio'],
-                "obs": dados['nome_treino']
-            })
-            
-            if sucesso:
-                st.success("Telemetria salva no banco com sucesso!")
-                st.rerun()
+            if access_token:
+                # 2. Faz o GET na API
+                activities_url = "https://www.strava.com/api/v3/athlete/activities"
+                header = {'Authorization': 'Bearer ' + access_token}
+                param = {'per_page': 1, 'page': 1} # Puxa o último treino apenas
+                
+                dataset = requests.get(activities_url, headers=header, params=param).json()
+                
+                # 3. Exibe a estrutura de dados completa na tela
+                st.success("Pacote interceptado com sucesso!")
+                st.json(dataset) 
+                
             else:
-                st.error("Erro na injeção. O comando SQL falhou no banco.")
+                st.error("Falha ao obter o token de acesso.")
+        except Exception as e:
+            st.error(f"Erro na requisição: {e}")
 # ============================================================================
 # TAB: QS LAB
 # ============================================================================
