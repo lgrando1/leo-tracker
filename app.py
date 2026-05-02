@@ -769,26 +769,28 @@ if st.button("🚴‍♂️ Puxar Último Treino (Strava)"):
             st.write(f"**Treino encontrado:** {dados['nome_treino']} ({dados['tempo_movimento_min']} min)")
             st.write(f"🔥 {dados['calorias_kcal']} kcal | ❤️ {dados['bpm_medio']} bpm médio")
             
-            # Correção 2: Utilizando a função nativa executar_sql() do seu painel
+            # Ajuste de mapeamento: conectando ao schema real da tabela public.exercicios
             sql_insert = """
-                INSERT INTO public.exercicios (data, nome, tipo, duracao_min, kcal, bpm_medio)
-                VALUES (:data, :nome, :tipo, :tempo, :kcal, :bpm)
+                INSERT INTO public.exercicios 
+                (data, tipo, duracao_min, calorias, bpm_medio, observacoes)
+                VALUES (:data, :tipo, :tempo, :cal, :bpm, :obs)
             """
             
-            # A função executar_sql já trata o engine e o commit internamente
-            if executar_sql(sql_insert, {
+            # Dispara a injeção utilizando a sua função nativa
+            sucesso = executar_sql(sql_insert, {
                 "data": dados['data'],
-                "nome": dados['nome_treino'],
-                "tipo": dados['tipo'],
+                "tipo": "Strava - " + dados['tipo'],
                 "tempo": dados['tempo_movimento_min'],
-                "kcal": dados['calorias_kcal'],
-                "bpm": dados['bpm_medio']
-            }):
+                "cal": dados['calorias_kcal'],
+                "bpm": dados['bpm_medio'],
+                "obs": dados['nome_treino']
+            })
+            
+            if sucesso:
                 st.success("Telemetria salva no banco com sucesso!")
                 st.rerun()
             else:
-                st.error("Erro ao salvar no banco. Verifique os logs.")
-
+                st.error("Erro na injeção. O comando SQL falhou no banco.")
 # ============================================================================
 # TAB: QS LAB
 # ============================================================================
