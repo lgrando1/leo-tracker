@@ -759,6 +759,39 @@ with tab_treino:
             if rt3.button("🗑️", key=f"del_tr_{row['id']}"):
                 executar_sql("DELETE FROM public.exercicios WHERE id=:id", {'id': row['id']}); st.rerun()
             st.markdown("---")
+st.subheader("Integração Automática")
+if st.button("🚴‍♂️ Puxar Último Treino (Strava)"):
+    with st.spinner("Buscando telemetria..."):
+        dados = conectar_strava()
+        
+        if dados:
+            st.write(f"**Treino encontrado:** {dados['nome_treino']} ({dados['tempo_movimento_min']} min)")
+            st.write(f"🔥 {dados['calorias_kcal']} kcal | ❤️ {dados['bpm_medio']} bpm médio")
+            
+            # Ajuste de mapeamento: conectando ao schema real da tabela public.exercicios
+            sql_insert = """
+                INSERT INTO public.exercicios 
+                (data, tipo, duracao_min, calorias, bpm_medio, observacoes)
+                VALUES (:data, :tipo, :tempo, :cal, :bpm, :obs)
+            """
+            
+            # Dispara a injeção utilizando a sua função nativa
+            sucesso = executar_sql(sql_insert, {
+                "data": dados['data'],
+                "tipo": "Strava - " + dados['tipo'],
+                "tempo": dados['tempo_movimento_min'],
+                "cal": dados['calorias_kcal'],
+                "bpm": dados['bpm_medio'],
+                "obs": dados['nome_treino']
+            })
+            
+            if sucesso:
+                st.success("Telemetria salva no banco com sucesso!")
+                st.rerun()
+            else:
+                st.error("Erro na injeção. O comando SQL falhou no banco.")
+
+
 
 st.subheader("🛠️ Modo Desenvolvedor: Raio-X do Strava")
 if st.button("🔍 Ver JSON Bruto (Último Treino)"):
