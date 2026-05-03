@@ -263,6 +263,32 @@ def torneio_el_farol(df_modelo, features, target_col):
     df_transp['Erro RF (g)'] = abs(df_transp['Real (g)'] - df_transp['Previsto RF (g)'])
     return vencedor, menor_erro, mod_lr, mod_rf, df_transp
 
+import re
+
+def padronizar_alimento(nome):
+    if not nome or pd.isna(nome): return "Outros"
+    n = str(nome).lower().strip()
+    n = re.sub(r'\(.*?\)', '', n).strip()
+    n = n.split('-')[0].strip()
+    
+    if 'ovo' in n: return 'Ovo'
+    if 'frango' in n: return 'Frango (Filé/Peito)'
+    if 'tapioca' in n: return 'Tapioca'
+    if 'chia' in n: return 'Semente de Chia'
+    if 'linhaça' in n or 'linhaca' in n: return 'Semente de Linhaça'
+    if 'queijo' in n: return 'Queijo'
+    if 'banana' in n: return 'Banana'
+    if 'arroz' in n: return 'Arroz'
+    if 'feijão' in n or 'feijao' in n: return 'Feijão'
+    if 'carne' in n or 'patinho' in n or 'alcatra' in n: return 'Carne Bovina'
+    if 'whey' in n: return 'Whey Protein'
+    if 'leite' in n and not 'doce' in n: return 'Leite'
+    if 'iogurte' in n: return 'Iogurte'
+    if 'maçã' in n or 'maca' in n: return 'Maçã'
+    if 'laranja' in n: return 'Laranja'
+    
+    return n.title()
+
 # ============================================================================
 # 5. INICIALIZAÇÃO DO BANCO
 # ============================================================================
@@ -1418,21 +1444,55 @@ P2: Plano tático para as próximas 24h baseado ESTRITAMENTE nos sinais matemát
 # ============================================================================
 # TAB: HISTÓRICO
 # ============================================================================
+# ============================================================================
+# TAB: HISTÓRICO
+# ============================================================================
 with tab_hist:
     st.header("📜 Histórico de Consumo")
     hh1, hh2 = st.columns(2)
     dt_hi = hh1.date_input("De:",  value=data_hoje - timedelta(days=7), key="hist_ini")
     dt_hf = hh2.date_input("Até:", value=data_hoje,                     key="hist_fim")
+    
     df_ht = executar_sql("""SELECT data, alimento, quantidade, kcal, proteina, carbo, gordura
         FROM public.consumo WHERE data >= :d1 AND data <= :d2 ORDER BY data DESC""",
         {'d1': dt_hi, 'd2': dt_hf}, is_select=True)
+        
     if not df_ht.empty:
         hm1, hm2, hm3 = st.columns(3)
         hm1.metric("Total Kcal",      f"{int(df_ht['kcal'].sum())}")
         hm2.metric("Média Prot/dia",  f"{df_ht.groupby('data')['proteina'].sum().mean():.0f}g")
-        hm3.metric("Refeições",       f"{len(df_ht)}")
+        hm3.metric("Refeições Registradas", f"{len(df_ht)}")
+        
+        st.divider()
+        st.subheader("🏆 Base Alimentar (Top 15 Elementos)")
+        
+        # Aqui o ETL acontece na memória (seguro!)
+        df_top = df_ht.copy()
+        df_top['alimento_padrao'] = df_top['alimento'].apply(padronizar_alimento)
+        top_alimentos = df_top['alimento_padrao'].value_counts().head(15).reset_index()
+        top_alimentos.columns = ['Alimento Base', 'Frequência']
+        
+        # Gráfico de Barras Horizontal
+        fig_top = go.Figure(go.Bar(
+            x=top_alimentos['Frequência'][::-1], # Invertido para o maior ficar no topo
+            y=top_alimentos['Alimento Base'][::-1],
+            orientation='h',
+            marker_color='#2980b9'
+        ))
+        fig_top.update_layout(height=400, template='plotly_white', 
+                              margin=dict(l=10,r=10,t=30,b=10),
+                              xaxis_title="Vezes Consumidas no Período")
+        st.plotly_chart(fig_top, use_container_width=True)
+        
+        st.divider()
+        st.subheader("📋 Registros Brutos (Auditoria)")
         st.dataframe(df_ht, use_container_width=True)
-    else: st.info("Nenhum registro no período.")
+    else: 
+        st.info("Nenhum registro no período.")
+
+
+
+
 
 # ============================================================================
 # TAB: SAÚDE
