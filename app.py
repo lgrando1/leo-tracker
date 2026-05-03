@@ -1204,6 +1204,7 @@ P2: Plano tático para as próximas 24h baseado ESTRITAMENTE nos sinais matemát
         st.markdown("---")
         with st.expander("🧬 Evolução Genética do DNA Metabólico (AIC Evaluator)"):
             st.caption("O AG testa cruzamentos e mutações de janelas (1–15 dias) e converge para o menor AIC.")
+            
             if st.button("🚀 Iniciar Evolução Biométrica"):
                 with st.spinner("Decodificando DNA Metabólico..."):
                     TAM_POP, GERACOES, JMAX = 50, 15, 15
@@ -1239,35 +1240,43 @@ P2: Plano tático para as próximas 24h baseado ESTRITAMENTE nos sinais matemát
                         pop = nova
                         pb.progress((g+1)/GERACOES)
 
-                    best     = pop[0]
-                    best_aic = fitness(best)
+                    # Salva o resultado na sessão para não perder no rerun
+                    st.session_state['resultado_ag'] = pop[0]
+                    st.session_state['resultado_ag_aic'] = fitness(pop[0])
 
-                    # ── ΔViz-4: Painel de resultado pré-aplicação ─────────────
-                    AG_KEYS  = ['win_peso','win_jej','win_prot','win_carb','win_gord',
-                                'win_passos','win_agua','win_int','win_bristol','win_sono_h']
-                    AG_NOMES = ['⚖️ Peso','⏳ Jejum','🥩 Proteína','🍞 Carbo','🥑 Gordura',
-                                '👣 Passos','💧 Água','💩 Intestino','🧪 Bristol','💤 Sono']
-                    atuais   = [st.session_state.get(k, _AG_DEFAULTS.get(k, 1)) for k in AG_KEYS]
+            # ── Painel de resultado (FORA DO BOTÃO INICIAL) ─────────────
+            if 'resultado_ag' in st.session_state:
+                best = st.session_state['resultado_ag']
+                best_aic = st.session_state['resultado_ag_aic']
 
-                    delta_aic = best_aic - aic_val
-                    st.markdown(f"**AIC Atual:** `{aic_val:.1f}` → **AIC Ótimo:** `{best_aic:.1f}` &nbsp; `Δ = {delta_aic:+.1f}`")
+                AG_KEYS  = ['win_peso','win_jej','win_prot','win_carb','win_gord',
+                            'win_passos','win_agua','win_int','win_bristol','win_sono_h']
+                AG_NOMES = ['⚖️ Peso','⏳ Jejum','🥩 Proteína','🍞 Carbo','🥑 Gordura',
+                            '👣 Passos','💧 Água','💩 Intestino','🧪 Bristol','💤 Sono']
+                atuais   = [st.session_state.get(k, _AG_DEFAULTS.get(k, 1)) for k in AG_KEYS]
 
-                    df_dna = pd.DataFrame({
-                        'Variável':         AG_NOMES,
-                        'Janela Atual (d)': atuais,
-                        'Janela Ótima (d)': best,
-                        'Mudança':          [
-                            f"{'↑' if best[i]>atuais[i] else '↓' if best[i]<atuais[i] else '='} {abs(best[i]-atuais[i])}d"
-                            for i in range(10)
-                        ]
-                    })
-                    st.table(df_dna)
+                delta_aic = best_aic - aic_val
+                st.markdown(f"**AIC Atual:** `{aic_val:.1f}` → **AIC Ótimo:** `{best_aic:.1f}` &nbsp; `Δ = {delta_aic:+.1f}`")
 
-                    ag1, ag2 = st.columns(2)
-                    if ag1.button("🚀 Aplicar DNA Ótimo"):
-                        st.session_state['novo_dna_metabolico'] = best
-                        st.rerun()
-                    ag2.button("❌ Cancelar")
+                df_dna = pd.DataFrame({
+                    'Variável':         AG_NOMES,
+                    'Janela Atual (d)': atuais,
+                    'Janela Ótima (d)': best,
+                    'Mudança':          [
+                        f"{'↑' if best[i]>atuais[i] else '↓' if best[i]<atuais[i] else '='} {abs(best[i]-atuais[i])}d"
+                        for i in range(10)
+                    ]
+                })
+                st.table(df_dna)
+
+                ag1, ag2 = st.columns(2)
+                if ag1.button("🚀 Aplicar DNA Ótimo"):
+                    st.session_state['novo_dna_metabolico'] = best
+                    del st.session_state['resultado_ag'] # Limpa a tela após aplicar
+                    st.rerun()
+                if ag2.button("❌ Cancelar"):
+                    del st.session_state['resultado_ag']
+                    st.rerun()
 
     st.markdown("---")
 
