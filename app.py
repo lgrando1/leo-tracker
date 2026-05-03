@@ -21,6 +21,7 @@ import requests
 import requests
 
 def conectar_strava():
+    import requests
     try:
         CLIENT_ID = st.secrets["strava"]["STRAVA_CLIENT_ID"]
         CLIENT_SECRET = st.secrets["strava"]["STRAVA_CLIENT_SECRET"]
@@ -47,32 +48,38 @@ def conectar_strava():
 
     activities_url = "https://www.strava.com/api/v3/athlete/activities"
     header = {'Authorization': 'Bearer ' + access_token}
-    param = {'per_page': 1, 'page': 1} 
+    # Busca os últimos 3 treinos para garantir que pegue todos do dia
+    param = {'per_page': 3, 'page': 1} 
 
     dataset = requests.get(activities_url, headers=header, params=param).json()
+    treinos = []
 
-    if dataset and isinstance(dataset, list) and len(dataset) > 0:
-        atividade = dataset[0]
-        
-        # Correção 1: Buscar direto do campo 'calories' que o smartwatch envia
-        kcal_relógio = atividade.get('calories')
-        if not kcal_relógio:
-            kj = atividade.get('kilojoules', 0)
-            kcal_relógio = kj * 0.239006
+    if dataset and isinstance(dataset, list):
+        for atividade in dataset:
+            bpm_medio = atividade.get('average_heartrate', 0)
+            duracao_min = atividade.get('moving_time', 0) / 60
+            peso_atual = 116.3 
+            idade = 35 
             
-        dados_treino = {
-            'nome_treino': atividade.get('name', 'Treino sem nome'),
-            'tipo': atividade.get('sport_type', 'Workout'),
-            'tempo_movimento_min': round(atividade.get('moving_time', 0) / 60, 1),
-            'bpm_medio': round(atividade.get('average_heartrate', 0), 1),
-            'bpm_max': round(atividade.get('max_heartrate', 0), 1),
-            'calorias_kcal': round(kcal_relógio, 2),
-            'data': atividade.get('start_date_local')[:10] 
-        }
-        
-        return dados_treino
+            # Cálculo de Performance (Prioriza BPM)
+            if bpm_medio > 0:
+                kcal = ((-55.0969 + (0.6309 * bpm_medio) + (0.1988 * peso_atual) + (0.2017 * idade)) / 4.184) * duracao_min
+            else:
+                kj = atividade.get('kilojoules', 0)
+                kcal = kj * 2.0 if kj > 0 else atividade.get('calories', 0)
+
+            treinos.append({
+                'id_strava': atividade.get('id'),
+                'nome_treino': atividade.get('name', 'Treino'),
+                'tipo': atividade.get('sport_type', 'Workout'),
+                'tempo_movimento_min': round(duracao_min, 1),
+                'bpm_medio': round(bpm_medio, 1),
+                'calorias_kcal': round(kcal, 2),
+                'data': atividade.get('start_date_local')[:10] 
+            })
+            
+        return treinos
     else:
-        st.warning("Nenhuma atividade encontrada.")
         return None
 
     # 3. Buscar a última atividade
@@ -759,38 +766,43 @@ with tab_treino:
             if rt3.button("🗑️", key=f"del_tr_{row['id']}"):
                 executar_sql("DELETE FROM public.exercicios WHERE id=:id", {'id': row['id']}); st.rerun()
             st.markdown("---")
+            
 st.subheader("Integração Automática")
-if st.button("🚴‍♂️ Puxar Último Treino (Strava)"):
+if st.button("🚴‍♂️ Sincronizar Strava"):
     with st.spinner("Buscando telemetria..."):
-        dados = conectar_strava()
+        lista_treinos = conectar_strava()
         
-        if dados:
-            st.write(f"**Treino encontrado:** {dados['nome_treino']} ({dados['tempo_movimento_min']} min)")
-            st.write(f"🔥 {dados['calorias_kcal']} kcal | ❤️ {dados['bpm_medio']} bpm médio")
+        if lista_treinos:
+            novos_inseridos = 0
+            for dados in lista_treinos:
+                # Verifica se este treino específico já está no banco para evitar duplicidade
+                check_sql = "SELECT 1 FROM public.exercicios WHERE data = :d AND observacoes = :obs"
+                ja_existe = executar_sql(check_sql, {'d': dados['data'], 'obs': dados['nome_treino']}, is_select=True)
+                
+                if ja_existe.empty:
+                    sql_insert = """
+                        INSERT INTO public.exercicios 
+                        (data, tipo, duracao_min, calorias, bpm_medio, observacoes)
+                        VALUES (:data, :tipo, :tempo, :cal, :bpm, :obs)
+                    """
+                    executar_sql(sql_insert, {
+                        "data": dados['data'],
+                        "tipo": "Strava - " + dados['tipo'],
+                        "tempo": dados['tempo_movimento_min'],
+                        "cal": dados['calorias_kcal'],
+                        "bpm": dados['bpm_medio'],
+                        "obs": dados['nome_treino']
+                    })
+                    st.write(f"✅ Inserido: **{dados['nome_treino']}** ({dados['calorias_kcal']} kcal)")
+                    novos_inseridos += 1
             
-            # Ajuste de mapeamento: conectando ao schema real da tabela public.exercicios
-            sql_insert = """
-                INSERT INTO public.exercicios 
-                (data, tipo, duracao_min, calorias, bpm_medio, observacoes)
-                VALUES (:data, :tipo, :tempo, :cal, :bpm, :obs)
-            """
-            
-            # Dispara a injeção utilizando a sua função nativa
-            sucesso = executar_sql(sql_insert, {
-                "data": dados['data'],
-                "tipo": "Strava - " + dados['tipo'],
-                "tempo": dados['tempo_movimento_min'],
-                "cal": dados['calorias_kcal'],
-                "bpm": dados['bpm_medio'],
-                "obs": dados['nome_treino']
-            })
-            
-            if sucesso:
-                st.success("Telemetria salva no banco com sucesso!")
+            if novos_inseridos > 0:
+                st.success(f"{novos_inseridos} novos treinos importados!")
                 st.rerun()
             else:
-                st.error("Erro na injeção. O comando SQL falhou no banco.")
-
+                st.info("Todos os treinos recentes já estão sincronizados.")
+        else:
+            st.warning("Nenhum treino encontrado no Strava.")
 
 
 st.subheader("🛠️ Modo Desenvolvedor: Raio-X do Strava")
@@ -830,6 +842,8 @@ if st.button("🔍 Ver JSON Bruto (Último Treino)"):
                 st.error("Falha ao obter o token de acesso.")
         except Exception as e:
             st.error(f"Erro na requisição: {e}")
+
+
 # ============================================================================
 # TAB: QS LAB
 # ============================================================================
