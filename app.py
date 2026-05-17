@@ -79,8 +79,12 @@ def get_engine():
         db_url = db_url.replace("postgres://", "postgresql://", 1)
     return create_engine(db_url, pool_pre_ping=True)
 
+# CRIAR A VARIÁVEL GLOBAL COMPARTILHADA PARA O SCRIPT INTEIRO:
+engine = get_engine()
+
 def executar_sql(sql, params=None, is_select=False):
-    engine = get_engine()
+    # Agora a função usar o engine global diretamente é ainda mais seguro,
+    # mas mantendo o funcionamento atual:
     try:
         if is_select:
             with engine.connect() as conn:
@@ -793,12 +797,13 @@ with tab_treino:
             st.markdown("---")
             
     st.subheader("Integração Automática")
-    
     if st.button("🚴‍♂️ Sincronizar Intervals.icu"):
-        with st.spinner("Buscando telemetria e calculando TSS..."):
-            # Apenas chamamos a função que criamos (lembre-se de garantir que a variável 'engine' esteja disponível)
-            sincronizar_treinos_recentes(engine)
-            st.rerun()
+        if 'engine' in globals() and engine is not None:
+            with st.spinner("Buscando telemetria e calculando TSS..."):
+                sincronizar_treinos_recentes(engine)
+                st.rerun()
+        else:
+            st.error("Engine de conexão não inicializado no escopo global.")
     
     
     st.subheader("🛠️ Modo Desenvolvedor: Raio-X do Intervals")
