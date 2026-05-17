@@ -20,97 +20,93 @@ import requests
 
 import requests
 
-def conectar_strava():
+def conectar_intervals(dias_retroativos=7):
     import requests
-    try:
-        CLIENT_ID = st.secrets["strava"]["STRAVA_CLIENT_ID"]
-        CLIENT_SECRET = st.secrets["strava"]["STRAVA_CLIENT_SECRET"]
-        REFRESH_TOKEN = st.secrets["strava"]["STRAVA_REFRESH_TOKEN"]
-    except KeyError:
-        st.error("Credenciais do Strava não encontradas no st.secrets!")
-        return None
-
-    auth_url = "https://www.strava.com/oauth/token"
-    payload = {
-        'client_id': CLIENT_ID,
-        'client_secret': CLIENT_SECRET,
-        'refresh_token': REFRESH_TOKEN,
-        'grant_type': 'refresh_token',
-        'f': 'json'
-    }
-
-    res = requests.post(auth_url, data=payload, verify=False)
-    access_token = res.json().get('access_token')
+    import streamlit as st
+    from datetime import datetime, timedelta
     
-    if not access_token:
-        st.error(f"Erro na autenticação com o Strava: {res.json()}")
+    try:
+        API_KEY = st.secrets["intervals"]["API_KEY"]
+        ATHLETE_ID = st.secrets["intervals"]["ATHLETE_ID"]
+    except KeyError:
+        st.error("Credenciais do Intervals.icu não encontradas no st.secrets!")
         return None
 
-    activities_url = "https://www.strava.com/api/v3/athlete/activities"
-    header = {'Authorization': 'Bearer ' + access_token}
-    # Busca os últimos 3 treinos para garantir que pegue todos do dia
-    param = {'per_page': 3, 'page': 1} 
+    hoje = datetime.now()
+    data_inicio = (hoje - timedelta(days=dias_retroativos)).strftime('%Y-%m-%dT00:00:00')
+    data_fim = hoje.strftime('%Y-%m-%dT23:59:59')
+    
+    url = f"https://intervals.icu/api/v1/athlete/{ATHLETE_ID}/activities?oldest={data_inicio}&newest={data_fim}"
+    auth = ("API_KEY", API_KEY)
+    
+    try:
+        res = requests.get(url, auth=auth)
+        res.raise_for_status() 
+        dataset = res.json()
+    except Exception as e:
+        st.error(f"Erro na conexão com o Intervals.icu: {e}")
+        return None
 
-    dataset = requests.get(activities_url, headers=header, params=param).json()
     treinos = []
-
+    
     if dataset and isinstance(dataset, list):
-        for atividade in dataset:
-            bpm_medio = atividade.get('average_heartrate', 0)
-            duracao_min = atividade.get('moving_time', 0) / 60
-            peso_atual = 116.3 
-            idade = 35 
+        for atv in dataset:
+            data_hora_local = atv.get('start_date_local', '')
             
-            # Cálculo de Performance (Prioriza BPM)
-            if bpm_medio > 0:
-                kcal = ((-55.0969 + (0.6309 * bpm_medio) + (0.1988 * peso_atual) + (0.2017 * idade)) / 4.184) * duracao_min
-            else:
-                kj = atividade.get('kilojoules', 0)
-                kcal = kj * 2.0 if kj > 0 else atividade.get('calories', 0)
-
             treinos.append({
-                'id_strava': atividade.get('id'),
-                'nome_treino': atividade.get('name', 'Treino'),
-                'tipo': atividade.get('sport_type', 'Workout'),
-                'tempo_movimento_min': round(duracao_min, 1),
-                'bpm_medio': round(bpm_medio, 1),
-                'calorias_kcal': round(kcal, 2),
-                'data': atividade.get('start_date_local')[:10] 
+                'id_atividade': str(atv.get('id')),
+                'data': data_hora_local[:10] if len(data_hora_local) >= 10 else None,
+                'hora': data_hora_local[11:16] if len(data_hora_local) >= 16 else None,
+                'tipo': 'Intervals - ' + atv.get('type', 'Workout'),
+                'nome_treino': atv.get('name', 'Treino'),
+                'tempo_mov_min': round((atv.get('moving_time') or 0) / 60, 1),
+                'distancia_km': round((atv.get('distance') or 0) / 1000, 2),
+                'elevacao_m': round((atv.get('total_elevation_gain') or 0), 0),
+                'bpm_medio': round((atv.get('average_heartrate') or 0), 1),
+                'bpm_max': round((atv.get('max_heartrate') or 0), 1),
+                'cadencia_rpm': round((atv.get('average_cadence') or 0), 1),
+                'calorias_kcal': round((atv.get('calories') or 0), 2),
+                'carga_tss': round((atv.get('icu_training_load') or 0), 1),
+                'intensidade_if': round((atv.get('icu_intensity') or 0), 3)
             })
             
         return treinos
-    else:
-        return None
+    return None
 
-    # 3. Buscar a última atividade
-    activities_url = "https://www.strava.com/api/v3/athlete/activities"
-    header = {'Authorization': 'Bearer ' + access_token}
-    param = {'per_page': 1, 'page': 1} 
+def sincronizar_treinos_recentes(engine):
+    from sqlalchemy import text
+    import streamlit as st
+    
+    treinos = conectar_intervals(dias_retroativos=7) 
+    
+    if not treinos:
+        return
 
-    dataset = requests.get(activities_url, headers=header, params=param).json()
-
-    if dataset and isinstance(dataset, list) and len(dataset) > 0:
-        atividade = dataset[0]
-        
-        # O Strava retorna a energia em Kilojoules. Convertendo para Kcal:
-        kj = atividade.get('kilojoules', 0)
-        kcal = kj * 0.239006
-        
-        dados_treino = {
-            'nome_treino': atividade.get('name', 'Treino sem nome'),
-            'tipo': atividade.get('sport_type', 'Workout'),
-            'tempo_movimento_min': round(atividade.get('moving_time', 0) / 60, 1),
-            'bpm_medio': round(atividade.get('average_heartrate', 0), 1),
-            'bpm_max': round(atividade.get('max_heartrate', 0), 1),
-            'calorias_kcal': round(kcal, 2),
-            # Pega apenas a data formato YYYY-MM-DD
-            'data': atividade.get('start_date_local')[:10] 
-        }
-        
-        return dados_treino
-    else:
-        st.warning("Nenhuma atividade encontrada.")
-        return None
+    try:
+        with engine.begin() as conn:
+            for t in treinos:
+                query = text("""
+                    INSERT INTO exercicios (
+                        id_atividade, data, hora, tipo, nome_treino, duracao_min, 
+                        distancia_km, elevacao_m, bpm_medio, bpm_max, 
+                        cadencia_rpm, calorias, carga_tss, intensidade_if
+                    ) VALUES (
+                        :id_atividade, :data, :hora, :tipo, :nome_treino, :tempo_mov_min, 
+                        :distancia_km, :elevacao_m, :bpm_medio, :bpm_max, 
+                        :cadencia_rpm, :calorias_kcal, :carga_tss, :intensidade_if
+                    )
+                    ON CONFLICT (id_atividade) DO UPDATE SET
+                        nome_treino = EXCLUDED.nome_treino,
+                        carga_tss = EXCLUDED.carga_tss,
+                        calorias = EXCLUDED.calorias,
+                        intensidade_if = EXCLUDED.intensidade_if,
+                        cadencia_rpm = EXCLUDED.cadencia_rpm;
+                """)
+                conn.execute(query, t)
+                
+        st.toast("✅ Sincronização com Intervals.icu concluída!", icon="🚴")
+    except Exception as e:
+        st.error(f"Erro ao salvar treinos no banco: {e}")
 
 # ============================================================================
 # 1. CONFIGURAÇÃO GLOBAL
@@ -728,7 +724,7 @@ with tab_daily:
 # TAB: TREINO
 # ============================================================================
 with tab_treino:
-    st.markdown("### 🏃‍♂️ Monitoramento de Treino (Iron N1)")
+    st.markdown("### 🏃‍♂️ Monitoramento de Treino")
     dt_alvo = st.date_input("📅 Data do Treino:", value=data_hoje, key="dt_treino")
 
     df_tr_alvo  = executar_sql("SELECT * FROM public.exercicios WHERE data = :d ORDER BY id DESC", {'d': dt_alvo}, is_select=True)
@@ -793,81 +789,44 @@ with tab_treino:
                 executar_sql("DELETE FROM public.exercicios WHERE id=:id", {'id': row['id']}); st.rerun()
             st.markdown("---")
             
-st.subheader("Integração Automática")
-if st.button("🚴‍♂️ Sincronizar Strava"):
-    with st.spinner("Buscando telemetria..."):
-        lista_treinos = conectar_strava()
-        
-        if lista_treinos:
-            novos_inseridos = 0
-            for dados in lista_treinos:
-                # Verifica se este treino específico já está no banco para evitar duplicidade
-                check_sql = "SELECT 1 FROM public.exercicios WHERE data = :d AND observacoes = :obs"
-                ja_existe = executar_sql(check_sql, {'d': dados['data'], 'obs': dados['nome_treino']}, is_select=True)
+    st.subheader("Integração Automática")
+    
+    if st.button("🚴‍♂️ Sincronizar Intervals.icu"):
+        with st.spinner("Buscando telemetria e calculando TSS..."):
+            # Apenas chamamos a função que criamos (lembre-se de garantir que a variável 'engine' esteja disponível)
+            sincronizar_treinos_recentes(engine)
+            st.rerun()
+    
+    
+    st.subheader("🛠️ Modo Desenvolvedor: Raio-X do Intervals")
+    if st.button("🔍 Ver JSON Bruto (Últimos Treinos)"):
+        with st.spinner("Interceptando pacote de dados fisiológicos..."):
+            try:
+                import requests
+                from datetime import datetime, timedelta
                 
-                if ja_existe.empty:
-                    sql_insert = """
-                        INSERT INTO public.exercicios 
-                        (data, tipo, duracao_min, calorias, bpm_medio, observacoes)
-                        VALUES (:data, :tipo, :tempo, :cal, :bpm, :obs)
-                    """
-                    executar_sql(sql_insert, {
-                        "data": dados['data'],
-                        "tipo": "Strava - " + dados['tipo'],
-                        "tempo": dados['tempo_movimento_min'],
-                        "cal": dados['calorias_kcal'],
-                        "bpm": dados['bpm_medio'],
-                        "obs": dados['nome_treino']
-                    })
-                    st.write(f"✅ Inserido: **{dados['nome_treino']}** ({dados['calorias_kcal']} kcal)")
-                    novos_inseridos += 1
-            
-            if novos_inseridos > 0:
-                st.success(f"{novos_inseridos} novos treinos importados!")
-                st.rerun()
-            else:
-                st.info("Todos os treinos recentes já estão sincronizados.")
-        else:
-            st.warning("Nenhum treino encontrado no Strava.")
-
-
-st.subheader("🛠️ Modo Desenvolvedor: Raio-X do Strava")
-if st.button("🔍 Ver JSON Bruto (Último Treino)"):
-    with st.spinner("Interceptando pacote de dados..."):
-        try:
-            # Puxa as chaves do cofre
-            CLIENT_ID = st.secrets["strava"]["STRAVA_CLIENT_ID"]
-            CLIENT_SECRET = st.secrets["strava"]["STRAVA_CLIENT_SECRET"]
-            REFRESH_TOKEN = st.secrets["strava"]["STRAVA_REFRESH_TOKEN"]
-            
-            # 1. Renova o Token
-            auth_url = "https://www.strava.com/oauth/token"
-            payload = {
-                'client_id': CLIENT_ID,
-                'client_secret': CLIENT_SECRET,
-                'refresh_token': REFRESH_TOKEN,
-                'grant_type': 'refresh_token',
-                'f': 'json'
-            }
-            res = requests.post(auth_url, data=payload, verify=False)
-            access_token = res.json().get('access_token')
-            
-            if access_token:
-                # 2. Faz o GET na API
-                activities_url = "https://www.strava.com/api/v3/athlete/activities"
-                header = {'Authorization': 'Bearer ' + access_token}
-                param = {'per_page': 1, 'page': 1} # Puxa o último treino apenas
+                # Puxa as chaves do cofre
+                API_KEY = st.secrets["intervals"]["API_KEY"]
+                ATHLETE_ID = st.secrets["intervals"]["ATHLETE_ID"]
                 
-                dataset = requests.get(activities_url, headers=header, params=param).json()
+                # Pega apenas os últimos 3 dias para não travar a tela com um JSON gigante
+                hoje = datetime.now()
+                data_inicio = (hoje - timedelta(days=3)).strftime('%Y-%m-%dT00:00:00')
+                data_fim = hoje.strftime('%Y-%m-%dT23:59:59')
                 
-                # 3. Exibe a estrutura de dados completa na tela
-                st.success("Pacote interceptado com sucesso!")
+                url = f"https://intervals.icu/api/v1/athlete/{ATHLETE_ID}/activities?oldest={data_inicio}&newest={data_fim}"
+                auth = ("API_KEY", API_KEY)
+                
+                # Faz a requisição limpa
+                res = requests.get(url, auth=auth)
+                res.raise_for_status()
+                dataset = res.json()
+                
+                st.success("Pacote de telemetria interceptado com sucesso!")
                 st.json(dataset) 
                 
-            else:
-                st.error("Falha ao obter o token de acesso.")
-        except Exception as e:
-            st.error(f"Erro na requisição: {e}")
+            except Exception as e:
+                st.error(f"Erro na requisição: {e}")
 
 
 # ============================================================================
