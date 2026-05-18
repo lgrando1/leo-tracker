@@ -241,29 +241,41 @@ with c_nut_r:
 
 st.divider()
 
-# 🧠 CAMADA 4: CONTROLADOR ANALÍTICO DE PREVISÃO (PID RADAR)
-st.markdown("### 🤖 Orientação de Trajetória (Inércia PID)")
+# 🧠 CAMADA 4: CONTROLADOR ANALÍTICO DE PREVISÃO (PID ADAPTATIVO MÓVEL)
+st.markdown("### 🤖 Orientação de Trajetória (PID Adaptativo Semanal)")
 
-if not df_peso.empty and not df_merged.empty:
-    df_base_pid = df_peso[df_peso['data'] >= DATA_INICIO].sort_values('data')
-    if not df_base_pid.empty:
-        peso_start_pid = float(df_base_pid.iloc[0]['peso_kg'])
-        dias_passados = (hoje - DATA_INICIO).days
-        sp_hoje = peso_start_pid - (dias_passados * (float(p['ritmo_semanal']) / 7))
-        pv_hoje = atual['peso_ewma']
-        erro_kg = pv_hoje - sp_hoje
+if not df_peso.empty and not df_merged.empty and len(df_merged) >= 7:
+    # 1. Âncora Móvel: Pega o peso exato de 7 dias atrás
+    passado_7d = df_merged.iloc[-8] if len(df_merged) >= 8 else df_merged.iloc[0]
+    peso_baseline = passado_7d['peso_ewma']
+    
+    # 2. Setpoint Dinâmico: A meta de HOJE é o peso de 7 dias atrás menos o ritmo semanal ideal
+    ritmo_semanal = float(p.get('ritmo_semanal', 0.8))
+    sp_hoje = peso_baseline - ritmo_semanal
+    
+    pv_hoje = atual['peso_ewma']
+    erro_kg = pv_hoje - sp_hoje
+    
+    col_p1, col_p2, col_p3 = st.columns(3)
+    col_p1.metric("🎯 Alvo da Semana (Setpoint)", f"{sp_hoje:.2f} kg", f"Base 7d: {peso_baseline:.2f} kg", delta_color="off")
+    col_p2.metric("📊 Inércia Real (EWMA)", f"{pv_hoje:.2f} kg")
+    
+    # 3. Análise de Desvio com PID Suavizado (Fuzzy Logic)
+    if erro_kg <= 0.05 and erro_kg >= -0.6:
+        col_p3.metric("🏆 Status Semanal", f"{erro_kg*1000:+.0f} g", delta_color="normal")
+        st.markdown(f"💡 **Voo de Cruzeiro:** Sistema no trilho perfeito. Você está atingindo o ritmo de desinflamação da semana. Manter cota operacional cravada em **{meta_kcal} kcal**.")
         
-        col_p1, col_p2, col_p3 = st.columns(3)
-        col_p1.metric("🎯 Rampa Teórica (Setpoint)", f"{sp_hoje:.2f} kg")
-        col_p2.metric("📊 Inércia Real (EWMA)", f"{pv_hoje:.2f} kg")
+    elif erro_kg < -0.6:
+        col_p3.metric("🔥 Aceleração", f"{erro_kg*1000:+.0f} g", delta_color="normal")
+        st.markdown(f"💡 **Atenção (Over-performance):** Você está {abs(erro_kg):.2f}kg à frente da meta *desta semana*. Não corte calorias! Mantenha os **{meta_kcal} kcal** e garanta a proteína para blindar a massa magra.")
         
-        if erro_kg < 0:
-            col_p3.metric("🏆 Status", f"{erro_kg*1000:+.0f} g", delta_color="normal")
-            st.markdown("💡 **Orientação:** Sistema operando abaixo da rampa de peso projetada. Manter ingestão calórica em modo cruzeiro.")
-        else:
-            col_p3.metric("⚠️ Desvio", f"{erro_kg*1000:+.0f} g", delta_color="inverse")
-            ajuste = -(erro_kg * 1000)
-            kcal_recalc = max(1000, min(meta_kcal + ajuste, atual['get_total']))
-            st.markdown(f"💡 **Sugestão Matemática:** Para reverter o desvio e compensar a inércia hídrica/adiposa, o teto sugerido é de **{int(kcal_recalc)} kcal**.")
-
+    else:
+        col_p3.metric("⚠️ Desvio Semanal", f"{erro_kg*1000:+.0f} g", delta_color="inverse")
+        # Kp Suavizado: Corta 500 kcal na cota para cada 1kg de erro na semana
+        ajuste = -(erro_kg * 500)
+        kcal_recalc = max(1200, min(meta_kcal + ajuste, atual['get_total']))
+        st.markdown(f"💡 **Correção de Rota (PID):** Inércia levemente atrasada. Para corrigir sem agressividade, o controlador sugere um teto de **{int(kcal_recalc)} kcal** nas próximas 24h.")
+else:
+    st.info("⏳ Coletando dados (mínimo de 7 dias de histórico consolidado) para acionar o radar PID Semanal.")
+    
 st.caption("Leo Tracker Command Center v13.0 | Do Dado Bruto à Decisão Fisiológica")
