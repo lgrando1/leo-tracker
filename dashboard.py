@@ -279,100 +279,134 @@ else:
     st.info("⏳ Coletando dados (mínimo de 7 dias de histórico consolidado) para acionar o radar PID Semanal.")
 
 # ============================================================================
-# 5. INFERÊNCIA CAUSAL E MACHINE LEARNING (O GÊMEO DIGITAL)
+# 5. INFERÊNCIA CAUSAL E ELASTIC NET (O GÊMEO DIGITAL TEMPORAL)
 # ============================================================================
 st.divider()
-st.markdown("### 🧠 Motor de Inferência Causal (Ridge Regression)")
-st.markdown("O modelo abaixo aprende **exclusivamente com os seus dados**, analisando o impacto real (com 24h de atraso metabólico) que cada variável tem na sua tendência de peso.")
+st.markdown("### 🧠 Gêmeo Digital Metabólico (ElasticNet ML)")
 
 try:
-    from sklearn.linear_model import Ridge
+    from sklearn.linear_model import ElasticNet
     from sklearn.preprocessing import StandardScaler
+    from sklearn.metrics import r2_score
 
-    if not df_merged.empty and len(df_merged) > 10:
+    if not df_merged.empty and len(df_merged) > 20:
         df_ml = df_merged.copy()
 
-        # 1. Feature Engineering: O Target (O que queremos prever)
-        df_ml['delta_peso_ewma'] = df_ml['peso_ewma'].diff()
+        # 1. Feature Engineering: Múltiplos Targets (O que queremos prever?)
+        df_ml['delta_peso'] = df_ml['peso_ewma'].diff()
+        df_ml['delta_cintura'] = df_ml['cintura_ewma'].diff()
+        
+        # A Mágica: Retenção é o peso que subiu SEM a cintura subir
+        df_ml['retencao_estimada'] = df_ml['delta_peso'] - (df_ml['delta_cintura'].fillna(0) * 0.5) 
+        
+        # 2. Features Acumuladas (Inércia Metabólica de 3 e 7 dias)
+        df_ml['carb_3d_acum'] = df_ml['tcarb'].rolling(3).sum().shift(1)
+        df_ml['deficit_7d_acum'] = df_ml['deficit_real'].rolling(7).sum().shift(1)
+        df_ml['passos_3d_med'] = df_ml['t_passos_trabalho'].rolling(3).mean().shift(1)
 
-        # 2. Lags Temporais (D-1): O que você fez ontem impacta hoje
-        df_ml['carb_lag1'] = df_ml['tcarb'].shift(1)
-        df_ml['prot_lag1'] = df_ml['tprot'].shift(1)
-        df_ml['gord_lag1'] = df_ml['tgord'].shift(1)
-        df_ml['agua_lag1'] = df_ml['tagua'].shift(1)
-        df_ml['passos_lag1'] = df_ml['t_passos_trabalho'].shift(1)
-        df_ml['deficit_lag1'] = df_ml['deficit_real'].shift(1)
+        # 3. Lags Temporais Múltiplos (Fisiologia não é só 24h)
+        lags = [1, 3, 5]
+        features_base = ['tcarb', 'tprot', 'tgord', 'tagua', 't_passos_trabalho', 'deficit_real']
+        
+        for col in features_base:
+            for lag in lags:
+                df_ml[f'{col}_lag{lag}'] = df_ml[col].shift(lag)
 
-        # 3. Limpeza para o Modelo (ML odeia NaNs)
-        features = ['carb_lag1', 'prot_lag1', 'gord_lag1', 'agua_lag1', 'passos_lag1', 'deficit_lag1']
-        df_ml_clean = df_ml.dropna(subset=['delta_peso_ewma'] + features)
+        # 4. Interface de Seleção do Laboratório
+        col_ctrl1, col_ctrl2 = st.columns([1, 2])
+        with col_ctrl1:
+            target_view = st.selectbox(
+                "🎯 Selecione a Lente de Observação (Alvo):",
+                ["Retenção Hídrica/Inflamação", "Cintura (Gordura Visceral)", "Peso Bruto (Misto)"]
+            )
+            
+            target_map = {
+                "Retenção Hídrica/Inflamação": "retencao_estimada",
+                "Cintura (Gordura Visceral)": "delta_cintura",
+                "Peso Bruto (Misto)": "delta_peso"
+            }
+            target_col = target_map[target_view]
 
-        if len(df_ml_clean) > 7: # Mínimo de dias limpos para treinar
-            X = df_ml_clean[features]
-            y = df_ml_clean['delta_peso_ewma']
+        # Selecionar todas as features geradas
+        features_ml = [c for c in df_ml.columns if '_lag' in c or '_acum' in c or '_med' in c]
+        
+        # Limpeza severa (Remove os NaNs gerados pelos lags/rolling)
+        df_ml_clean = df_ml.dropna(subset=[target_col] + features_ml)
 
-            # Padronização (StandardScaler) - Coloca gramas, ml e passos na mesma escala de importância
+        if len(df_ml_clean) > 15:
+            X = df_ml_clean[features_ml]
+            y = df_ml_clean[target_col]
+
+            # Padronização Universal
             scaler = StandardScaler()
             X_scaled = scaler.fit_transform(X)
 
-            # Treinamento do Modelo Ridge (Regularizado para evitar overfitting)
-            model = Ridge(alpha=1.0)
+            # O Cérebro: ElasticNet (Regularização L1 + L2)
+            # Ele zera (L1) o que for inútil e encolhe (L2) o que for correlacionado
+            model = ElasticNet(alpha=0.01, l1_ratio=0.5, max_iter=2000)
             model.fit(X_scaled, y)
+            
+            # 5. Avaliação do Modelo (A Prova Real)
+            preds = model.predict(X_scaled)
+            r2 = r2_score(y, preds)
 
-            # Extração dos Coeficientes (O Ouro)
-            coefs = pd.DataFrame({
-                'Variavel': ['Carbo (Ontem)', 'Proteína (Ontem)', 'Gordura (Ontem)', 'Água (Ontem)', 'Passos (Ontem)', 'Déficit (Ontem)'],
-                'Impacto': model.coef_
-            })
-            # Ordenar do que mais reduz o peso para o que mais aumenta
-            coefs = coefs.sort_values(by='Impacto')
+            with col_ctrl2:
+                # Interpretador visual do R²
+                r2_color = "normal" if r2 > 0.15 else "inverse"
+                st.metric("🧠 Capacidade Explicativa (R²)", f"{r2:.2%}", delta="Poder de Sinal vs Ruído", delta_color=r2_color)
+                if r2 < 0.1:
+                    st.caption("⚠️ R² baixo: O alvo atual ainda está muito dominado por ruído aleatório ou variáveis não rastreadas (ex: estresse).")
+
+            # 6. Extração e Filtragem de Coeficientes (O Mapa Causal)
+            coefs = pd.DataFrame({'Variavel': features_ml, 'Impacto': model.coef_})
             
-            # Formatação Visual
-            coefs['Cor'] = coefs['Impacto'].apply(lambda x: '#ef4444' if x > 0 else '#10b981') # Vermelho se sobe peso, Verde se desce
+            # Filtrar apenas o que o ElasticNet considerou relevante (diferente de zero)
+            coefs = coefs[coefs['Impacto'].abs() > 0.001].sort_values(by='Impacto')
             
-            col_ml1, col_ml2 = st.columns([2, 1])
-            
-            with col_ml1:
-                # Gráfico de Importância (Feature Importance)
+            if not coefs.empty:
+                # Traduzir nomes técnicos para o painel
+                rename_map = {
+                    'tcarb': 'Carbo', 'tprot': 'Proteína', 'tgord': 'Gordura', 
+                    'tagua': 'Água', 't_passos_trabalho': 'Passos', 'deficit_real': 'Déficit'
+                }
+                def beautify_name(name):
+                    for k, v in rename_map.items(): name = name.replace(k, v)
+                    name = name.replace('_lag1', ' (Ontem)').replace('_lag3', ' (-3 Dias)').replace('_lag5', ' (-5 Dias)')
+                    name = name.replace('_3d_acum', ' (Acum 3D)').replace('_7d_acum', ' (Acum 7D)').replace('_3d_med', ' (Média 3D)')
+                    return name
+                
+                coefs['Variavel_Limpa'] = coefs['Variavel'].apply(beautify_name)
+                coefs['Cor'] = coefs['Impacto'].apply(lambda x: '#ef4444' if x > 0 else '#10b981') 
+
+                # Gráfico do ElasticNet
                 fig_ml = go.Figure()
                 fig_ml.add_trace(go.Bar(
                     x=coefs['Impacto'], 
-                    y=coefs['Variavel'], 
+                    y=coefs['Variavel_Limpa'], 
                     orientation='h',
                     marker_color=coefs['Cor'],
                     text=coefs['Impacto'].apply(lambda x: f"{x:+.3f}"),
                     textposition='auto'
                 ))
                 fig_ml.update_layout(
-                    title="Peso dos Fatores na Variação Corporal (Feature Importance)",
-                    height=300, template="plotly_white", margin=dict(l=10,r=10,t=30,b=10),
-                    xaxis_title="Impacto Relativo (Negativo = Perde Peso | Positivo = Retém/Ganha)"
+                    title=f"Autópsia Fisiológica: O que afeta seu(sua) {target_view.split(' ')[0]}?",
+                    height=max(300, len(coefs) * 35), template="plotly_white", margin=dict(l=10,r=10,t=30,b=10),
+                    xaxis_title="Vetor de Impacto (Verde = Reduz | Vermelho = Aumenta)",
+                    yaxis=dict(autorange="reversed")
                 )
-                # Adiciona linha do zero
                 fig_ml.add_vline(x=0, line_width=2, line_color="black")
                 st.plotly_chart(fig_ml, use_container_width=True)
-
-            with col_ml2:
-                st.markdown("##### 🧬 Interpretação Personalizada")
                 
-                # Pegar o maior vilão (mais positivo) e o maior aliado (mais negativo)
-                aliado = coefs.iloc[0]
-                vilao = coefs.iloc[-1]
+            else:
+                st.info("🧠 O ElasticNet zerou todas as variáveis. Nenhum padrão estatisticamente forte o suficiente foi encontrado para este alvo com os dados atuais.")
                 
-                st.markdown(f"**Aliado nº1:** `{aliado['Variavel']}`")
-                st.caption(f"Cada desvio padrão acima da sua média de {aliado['Variavel'].split(' ')[0]} puxa seu peso de hoje para **BAIXO** em {-aliado['Impacto']*1000:.0f}g.")
-                
-                st.markdown(f"**Principal Inflamador:** `{vilao['Variavel']}`")
-                st.caption(f"Um pico isolado de {vilao['Variavel'].split(' ')[0]} tende a jogar seu peso de hoje para **CIMA** em {vilao['Impacto']*1000:.0f}g (Provável inércia/retenção).")
-                
-                st.info(f"**N = {len(df_ml_clean)} dias.** O modelo fica mais inteligente e preciso a cada novo Check-in Matinal.")
-
+            st.caption(f"Amostragem limpa de treinamento: **{len(df_ml_clean)} dias**.")
         else:
-            st.warning("⚠️ Volume de dados insuficiente pós-limpeza. Continue preenchendo o Check-in.")
+            st.warning("⚠️ Volume de dados insuficiente após alinhar as janelas temporais de 7 dias (Rolling/Lags). Continue alimentando o Tracker.")
     else:
-        st.info("⏳ Aguardando acúmulo de dados (mínimo 10 dias) para treinar o Gêmeo Digital.")
+        st.info("⏳ Aguardando histórico longo para acionar o Machine Learning Temporal.")
 
 except ImportError:
-    st.error("🚨 Biblioteca scikit-learn não encontrada. Rode `pip install scikit-learn` ou adicione ao `requirements.txt`.")
+    st.error("🚨 Adicione `scikit-learn` ao seu ambiente para rodar o ElasticNet.")
     
 st.caption("Leo Tracker Command Center v13.0 | Do Dado Bruto à Decisão Fisiológica")
