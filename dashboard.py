@@ -13,16 +13,44 @@ from plotly.subplots import make_subplots
 # ============================================================================
 st.set_page_config(page_title="Leo's Physiology Engine", page_icon="🧬", layout="wide", initial_sidebar_state="collapsed")
 
+# ============================================================================
+# 1. DESIGN DE PRODUTO (MODO CLARO RESPONSIVO / ALTO CONTRASTE)
+# ============================================================================
+st.set_page_config(page_title="Leo's Physiology Engine", page_icon="🧬", layout="wide", initial_sidebar_state="collapsed")
+
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
+    
+    /* Painel de Badges */
     .badge-panel { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }
     .badge { padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; font-family: monospace; }
-    .badge-green { background-color: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid #10b981; }
-    .badge-yellow { background-color: rgba(245, 158, 11, 0.2); color: #f59e0b; border: 1px solid #f59e0b; }
-    .badge-red { background-color: rgba(239, 68, 68, 0.2); color: #ef4444; border: 1px solid #ef4444; }
-    .badge-blue { background-color: rgba(59, 130, 246, 0.2); color: #3b82f6; border: 1px solid #3b82f6; }
-    div[data-testid="stMetric"] { background-color: #1e293b; padding: 15px; border-radius: 12px; border: 1px solid #334155; }
+    .badge-green { background-color: rgba(16, 185, 129, 0.15); color: #059669; border: 1px solid #10b981; }
+    .badge-yellow { background-color: rgba(245, 158, 11, 0.15); color: #d97706; border: 1px solid #f59e0b; }
+    .badge-red { background-color: rgba(239, 68, 68, 0.15); color: #dc2626; border: 1px solid #ef4444; }
+    .badge-blue { background-color: rgba(59, 130, 246, 0.15); color: #2563eb; border: 1px solid #3b82f6; }
+    
+    /* MODO CLARO POR PADRÃO (Cards com fundo suave e borda leve) */
+    div[data-testid="stMetric"] { 
+        background-color: #f8fafc; 
+        padding: 15px; 
+        border-radius: 12px; 
+        border: 1px solid #e2e8f0;
+        box-shadow: 2px 2px 8px rgba(0,0,0,0.04);
+    }
+    
+    /* SÓ ativa fundo escuro se o celular/navegador do Leo pedir o modo noturno */
+    @media (prefers-color-scheme: dark) { 
+        div[data-testid="stMetric"] { 
+            background-color: #1e293b; 
+            border: 1px solid #334155; 
+            box-shadow: none;
+        }
+        .badge-green { color: #10b981; }
+        .badge-yellow { color: #f59e0b; }
+        .badge-red { color: #ef4444; }
+        .badge-blue { color: #3b82f6; }
+    }
     </style>
     """, unsafe_allow_html=True)
 
