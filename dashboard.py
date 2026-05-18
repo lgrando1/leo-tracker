@@ -68,19 +68,35 @@ meta_kcal, meta_prot, meta_carb, meta_gord = int(p['meta_kcal']), int(p['meta_pr
 
 # --- CONSOLIDAÇÃO DA FEATURE STORE ---
 if not df_hist.empty and not df_peso.empty:
-    df_peso_u = df_peso.drop_duplicates(subset=['data'], keep='last')
-    df_merged = pd.merge(df_hist, df_peso_u[['data', 'peso_kg']], on='data', how='left').ffill()
+    # Padroniza a coluna de data do peso antes do merge
+    df_peso_u = df_peso.copy()
+    if 'data' in df_peso_u.columns:
+        df_peso_u['data_dt'] = df_peso_u['data']
+    else:
+        df_peso_u['data_dt'] = hoje
+
+    df_peso_u = df_peso_u.drop_duplicates(subset=['data_dt'], keep='last')
+    
+    df_hist['data_dt'] = df_hist['data']
+    df_merged = pd.merge(df_hist, df_peso_u[['data_dt', 'peso_kg']], on='data_dt', how='left').ffill()
     df_merged['peso_kg'] = df_merged['peso_kg'].bfill().fillna(115.0)
     
-    # Merge complementares
+    # Merge complementares padronizando para 'data_dt'
     for df_tmp, col_list in [(df_treino, ['t_min', 't_passos_trabalho', 't_cal_out']), (df_hidra, ['tagua'])]:
         if not df_tmp.empty:
-            df_merged = pd.merge(df_merged, df_tmp.groupby('data')[col_list].sum().reset_index(), on='data', how='left').fillna(0)
+            df_tmp['data_dt'] = df_tmp['data']
+            df_merged = pd.merge(df_merged, df_tmp.groupby('data_dt')[col_list].sum().reset_index(), on='data_dt', how='left').fillna(0)
             
+    # CORREÇÃO CIRÚRGICA: Mapeia 'log_date' da tabela de medidas para 'data_dt'
     if not df_medidas.empty:
-        df_merged = pd.merge(df_merged, df_medidas.groupby('data')[['waist_cm']].last().reset_index(), on='data', how='left').ffill()
+        df_med_tmp = df_medidas.copy()
+        df_med_tmp['data_dt'] = df_med_tmp['log_date']
+        df_merged = pd.merge(df_merged, df_med_tmp.groupby('data_dt')[['waist_cm']].last().reset_index(), on='data_dt', how='left').ffill()
     else:
         df_merged['waist_cm'] = np.nan
+
+    # Alinha a coluna principal de volta para 'data' para manter compatibilidade com o resto do script
+    df_merged['data'] = df_merged['data_dt']
 
     # 📈 SINAL VERDADEIRO: EWMA DE 7 DIAS (Isolando Ruído Hídrico)
     df_merged['peso_ewma'] = df_merged['peso_kg'].ewm(span=7, adjust=False).mean()
