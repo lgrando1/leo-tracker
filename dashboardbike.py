@@ -195,22 +195,40 @@ if not df_peso.empty:
 
     if not df_bike_vis.empty:
         st.markdown("### 3. Carga e Balanço de Prontidão (PMC)")
-        fig_pmc = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.08)
         
-        fig_pmc.add_trace(go.Bar(x=df_bike_vis['semana_dt'], y=df_bike_vis['tss'], name="TSS (Volume Semanal)", marker_color='#8b5cf6', opacity=0.4), row=1, col=1)
-        fig_pmc.add_trace(go.Scatter(x=df_bike_vis['semana_dt'], y=df_bike_vis['ctl'], name="Fitness (CTL)", mode='lines', line=dict(color='#3b82f6', width=3)), row=1, col=1)
-        fig_pmc.add_trace(go.Scatter(x=df_bike_vis['semana_dt'], y=df_bike_vis['atl'], name="Fadiga Aguda (ATL)", mode='lines', line=dict(color='#ec4899', width=2, dash='dot')), row=1, col=1)
+        # 1. Habilitando secondary_y na configuração dos subplots (Linha 1 = True)
+        fig_pmc = make_subplots(
+            rows=2, cols=1, 
+            shared_xaxes=True, 
+            row_heights=[0.7, 0.3], 
+            vertical_spacing=0.08, 
+            specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
+        )
         
+        # Linha Superior: TSS no Eixo Esquerdo (False) | CTL e ATL no Eixo Direito (True)
+        fig_pmc.add_trace(go.Bar(x=df_bike_vis['semana_dt'], y=df_bike_vis['tss'], name="TSS (Volume Semanal)", marker_color='#8b5cf6', opacity=0.4), row=1, col=1, secondary_y=False)
+        fig_pmc.add_trace(go.Scatter(x=df_bike_vis['semana_dt'], y=df_bike_vis['ctl'], name="Fitness (CTL)", mode='lines', line=dict(color='#3b82f6', width=3)), row=1, col=1, secondary_y=True)
+        fig_pmc.add_trace(go.Scatter(x=df_bike_vis['semana_dt'], y=df_bike_vis['atl'], name="Fadiga Aguda (ATL)", mode='lines', line=dict(color='#ec4899', width=2, dash='dot')), row=1, col=1, secondary_y=True)
+        
+        # Linha Inferior: TSB Isolado com Banda de Referência
         cores_tsb = ['#10b981' if t > 0 else '#ef4444' for t in df_bike_vis['tsb']]
         fig_pmc.add_trace(go.Bar(x=df_bike_vis['semana_dt'], y=df_bike_vis['tsb'], name="Prontidão (TSB)", marker_color=cores_tsb), row=2, col=1)
         fig_pmc.add_hrect(y0=-10, y1=5, fillcolor="#10b981", opacity=0.15, row=2, col=1, annotation_text="Zona Ideal", annotation_position="top left", annotation_font_color="white")
         
+        # 2. Truque da Legenda: Criar um 'Dummy Trace' invisível para a Zona Ideal aparecer na legenda
+        fig_pmc.add_trace(go.Scatter(x=[None], y=[None], mode='markers', marker=dict(color='#10b981', symbol='square', size=12), name="Zona Ideal (-10 a +5)"), row=2, col=1)
+        
         fig_pmc.update_layout(height=500, template="plotly_dark", hovermode="x unified", margin=dict(t=30, b=10))
         fig_pmc.update_xaxes(tickmode='array', tickvals=tickvals_bike, ticktext=ticktext_bike, tickangle=0, row=2, col=1)
-        fig_pmc.update_yaxes(title_text="Carga", row=1, col=1)
+        
+        # 3. Nomeando os eixos de forma independente
+        fig_pmc.update_yaxes(title_text="TSS Semanal", row=1, col=1, secondary_y=False)
+        fig_pmc.update_yaxes(title_text="Load (CTL/ATL)", row=1, col=1, secondary_y=True, showgrid=False)
         fig_pmc.update_yaxes(title_text="TSB", row=2, col=1)
+        
         st.plotly_chart(fig_pmc, use_container_width=True)
 
+        
         st.markdown("### 4. Volume do Ciclismo e Eficiência Neuromuscular")
         fig_vol = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.08, specs=[[{"secondary_y": True}], [{"secondary_y": False}]])
         
