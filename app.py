@@ -131,7 +131,7 @@ Formato: {{"analise": "Texto curto", "alimentos": [{{"data": "YYYY-MM-DD", "alim
         completion = client.chat.completions.create(
             messages=[{"role": "system", "content": prompt_system},
                       {"role": "user", "content": texto_usuario}],
-            model="llama-3.3-70b-versatile",
+            model="qwen/qwen3.6-27b",
             response_format={"type": "json_object"}
         )
         raw = completion.choices[0].message.content.replace("```json","").replace("```","").strip()
@@ -1184,7 +1184,7 @@ P2: Plano tático para as próximas 24h baseado ESTRITAMENTE nos sinais matemát
                 client = _Groq(api_key=api_key)
                 with st.spinner("Decodificando DNA metabólico..."):
                     stream = client.chat.completions.create(
-                        model="llama-3.3-70b-versatile",
+                        model="qwen/qwen3.6-27b",
                         messages=[{"role":"user","content":prompt}],
                         temperature=0.1, stream=True)
                     def _gen(s):
