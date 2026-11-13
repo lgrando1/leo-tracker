@@ -7,6 +7,8 @@ import json
 import pytz
 from groq import Groq
 import io
+import base64
+from PIL import Image
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import statsmodels.api as sm
@@ -18,7 +20,8 @@ import random
 import requests
 import re
 
-GROQ_MODEL = "openai/gpt-oss-120b"
+GROQ_MODEL_TEXT = "openai/gpt-oss-120b"
+GROQ_MODEL_VISION = "qwen/qwen3.8-27b"
 
 # ============================================================================
 # 1. CONFIGURAÇÃO GLOBAL
@@ -111,33 +114,75 @@ def calc_bf_weltman(waist, weight_kg, height_cm, gender):
         return (0.11077 * waist) - (0.17666 * height_cm) + (0.14354 * weight_kg) + 51.03301
     except: return 0.0
 
-def processar_texto_ia(texto_usuario, api_key):
+def otimizar_imagem_base64(imagem_bytes, max_dim=1024, quality=85):
+    """Redimensiona e comprime a imagem em JPEG para ficar leve (< 500 KB) antes de enviar à API."""
+    img = Image.open(io.BytesIO(imagem_bytes))
+    if img.mode in ("RGBA", "P", "LA"):
+        img = img.convert("RGB")
+    img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=quality, optimize=True)
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+def processar_texto_ia(texto_usuario, api_key, imagem_bytes=None):
     client = Groq(api_key=api_key)
     prompt_system = f"""
 Aja como Nutricionista Matemático. Hoje: {get_now_br().strftime('%Y-%m-%d')}.
 DIRETRIZES:
-1. Identifique o alimento e sua densidade calórica padrão (kcal/g).
-2. MULTIPLIQUE a densidade pelo peso informado.
-3. GORDURA OCULTA: Se for fritura/grelhado, adicione gordura extra.
-4. MICRONUTRIENTES: Estime Ferro, B12, Zinco e Magnésio por engenharia reversa.
+1. Identifique cada alimento (por texto ou visualmente na imagem, usando o prato/talheres como escala para estimar gramas).
+2. Se houver comanda, rótulo ou tabela nutricional na imagem, leia os valores exatos.
+3. MULTIPLIQUE a densidade calórica padrão pelo peso estimado/informado.
+4. GORDURA OCULTA: Se for fritura/grelhado, adicione gordura extra.
+5. MICRONUTRIENTES: Estime Ferro, B12, Zinco e Magnésio por engenharia reversa.
 SAÍDA: Retorne APENAS JSON válido.
 Formato: {{"analise": "Texto curto", "alimentos": [{{"data": "YYYY-MM-DD", "alimento": "Nome",
 "quantidade_g": 0, "kcal": 0, "p": 0, "c": 0, "g": 0, "gluten": "txt",
 "ferro_mg": 0, "b12_mcg": 0, "zinco_mg": 0, "magnesio_mg": 0}}]}}
 """
     try:
-        completion = client.chat.completions.create(
-            messages=[{"role": "system", "content": prompt_system},
-                      {"role": "user", "content": texto_usuario}],
-            model=GROQ_MODEL,
-            temperature=0.1,
-            response_format={"type": "json_object"}
-        )
-        raw = completion.choices[0].message.content.replace("```json","").replace("```","").strip()
+        if imagem_bytes is not None:
+            b64_img = otimizar_imagem_base64(imagem_bytes)
+            texto_prompt = (
+                texto_usuario.strip()
+                if texto_usuario and texto_usuario.strip()
+                else "Analise visualmente esta refeição/rótulo e estime todos os alimentos, pesos em gramas, macros e micronutrientes."
+            )
+            user_content = [
+                {"type": "text", "text": texto_prompt},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}
+                }
+            ]
+            kwargs = {
+                "messages": [
+                    {"role": "system", "content": prompt_system},
+                    {"role": "user", "content": user_content}
+                ],
+                "model": GROQ_MODEL_VISION,
+                "temperature": 0.1,
+                "reasoning_effort": "none",
+                "response_format": {"type": "json_object"}
+            }
+        else:
+            kwargs = {
+                "messages": [
+                    {"role": "system", "content": prompt_system},
+                    {"role": "user", "content": texto_usuario}
+                ],
+                "model": GROQ_MODEL_TEXT,
+                "temperature": 0.1,
+                "response_format": {"type": "json_object"}
+            }
+
+        completion = client.chat.completions.create(**kwargs)
+        raw = completion.choices[0].message.content.replace("```json", "").replace("```", "").strip()
         s, e = raw.find('{'), raw.rfind('}')
-        if s != -1 and e != -1: raw = raw[s:e+1]
+        if s != -1 and e != -1:
+            raw = raw[s:e+1]
         content = json.loads(raw)
-        if isinstance(content, list): content = {"analise": "Processado", "alimentos": content}
+        if isinstance(content, list):
+            content = {"analise": "Processado", "alimentos": content}
         return True, content
     except Exception as ex:
         return False, f"Erro: {str(ex)}"
@@ -285,9 +330,9 @@ def conectar_intervals(dias_retroativos=7):
         st.error("Credenciais do Intervals.icu não encontradas no st.secrets!")
         return None
 
-    hoje = datetime.now()
-    data_inicio = (hoje - timedelta(days=dias_retroativos)).strftime('%Y-%m-%dT00:00:00')
-    data_fim = hoje.strftime('%Y-%m-%dT23:59:59')
+    hoje_dt = datetime.now()
+    data_inicio = (hoje_dt - timedelta(days=dias_retroativos)).strftime('%Y-%m-%dT00:00:00')
+    data_fim = hoje_dt.strftime('%Y-%m-%dT23:59:59')
     
     url = f"https://intervals.icu/api/v1/athlete/{ATHLETE_ID}/activities?oldest={data_inicio}&newest={data_fim}"
     auth = ("API_KEY", API_KEY)
@@ -652,20 +697,23 @@ with tab_daily:
 
     st.divider()
     st.write("### 🍎 O que você comeu?")
-    st.info("Digite o que comeu ou cole diretamente o JSON.")
-    texto_input = st.text_area("Descrição ou JSON", height=120, label_visibility="collapsed",
-                               placeholder="Ex: 2 ovos mexidos com queijo")
+    st.info("Digite o que comeu, envie uma foto do prato/rótulo ou cole diretamente o JSON.")
+    texto_input = st.text_area("Descrição ou JSON", height=100, label_visibility="collapsed",
+                               placeholder="Ex: 2 ovos mexidos com queijo (ou adicione observações sobre a foto)")
+    foto_prato = st.file_uploader("📸 Foto do prato, comanda ou tabela nutricional (opcional)",
+                                  type=["jpg", "jpeg", "png", "webp"])
 
     if st.button("🚀 Processar Alimentação", use_container_width=True):
-        if texto_input:
+        if texto_input or foto_prato is not None:
             is_json, lista = False, None
-            try:
-                cleaned = texto_input.replace('```json','').replace('```','').strip()
-                s, e = cleaned.find('['), cleaned.rfind(']')
-                if s == -1 and cleaned.startswith('{'): s, e = cleaned.find('{'), cleaned.rfind('}')
-                if s != -1 and e != -1: cleaned = cleaned[s:e+1]
-                lista = json.loads(cleaned); is_json = True
-            except: pass
+            if texto_input and foto_prato is None:
+                try:
+                    cleaned = texto_input.replace('```json','').replace('```','').strip()
+                    s, e = cleaned.find('['), cleaned.rfind(']')
+                    if s == -1 and cleaned.startswith('{'): s, e = cleaned.find('{'), cleaned.rfind('}')
+                    if s != -1 and e != -1: cleaned = cleaned[s:e+1]
+                    lista = json.loads(cleaned); is_json = True
+                except: pass
 
             if is_json:
                 with st.spinner("📦 JSON detectado! Registrando..."):
@@ -685,8 +733,10 @@ with tab_daily:
                 api_key = st.secrets.get("GROQ_API_KEY")
                 if not api_key: st.error("GROQ_API_KEY não configurada!")
                 else:
-                    with st.spinner("🧠 Consultando IA..."):
-                        ok, res = processar_texto_ia(texto_input, api_key)
+                    img_bytes = foto_prato.getvalue() if foto_prato is not None else None
+                    spinner_msg = "👁️ Analisando imagem com Qwen Vision..." if img_bytes else "🧠 Consultando IA..."
+                    with st.spinner(spinner_msg):
+                        ok, res = processar_texto_ia(texto_input, api_key, imagem_bytes=img_bytes)
                         if ok:
                             st.success(res.get('analise'))
                             for item in res.get('alimentos', []):
@@ -1481,4 +1531,4 @@ with tab_admin:
                 {'mk':n_kcal,'mp':n_prot,'mc':n_carb,'mg':n_gord,'mpa':n_alvo,'rit':n_ritmo,'fat':n_fat})
             st.cache_resource.clear(); st.rerun()
 
-st.caption("Leo Tracker Pro v12.0 | QS Lab Unificado 🦁🧬")
+st.caption("Leo Tracker Pro v12.1 | Multimodal Vision + QS Lab Unificado 🦁🧬")
