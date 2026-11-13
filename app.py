@@ -16,8 +16,9 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error
 import random
 import requests
-import requests
+import re
 
+GROQ_MODEL = "openai/gpt-oss-120b"
 
 # ============================================================================
 # 1. CONFIGURAÇÃO GLOBAL
@@ -79,12 +80,9 @@ def get_engine():
         db_url = db_url.replace("postgres://", "postgresql://", 1)
     return create_engine(db_url, pool_pre_ping=True)
 
-# CRIAR A VARIÁVEL GLOBAL COMPARTILHADA PARA O SCRIPT INTEIRO:
 engine = get_engine()
 
 def executar_sql(sql, params=None, is_select=False):
-    # Agora a função usar o engine global diretamente é ainda mais seguro,
-    # mas mantendo o funcionamento atual:
     try:
         if is_select:
             with engine.connect() as conn:
@@ -131,7 +129,8 @@ Formato: {{"analise": "Texto curto", "alimentos": [{{"data": "YYYY-MM-DD", "alim
         completion = client.chat.completions.create(
             messages=[{"role": "system", "content": prompt_system},
                       {"role": "user", "content": texto_usuario}],
-            model="qwen/qwen3.6-27b",
+            model=GROQ_MODEL,
+            temperature=0.1,
             response_format={"type": "json_object"}
         )
         raw = completion.choices[0].message.content.replace("```json","").replace("```","").strip()
@@ -173,8 +172,6 @@ def torneio_el_farol(df_modelo, features, target_col):
     df_transp['Erro LR (g)'] = abs(df_transp['Real (g)'] - df_transp['Previsto LR (g)'])
     df_transp['Erro RF (g)'] = abs(df_transp['Real (g)'] - df_transp['Previsto RF (g)'])
     return vencedor, menor_erro, mod_lr, mod_rf, df_transp
-
-import re
 
 def padronizar_alimento(nome):
     if not nome or pd.isna(nome): return "Outros"
@@ -280,12 +277,7 @@ METAS = get_metas_do_banco()
 # ============================================================================
 # Conectar o Intervals
 # ============================================================================
-
 def conectar_intervals(dias_retroativos=7):
-    import requests
-    import streamlit as st
-    from datetime import datetime, timedelta
-    
     try:
         API_KEY = st.secrets["intervals"]["API_KEY"]
         ATHLETE_ID = st.secrets["intervals"]["ATHLETE_ID"]
@@ -309,11 +301,9 @@ def conectar_intervals(dias_retroativos=7):
         return None
 
     treinos = []
-    
     if dataset and isinstance(dataset, list):
         for atv in dataset:
             data_hora_local = atv.get('start_date_local', '')
-            
             treinos.append({
                 'id_atividade': str(atv.get('id')),
                 'data': data_hora_local[:10] if len(data_hora_local) >= 10 else None,
@@ -330,16 +320,11 @@ def conectar_intervals(dias_retroativos=7):
                 'carga_tss': round((atv.get('icu_training_load') or 0), 1),
                 'intensidade_if': round((atv.get('icu_intensity') or 0), 3)
             })
-            
         return treinos
     return None
 
 def sincronizar_treinos_recentes(engine):
-    from sqlalchemy import text
-    import streamlit as st
-    
     treinos = conectar_intervals(dias_retroativos=7) 
-    
     if not treinos:
         return
 
@@ -521,7 +506,7 @@ def gerar_excel_nutri(dt_ini, dt_fim):
     df_res['Data'] = df_res['Data'].dt.strftime('%d/%m/%Y')
 
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df_res.to_excel(writer,  sheet_name='1. Resumo Completo',       index=False)
+        df_res.to_excel(writer,  sheet_name='1. Resumo Completo',        index=False)
         df_det.to_excel(writer,  sheet_name='2. Alimentação Detalhada',  index=False)
         df_trr.to_excel(writer,  sheet_name='3. Treinos Brutos',         index=False)
         df_med.to_excel(writer,  sheet_name='4. Medidas',                index=False)
@@ -700,7 +685,7 @@ with tab_daily:
                 api_key = st.secrets.get("GROQ_API_KEY")
                 if not api_key: st.error("GROQ_API_KEY não configurada!")
                 else:
-                    with st.spinner("🧠 Consultando IA Llama..."):
+                    with st.spinner("🧠 Consultando IA..."):
                         ok, res = processar_texto_ia(texto_input, api_key)
                         if ok:
                             st.success(res.get('analise'))
@@ -805,27 +790,20 @@ with tab_treino:
         else:
             st.error("Engine de conexão não inicializado no escopo global.")
     
-    
     st.subheader("🛠️ Modo Desenvolvedor: Raio-X do Intervals")
     if st.button("🔍 Ver JSON Bruto (Últimos Treinos)"):
         with st.spinner("Interceptando pacote de dados fisiológicos..."):
             try:
-                import requests
-                from datetime import datetime, timedelta
-                
-                # Puxa as chaves do cofre
                 API_KEY = st.secrets["intervals"]["API_KEY"]
                 ATHLETE_ID = st.secrets["intervals"]["ATHLETE_ID"]
                 
-                # Pega apenas os últimos 3 dias para não travar a tela com um JSON gigante
-                hoje = datetime.now()
-                data_inicio = (hoje - timedelta(days=3)).strftime('%Y-%m-%dT00:00:00')
-                data_fim = hoje.strftime('%Y-%m-%dT23:59:59')
+                hoje_dt = datetime.now()
+                data_inicio = (hoje_dt - timedelta(days=3)).strftime('%Y-%m-%dT00:00:00')
+                data_fim = hoje_dt.strftime('%Y-%m-%dT23:59:59')
                 
                 url = f"https://intervals.icu/api/v1/athlete/{ATHLETE_ID}/activities?oldest={data_inicio}&newest={data_fim}"
                 auth = ("API_KEY", API_KEY)
                 
-                # Faz a requisição limpa
                 res = requests.get(url, auth=auth)
                 res.raise_for_status()
                 dataset = res.json()
@@ -835,7 +813,6 @@ with tab_treino:
                 
             except Exception as e:
                 st.error(f"Erro na requisição: {e}")
-
 
 # ============================================================================
 # TAB: QS LAB
@@ -891,7 +868,7 @@ with tab_qs:
 
     st.markdown("**📊 Outputs — Efeitos na Balança**")
     qo1, qo2, qo3, qo4 = st.columns(4)
-    qo1.metric("⚖️ Δ Real",             f"{last['delta_peso_kg']*1000:.0f} g",         help="Negativo = perda")
+    qo1.metric("⚖️ Δ Real",              f"{last['delta_peso_kg']*1000:.0f} g",         help="Negativo = perda")
     qo2.metric("📐 Δ Termodinâmico",     f"{last['delta_esperado_kg']*1000:.0f} g",     help="Gordura teórica pelo déficit")
     qo3.metric("💧 Fator Desinflamação", f"{last['fator_desinflamacao']*1000:.0f} g",   help="Negativo = eliminou água")
     _emoji = {'Água/Desinflamação':'🔵','Retenção/Glicogênio':'🟡','Perda de Gordura Pura':'🔴'}
@@ -981,7 +958,6 @@ with tab_qs:
             x_range   = np.linspace(df_trend['jejum_h'].min(), df_trend['jejum_h'].max(), 100)
             residuals = df_trend['delta_peso_kg'] - poly_fn(df_trend['jejum_h'])
             std_res   = residuals.std()
-            # Banda IC 95%
             fig_shift.add_trace(go.Scatter(
                 x=x_range, y=poly_fn(x_range) + 1.96*std_res,
                 mode='lines', line=dict(width=0), showlegend=False))
@@ -1003,7 +979,6 @@ with tab_qs:
     st.markdown("---")
 
     # ── §3 ORÁCULO METABÓLICO ─────────────────────────────────────────────────
-    # Injeta DNA do AG se disponível
     if 'novo_dna_metabolico' in st.session_state:
         dna  = st.session_state.pop('novo_dna_metabolico')
         keys = ['win_peso','win_jej','win_prot','win_carb','win_gord',
@@ -1149,50 +1124,6 @@ with tab_qs:
             else:
                 st.warning("⏳ Mínimo 10 dias para iniciar o Torneio El Farol.")
 
-        # ── GROQ ──────────────────────────────────────────────────────────────
-        st.markdown("---")
-        st.markdown("##### 🧠 Consultoria Metabólica (IA Groq)")
-        if st.button("🩺 Pedir Análise de Inércia"):
-            api_key = st.secrets.get("GROQ_API_KEY")
-            if not api_key:
-                st.error("GROQ_API_KEY não configurada!")
-            else:
-                # Prompt com coeficientes em g/dia (não kg) para melhor leitura da IA
-                df_prompt = pd.DataFrame({
-                    'Variável':      [LABELS_MAP[f] for f in FEATURES],
-                    'Coef (g/dia)':  [f"{params_ols[f]*1000:+.2f}" for f in FEATURES],
-                    'P-Valor':       [f"{pvalues[f]:.3f} {'🟢' if pvalues[f]<0.05 else '🟠' if pvalues[f]<0.15 else '⚪'}" for f in FEATURES],
-                })
-                prompt = f"""Atue como Engenheiro de Dados especializado em Bioestatística.
-A variável alvo é VARIAÇÃO DE PESO (Δ Amanhã - Hoje).
-
-⚠️ REGRAS MATEMÁTICAS OBRIGATÓRIAS:
-1. Coef NEGATIVO (g/dia) = perda de peso. COMPORTAMENTO DESEJADO.
-2. Coef POSITIVO (g/dia) = ganho de peso. COMPORTAMENTO A EVITAR.
-3. Analise EXCLUSIVAMENTE variáveis com 🟢 (P<0.05). Ignore ⚪.
-4. PROIBIDO conselhos genéricos. Se gordura tiver coef negativo, AFIRME que auxilia na perda.
-
-R²={r2*100:.1f}% | AIC={aic_val:.1f}
-
-{df_prompt.to_string(index=False)}
-
-Responda em 2 parágrafos curtos e diretos:
-P1: O que os dados revelam? Cite coeficientes em g/dia.
-P2: Plano tático para as próximas 24h baseado ESTRITAMENTE nos sinais matemáticos."""
-
-                from groq import Groq as _Groq
-                client = _Groq(api_key=api_key)
-                with st.spinner("Decodificando DNA metabólico..."):
-                    stream = client.chat.completions.create(
-                        model="qwen/qwen3.6-27b",
-                        messages=[{"role":"user","content":prompt}],
-                        temperature=0.1, stream=True)
-                    def _gen(s):
-                        for chunk in s:
-                            if chunk.choices[0].delta.content:
-                                yield chunk.choices[0].delta.content
-                    st.write_stream(_gen(stream))
-
         # ── ALGORITMO GENÉTICO ─────────────────────────────────────────────────
         st.markdown("---")
         with st.expander("🧬 Evolução Genética do DNA Metabólico (AIC Evaluator)"):
@@ -1233,11 +1164,9 @@ P2: Plano tático para as próximas 24h baseado ESTRITAMENTE nos sinais matemát
                         pop = nova
                         pb.progress((g+1)/GERACOES)
 
-                    # Salva o resultado na sessão para não perder no rerun
                     st.session_state['resultado_ag'] = pop[0]
                     st.session_state['resultado_ag_aic'] = fitness(pop[0])
 
-            # ── Painel de resultado (FORA DO BOTÃO INICIAL) ─────────────
             if 'resultado_ag' in st.session_state:
                 best = st.session_state['resultado_ag']
                 best_aic = st.session_state['resultado_ag_aic']
@@ -1249,7 +1178,7 @@ P2: Plano tático para as próximas 24h baseado ESTRITAMENTE nos sinais matemát
                 atuais   = [st.session_state.get(k, _AG_DEFAULTS.get(k, 1)) for k in AG_KEYS]
 
                 delta_aic = best_aic - aic_val
-                st.markdown(f"**AIC Atual:** `{aic_val:.1f}` → **AIC Ótimo:** `{best_aic:.1f}` &nbsp; `Δ = {delta_aic:+.1f}`")
+                st.markdown(f"**AIC Atual:** `{aic_val:.1f}` → **AIC Ótimo:** `{best_aic:.1f}`   `Δ = {delta_aic:+.1f}`")
 
                 df_dna = pd.DataFrame({
                     'Variável':         AG_NOMES,
@@ -1265,7 +1194,7 @@ P2: Plano tático para as próximas 24h baseado ESTRITAMENTE nos sinais matemát
                 ag1, ag2 = st.columns(2)
                 if ag1.button("🚀 Aplicar DNA Ótimo"):
                     st.session_state['novo_dna_metabolico'] = best
-                    del st.session_state['resultado_ag'] # Limpa a tela após aplicar
+                    del st.session_state['resultado_ag']
                     st.rerun()
                 if ag2.button("❌ Cancelar"):
                     del st.session_state['resultado_ag']
@@ -1411,9 +1340,6 @@ P2: Plano tático para as próximas 24h baseado ESTRITAMENTE nos sinais matemát
 # ============================================================================
 # TAB: HISTÓRICO
 # ============================================================================
-# ============================================================================
-# TAB: HISTÓRICO
-# ============================================================================
 with tab_hist:
     st.header("📜 Histórico de Consumo")
     hh1, hh2 = st.columns(2)
@@ -1426,22 +1352,20 @@ with tab_hist:
         
     if not df_ht.empty:
         hm1, hm2, hm3 = st.columns(3)
-        hm1.metric("Total Kcal",      f"{int(df_ht['kcal'].sum())}")
-        hm2.metric("Média Prot/dia",  f"{df_ht.groupby('data')['proteina'].sum().mean():.0f}g")
+        hm1.metric("Total Kcal",     f"{int(df_ht['kcal'].sum())}")
+        hm2.metric("Média Prot/dia", f"{df_ht.groupby('data')['proteina'].sum().mean():.0f}g")
         hm3.metric("Refeições Registradas", f"{len(df_ht)}")
         
         st.divider()
         st.subheader("🏆 Base Alimentar (Top 15 Elementos)")
         
-        # Aqui o ETL acontece na memória (seguro!)
         df_top = df_ht.copy()
         df_top['alimento_padrao'] = df_top['alimento'].apply(padronizar_alimento)
         top_alimentos = df_top['alimento_padrao'].value_counts().head(15).reset_index()
         top_alimentos.columns = ['Alimento Base', 'Frequência']
         
-        # Gráfico de Barras Horizontal
         fig_top = go.Figure(go.Bar(
-            x=top_alimentos['Frequência'][::-1], # Invertido para o maior ficar no topo
+            x=top_alimentos['Frequência'][::-1],
             y=top_alimentos['Alimento Base'][::-1],
             orientation='h',
             marker_color='#2980b9'
@@ -1456,10 +1380,6 @@ with tab_hist:
         st.dataframe(df_ht, use_container_width=True)
     else: 
         st.info("Nenhum registro no período.")
-
-
-
-
 
 # ============================================================================
 # TAB: SAÚDE
