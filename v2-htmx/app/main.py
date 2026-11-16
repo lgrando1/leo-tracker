@@ -121,48 +121,6 @@ def _render_template(request: Request, template_name: str, context: Dict[str, An
         return templates.TemplateResponse(template_name, context)
 
 
-def _resolve_vercel_path(request: Request) -> str:
-    """
-    Normaliza o caminho caso o rewrite da Vercel (/(.*) -> /app/main.py)
-    encaminhe scope['path'] como '/app/main.py'.
-    """
-    raw_path = request.scope.get("path") or request.url.path or "/"
-
-    if raw_path in ("/app/main.py", "/app/main.py/"):
-        for header_name in ("x-forwarded-uri", "x-original-url", "x-rewrite-url"):
-            h_val = request.headers.get(header_name)
-            if h_val:
-                clean_h = h_val.split("?", 1)[0]
-                if clean_h and clean_h != "/app/main.py":
-                    raw_path = clean_h
-                    break
-        else:
-            route_matches = request.headers.get("x-now-route-matches")
-            if route_matches is not None:
-                parsed = parse_qs(route_matches, keep_blank_values=True)
-                matched = parsed.get("1", [""])[0]
-                raw_path = "/" + unquote(matched).lstrip("/")
-            else:
-                raw_path = "/"
-    elif raw_path.startswith("/app/main.py/"):
-        raw_path = raw_path[len("/app/main.py") :]
-
-    if not raw_path.startswith("/"):
-        raw_path = "/" + raw_path
-    if len(raw_path) > 1 and raw_path.endswith("/"):
-        raw_path = raw_path.rstrip("/")
-
-    request.scope["path"] = raw_path
-    request.scope["raw_path"] = raw_path.encode("utf-8")
-    return raw_path
-
-
-@app.middleware("http")
-async def vercel_path_normalizer_middleware(request: Request, call_next):
-    _resolve_vercel_path(request)
-    return await call_next(request)
-
-
 def _parse_date(date_str: Optional[str], fallback: Optional[date] = None) -> date:
     if date_str:
         try:
@@ -357,15 +315,6 @@ async def api_groq_ping(request: Request, format: Optional[str] = Query(default=
         )
 
     return HTMLResponse(content=html_box, status_code=200)
-
-
-@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
-async def index(request: Request, data: Optional[str] = Query(default=None)):
-    if request.method == "HEAD":
-        return Response(status_code=200)
-    data_alvo = _parse_date(data)
-    ctx = _build_base_context(data_alvo)
-    return _render_template(request, "index.html", ctx)
 
 
 # ============================================================================
@@ -752,3 +701,15 @@ async def partial_config_post(
     ctx = _build_base_context(dt_alvo, config_feedback=fb)
     ctx["include_summary_oob"] = True
     return _render_template(request, "partials/config_section.html", ctx)
+
+
+# ============================================================================
+# ROTA RAIZ PRINCIPAL (DECLARADA APÓS TODAS AS ROTAS DE API E PARCIAIS HTMX)
+# ============================================================================
+@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
+async def index(request: Request, data: Optional[str] = Query(default=None)):
+    if request.method == "HEAD":
+        return Response(status_code=200)
+    data_alvo = _parse_date(data)
+    ctx = _build_base_context(data_alvo)
+    return _render_template(request, "index.html", ctx)
