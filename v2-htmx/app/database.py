@@ -15,7 +15,8 @@ def get_engine() -> Engine:
     """
     global _engine
     if _engine is None:
-        db_url = _normalize_db_url(os.getenv("DATABASE_URL", "") or DATABASE_URL)
+        raw_url = (os.getenv("DATABASE_URL", "") or DATABASE_URL).strip().strip('"').strip("'")
+        db_url = _normalize_db_url(raw_url)
         if not db_url:
             raise RuntimeError(
                 "Variável DATABASE_URL não configurada nas Environment Variables (Vercel / .env)."
