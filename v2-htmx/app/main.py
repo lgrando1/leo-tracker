@@ -1,12 +1,20 @@
 from datetime import date, datetime, timedelta
+import pathlib
 from pathlib import Path
 import secrets
+import sys
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, File, Form, Query, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
+
+# Garante que a raiz de v2-htmx/ esteja no sys.path no ambiente serverless da Vercel
+BASE_DIR = pathlib.Path(__file__).resolve().parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
 from app.config import APP_PASSWORD, SECRET_KEY, get_now_br
 from app.database import get_engine
@@ -40,8 +48,20 @@ app = FastAPI(
     version="2.1.0",
 )
 
-TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
-templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+# Resolução absoluta de templates e static para compatibilidade com Vercel Serverless e execução local
+ROOT_TEMPLATES_DIR = pathlib.Path(__file__).resolve().parent.parent / "templates"
+APP_TEMPLATES_DIR = pathlib.Path(__file__).resolve().parent / "templates"
+TEMPLATES_DIR = ROOT_TEMPLATES_DIR if ROOT_TEMPLATES_DIR.exists() else APP_TEMPLATES_DIR
+templates = Jinja2Templates(
+    directory=[str(d) for d in (ROOT_TEMPLATES_DIR, APP_TEMPLATES_DIR) if d.exists()]
+    or str(TEMPLATES_DIR)
+)
+
+STATIC_DIR = pathlib.Path(__file__).resolve().parent.parent / "static"
+if not STATIC_DIR.exists():
+    STATIC_DIR = pathlib.Path(__file__).resolve().parent / "static"
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 PUBLIC_PATHS = {"/login", "/logout", "/favicon.ico"}
 
