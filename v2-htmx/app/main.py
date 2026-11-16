@@ -6,19 +6,18 @@ import sys
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, unquote
 
-from fastapi import FastAPI, File, Form, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from starlette.middleware.sessions import SessionMiddleware
-from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 # Garante que a raiz de v2-htmx/ esteja no sys.path no ambiente serverless da Vercel
 BASE_DIR = pathlib.Path(__file__).resolve().parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from app.config import APP_PASSWORD, SECRET_KEY as CONFIG_SECRET_KEY, get_now_br
+from app.config import APP_PASSWORD, APP_USER, get_now_br
 from app.database import get_engine
 from app.services.groq_service import analisar_refeicao_groq
 from app.services.intervals_service import sincronizar_treinos_recentes
@@ -44,10 +43,47 @@ from app.services.tracker_repo import (
     salvar_fechamento_passos,
 )
 
+# ============================================================================
+# AUTENTICAÇÃO NATIVA HTTP BASIC (100% STATELESS PARA VERCEL SERVERLESS + HTMX)
+# ============================================================================
+security = HTTPBasic()
+
+
+def verificar_acesso(credentials: HTTPBasicCredentials = Depends(security)) -> str:
+    """
+    Valida usuário e senha via HTTP Basic Auth usando secrets.compare_digest.
+    - Usuário padrão: 'leo' (ou variável APP_USER do ambiente)
+    - Senha padrão: lida de APP_PASSWORD (ou PASSWORD) do ambiente, fallback 'admin'
+    """
+    expected_user = (os.getenv("APP_USER") or APP_USER or "leo").strip()
+    expected_pass = (
+        os.getenv("APP_PASSWORD")
+        or os.getenv("PASSWORD")
+        or APP_PASSWORD
+        or "admin"
+    ).strip()
+
+    user_ok = secrets.compare_digest(
+        credentials.username.encode("utf-8"), expected_user.encode("utf-8")
+    )
+    pass_ok = secrets.compare_digest(
+        credentials.password.encode("utf-8"), expected_pass.encode("utf-8")
+    )
+
+    if not (user_ok and pass_ok):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Acesso restrito",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
+
+
 app = FastAPI(
     title="Leo Tracker Pro · v2 HTMX",
-    description="Aplicação FastAPI + Jinja2 + HTMX + Tailwind CSS baseada exclusivamente no @app.py.",
-    version="2.1.2",
+    description="Aplicação FastAPI + Jinja2 + HTMX + Tailwind CSS protegida com HTTP Basic Auth.",
+    version="2.2.0",
+    dependencies=[Depends(verificar_acesso)],
 )
 
 # Resolução absoluta de templates e static para compatibilidade com Vercel Serverless e execução local
@@ -65,12 +101,14 @@ if not STATIC_DIR.exists():
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# Fallback fixo para SECRET_KEY (nunca aleatório em runtime serverless)
-SECRET_KEY = (
-    os.getenv("SECRET_KEY")
-    or CONFIG_SECRET_KEY
-    or "leotracker-v2-fixed-serverless-secret-key-9f8e7d6c5b4a"
-)
+
+def _render_template(request: Request, template_name: str, context: Dict[str, Any]) -> Response:
+    """Renderiza template Jinja2 de forma compatível com qualquer versão do Starlette/FastAPI."""
+    context["request"] = request
+    try:
+        return templates.TemplateResponse(request=request, name=template_name, context=context)
+    except TypeError:
+        return templates.TemplateResponse(template_name, context)
 
 
 def _resolve_vercel_path(request: Request) -> str:
@@ -110,46 +148,9 @@ def _resolve_vercel_path(request: Request) -> str:
 
 
 @app.middleware("http")
-async def vercel_path_and_api_auth_middleware(request: Request, call_next):
-    """
-    1. Normaliza o path na Vercel sem NUNCA emitir RedirectResponse('/login').
-    2. Libera rotas públicas ('/', '/login', '/auth/login', '/logout', '/static', '/favicon.ico', '/health').
-    3. Para rotas de parciais/API ('/partials/...', '/api/...'), se não estiver autenticado,
-       retorna HTMLResponse('Não autorizado', status_code=401) com cabeçalho HX-Redirect: '/'.
-    """
-    path = _resolve_vercel_path(request)
-
-    if (
-        path in ("/", "/login", "/auth/login", "/logout", "/favicon.ico", "/health")
-        or path.startswith("/login")
-        or path.startswith("/auth/login")
-        or path.startswith("/logout")
-        or path.startswith("/static")
-    ):
-        return await call_next(request)
-
-    if not request.session.get("authenticated"):
-        return HTMLResponse(
-            "Não autorizado",
-            status_code=401,
-            headers={"HX-Redirect": "/"},
-        )
-
+async def vercel_path_normalizer_middleware(request: Request, call_next):
+    _resolve_vercel_path(request)
     return await call_next(request)
-
-
-# ProxyHeadersMiddleware antes do SessionMiddleware
-app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
-
-# SessionMiddleware com secret_key fixo, https_only=False e same_site="lax"
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=SECRET_KEY,
-    session_cookie="leotracker_session",
-    max_age=60 * 60 * 24 * 7,
-    same_site="lax",
-    https_only=False,
-)
 
 
 def _parse_date(date_str: Optional[str], fallback: Optional[date] = None) -> date:
@@ -174,13 +175,61 @@ def _build_base_context(
     dt_hist_ini: Optional[date] = None,
     dt_hist_fim: Optional[date] = None,
 ) -> Dict[str, Any]:
-    """Monta o contexto completo para renderização inicial ou atualização de parciais HTMX."""
+    """
+    Monta o contexto completo para renderização inicial ou atualização de parciais HTMX.
+    Envolve todas as consultas ao Neon em blocos try/except seguros para evitar Erro 500.
+    """
     hoje = get_now_br().date()
     dt_tr = dt_treino or data_alvo
     dt_hi = dt_hist_ini or (hoje - timedelta(days=7))
     dt_hf = dt_hist_fim or hoje
 
     db_error: Optional[str] = None
+    metas = DEFAULT_METAS.copy()
+    jejum = "0h 0m"
+    peso_data: Dict[str, Any] = {
+        "peso_atual": 140.0,
+        "peso_inicial": 140.0,
+        "tendencia_atual": 140.0,
+        "perda_total": 0.0,
+        "delta_ultimo": 0.0,
+        "registros": [],
+        "chart_labels": [],
+        "chart_pesos": [],
+        "chart_ewma": [],
+    }
+    consumo_data: Dict[str, Any] = {
+        "itens": [],
+        "totais": {
+            "kcal": 0.0,
+            "proteina": 0.0,
+            "carbo": 0.0,
+            "gordura": 0.0,
+            "quantidade": 0.0,
+            "ferro_mg": 0.0,
+            "b12_mcg": 0.0,
+            "zinco_mg": 0.0,
+            "magnesio_mg": 0.0,
+        },
+    }
+    medidas_list = []
+    treino_data: Dict[str, Any] = {
+        "registros": [],
+        "min_treino": 0,
+        "passos_atv": 0,
+        "total_rel": 0,
+        "passos_rot": 0,
+        "progresso_min": 0.0,
+    }
+    historico_data: Dict[str, Any] = {
+        "total_kcal": 0,
+        "media_prot_dia": 0,
+        "total_registros": 0,
+        "top_alimentos": [],
+        "max_freq": 1,
+        "registros": [],
+    }
+
     try:
         metas = get_metas()
         jejum = get_tempo_jejum()
@@ -190,60 +239,19 @@ def _build_base_context(
         treino_data = get_treinos_dia(dt_tr)
         historico_data = get_historico_consumo(dt_hi, dt_hf)
     except Exception as exc:
-        db_error = str(exc)
-        metas = DEFAULT_METAS.copy()
-        jejum = "0h 0m"
-        peso_data = {
-            "peso_atual": 140.0,
-            "peso_inicial": 140.0,
-            "tendencia_atual": 140.0,
-            "perda_total": 0.0,
-            "delta_ultimo": 0.0,
-            "registros": [],
-            "chart_labels": [],
-            "chart_pesos": [],
-            "chart_ewma": [],
-        }
-        consumo_data = {
-            "itens": [],
-            "totais": {
-                "kcal": 0.0,
-                "proteina": 0.0,
-                "carbo": 0.0,
-                "gordura": 0.0,
-                "quantidade": 0.0,
-                "ferro_mg": 0.0,
-                "b12_mcg": 0.0,
-                "zinco_mg": 0.0,
-                "magnesio_mg": 0.0,
-            },
-        }
-        medidas_list = []
-        treino_data = {
-            "registros": [],
-            "min_treino": 0,
-            "passos_atv": 0,
-            "total_rel": 0,
-            "passos_rot": 0,
-            "progresso_min": 0.0,
-        }
-        historico_data = {
-            "total_kcal": 0,
-            "media_prot_dia": 0,
-            "total_registros": 0,
-            "top_alimentos": [],
-            "max_freq": 1,
-            "registros": [],
-        }
+        db_error = f"Não foi possível conectar ou consultar o banco Neon: {exc}"
 
-    peso_atual = peso_data["peso_atual"]
-    peso_alvo = metas["peso_alvo"]
+    peso_atual = float(peso_data.get("peso_atual") or 140.0)
+    peso_alvo = float(metas.get("peso_alvo") or 120.0)
     progresso_peso = (
         min(max(0.0, (150.0 - peso_atual) / max(0.1, (150.0 - peso_alvo))), 1.0) * 100.0
     )
 
     bf_preview = calc_bf_weltman(
-        metas["last_waist"], peso_atual, metas["altura"], metas["genero"]
+        float(metas.get("last_waist") or 133.0),
+        peso_atual,
+        int(metas.get("altura") or 178),
+        str(metas.get("genero") or "Masculino"),
     )
 
     return {
@@ -273,50 +281,20 @@ def _build_base_context(
 
 
 # ============================================================================
-# ROTAS DE AUTENTICAÇÃO E PÁGINA PRINCIPAL (SEM REDIRECT PARA /login)
+# PÁGINA PRINCIPAL (SUPORTA GET E HEAD PARA EVITAR 405 EM CHECKS DE STATUS)
 # ============================================================================
-@app.get("/health", response_class=JSONResponse)
+@app.api_route("/health", methods=["GET", "HEAD"], response_class=JSONResponse)
 async def healthcheck():
     return {"status": "ok"}
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def index(request: Request, data: Optional[str] = Query(default=None)):
-    if not request.session.get("authenticated"):
-        return templates.TemplateResponse(
-            "login.html", {"request": request, "error": None}
-        )
+    if request.method == "HEAD":
+        return Response(status_code=200)
     data_alvo = _parse_date(data)
     ctx = _build_base_context(data_alvo)
-    ctx["request"] = request
-    return templates.TemplateResponse("index.html", ctx)
-
-
-@app.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request):
-    if request.session.get("authenticated"):
-        return RedirectResponse(url="/", status_code=303)
-    return templates.TemplateResponse("login.html", {"request": request, "error": None})
-
-
-@app.post("/login", response_class=HTMLResponse)
-@app.post("/auth/login", response_class=HTMLResponse)
-async def login_submit(request: Request, password: str = Form(default="")):
-    if secrets.compare_digest(password.strip(), APP_PASSWORD):
-        request.session["authenticated"] = True
-        return RedirectResponse(url="/", status_code=303)
-    return templates.TemplateResponse(
-        "login.html",
-        {"request": request, "error": "Senha incorreta!"},
-        status_code=401,
-    )
-
-
-@app.get("/logout")
-@app.post("/logout")
-async def logout(request: Request):
-    request.session.clear()
-    return RedirectResponse(url="/", status_code=303)
+    return _render_template(request, "index.html", ctx)
 
 
 # ============================================================================
@@ -326,9 +304,8 @@ async def logout(request: Request):
 async def partial_summary(request: Request, data: Optional[str] = Query(default=None)):
     data_alvo = _parse_date(data)
     ctx = _build_base_context(data_alvo)
-    ctx["request"] = request
     ctx["oob"] = False
-    return templates.TemplateResponse("partials/summary_cards.html", ctx)
+    return _render_template(request, "partials/summary_cards.html", ctx)
 
 
 # ============================================================================
@@ -338,9 +315,8 @@ async def partial_summary(request: Request, data: Optional[str] = Query(default=
 async def partial_peso_get(request: Request, data: Optional[str] = Query(default=None)):
     data_alvo = _parse_date(data)
     ctx = _build_base_context(data_alvo)
-    ctx["request"] = request
     ctx["include_summary_oob"] = False
-    return templates.TemplateResponse("partials/weight_section.html", ctx)
+    return _render_template(request, "partials/weight_section.html", ctx)
 
 
 @app.post("/partials/peso", response_class=HTMLResponse)
@@ -360,9 +336,8 @@ async def partial_peso_post(
         feedback = f"Erro ao salvar peso: {exc}"
 
     ctx = _build_base_context(dt_alvo, peso_feedback=feedback)
-    ctx["request"] = request
     ctx["include_summary_oob"] = True
-    return templates.TemplateResponse("partials/weight_section.html", ctx)
+    return _render_template(request, "partials/weight_section.html", ctx)
 
 
 @app.delete("/partials/peso/{peso_id}", response_class=HTMLResponse)
@@ -372,11 +347,14 @@ async def partial_peso_delete(
     data: Optional[str] = Query(default=None),
 ):
     dt_alvo = _parse_date(data)
-    remover_peso(peso_id)
-    ctx = _build_base_context(dt_alvo, peso_feedback="Registro de peso removido.")
-    ctx["request"] = request
+    feedback = "Registro de peso removido."
+    try:
+        remover_peso(peso_id)
+    except Exception as exc:
+        feedback = f"Erro ao remover registro: {exc}"
+    ctx = _build_base_context(dt_alvo, peso_feedback=feedback)
     ctx["include_summary_oob"] = True
-    return templates.TemplateResponse("partials/weight_section.html", ctx)
+    return _render_template(request, "partials/weight_section.html", ctx)
 
 
 # ============================================================================
@@ -403,9 +381,8 @@ async def partial_medidas_post(
         feedback = f"Erro ao salvar avaliação corporal: {exc}"
 
     ctx = _build_base_context(dt_alvo, medidas_feedback=feedback)
-    ctx["request"] = request
     ctx["include_summary_oob"] = True
-    return templates.TemplateResponse("partials/medidas_section.html", ctx)
+    return _render_template(request, "partials/medidas_section.html", ctx)
 
 
 @app.delete("/partials/medidas/{medida_id}", response_class=HTMLResponse)
@@ -415,11 +392,14 @@ async def partial_medidas_delete(
     data: Optional[str] = Query(default=None),
 ):
     dt_alvo = _parse_date(data)
-    remover_medida(medida_id)
-    ctx = _build_base_context(dt_alvo, medidas_feedback="Medida corporal removida.")
-    ctx["request"] = request
+    feedback = "Medida corporal removida."
+    try:
+        remover_medida(medida_id)
+    except Exception as exc:
+        feedback = f"Erro ao remover medida: {exc}"
+    ctx = _build_base_context(dt_alvo, medidas_feedback=feedback)
     ctx["include_summary_oob"] = False
-    return templates.TemplateResponse("partials/medidas_section.html", ctx)
+    return _render_template(request, "partials/medidas_section.html", ctx)
 
 
 # ============================================================================
@@ -429,9 +409,8 @@ async def partial_medidas_delete(
 async def partial_consumo_get(request: Request, data: Optional[str] = Query(default=None)):
     data_alvo = _parse_date(data)
     ctx = _build_base_context(data_alvo)
-    ctx["request"] = request
     ctx["include_summary_oob"] = True
-    return templates.TemplateResponse("partials/meals_list.html", ctx)
+    return _render_template(request, "partials/meals_list.html", ctx)
 
 
 @app.post("/partials/consumo", response_class=HTMLResponse)
@@ -475,9 +454,8 @@ async def partial_consumo_post(
                     ai_error = f"Erro ao gravar em public.consumo: {exc}"
 
     ctx = _build_base_context(data_alvo, ai_feedback=ai_feedback, ai_error=ai_error)
-    ctx["request"] = request
     ctx["include_summary_oob"] = True
-    return templates.TemplateResponse("partials/meals_list.html", ctx)
+    return _render_template(request, "partials/meals_list.html", ctx)
 
 
 @app.delete("/partials/consumo/{consumo_id}", response_class=HTMLResponse)
@@ -487,11 +465,14 @@ async def partial_consumo_delete(
     data: Optional[str] = Query(default=None),
 ):
     data_alvo = _parse_date(data)
-    remover_consumo(consumo_id)
-    ctx = _build_base_context(data_alvo)
-    ctx["request"] = request
+    ai_error = None
+    try:
+        remover_consumo(consumo_id)
+    except Exception as exc:
+        ai_error = f"Erro ao excluir alimento: {exc}"
+    ctx = _build_base_context(data_alvo, ai_error=ai_error)
     ctx["include_summary_oob"] = True
-    return templates.TemplateResponse("partials/meals_list.html", ctx)
+    return _render_template(request, "partials/meals_list.html", ctx)
 
 
 @app.get("/partials/historico", response_class=HTMLResponse)
@@ -504,8 +485,7 @@ async def partial_historico_get(
     ini = _parse_date(dt_hi, fallback=hoje - timedelta(days=7))
     fim = _parse_date(dt_hf, fallback=hoje)
     ctx = _build_base_context(hoje, dt_hist_ini=ini, dt_hist_fim=fim)
-    ctx["request"] = request
-    return templates.TemplateResponse("partials/historico_section.html", ctx)
+    return _render_template(request, "partials/historico_section.html", ctx)
 
 
 # ============================================================================
@@ -515,8 +495,7 @@ async def partial_historico_get(
 async def partial_treino_get(request: Request, dt_alvo: Optional[str] = Query(default=None)):
     dt_tr = _parse_date(dt_alvo)
     ctx = _build_base_context(dt_tr, dt_treino=dt_tr)
-    ctx["request"] = request
-    return templates.TemplateResponse("partials/treino_section.html", ctx)
+    return _render_template(request, "partials/treino_section.html", ctx)
 
 
 @app.post("/partials/treino/fechamento", response_class=HTMLResponse)
@@ -534,8 +513,7 @@ async def partial_treino_fechamento(
         err = f"Erro ao salvar fechamento: {exc}"
 
     ctx = _build_base_context(dt_tr, dt_treino=dt_tr, treino_feedback=fb, treino_error=err)
-    ctx["request"] = request
-    return templates.TemplateResponse("partials/treino_section.html", ctx)
+    return _render_template(request, "partials/treino_section.html", ctx)
 
 
 @app.post("/partials/treino/atividade", response_class=HTMLResponse)
@@ -568,8 +546,7 @@ async def partial_treino_atividade(
         err = f"Erro ao registrar atividade: {exc}"
 
     ctx = _build_base_context(dt_tr, dt_treino=dt_tr, treino_feedback=fb, treino_error=err)
-    ctx["request"] = request
-    return templates.TemplateResponse("partials/treino_section.html", ctx)
+    return _render_template(request, "partials/treino_section.html", ctx)
 
 
 @app.post("/partials/treino/sync", response_class=HTMLResponse)
@@ -578,15 +555,17 @@ async def partial_treino_sync(
     dt_alvo: Optional[str] = Form(default=None),
 ):
     dt_tr = _parse_date(dt_alvo)
-    ok, msg = sincronizar_treinos_recentes(engine=get_engine(), dias_retroativos=7)
+    try:
+        ok, msg = sincronizar_treinos_recentes(engine=get_engine(), dias_retroativos=7)
+    except Exception as exc:
+        ok, msg = False, f"Erro ao conectar com banco/Intervals.icu: {exc}"
     ctx = _build_base_context(
         dt_tr,
         dt_treino=dt_tr,
         treino_feedback=msg if ok else None,
         treino_error=None if ok else msg,
     )
-    ctx["request"] = request
-    return templates.TemplateResponse("partials/treino_section.html", ctx)
+    return _render_template(request, "partials/treino_section.html", ctx)
 
 
 @app.delete("/partials/treino/{exercicio_id}", response_class=HTMLResponse)
@@ -596,10 +575,13 @@ async def partial_treino_delete(
     dt_alvo: Optional[str] = Query(default=None),
 ):
     dt_tr = _parse_date(dt_alvo)
-    remover_exercicio(exercicio_id)
-    ctx = _build_base_context(dt_tr, dt_treino=dt_tr, treino_feedback="Registro de treino removido.")
-    ctx["request"] = request
-    return templates.TemplateResponse("partials/treino_section.html", ctx)
+    fb, err = "Registro de treino removido.", None
+    try:
+        remover_exercicio(exercicio_id)
+    except Exception as exc:
+        fb, err = None, f"Erro ao remover registro: {exc}"
+    ctx = _build_base_context(dt_tr, dt_treino=dt_tr, treino_feedback=fb, treino_error=err)
+    return _render_template(request, "partials/treino_section.html", ctx)
 
 
 # ============================================================================
@@ -634,6 +616,5 @@ async def partial_config_post(
         fb = f"Erro ao atualizar metas: {exc}"
 
     ctx = _build_base_context(dt_alvo, config_feedback=fb)
-    ctx["request"] = request
     ctx["include_summary_oob"] = True
-    return templates.TemplateResponse("partials/config_section.html", ctx)
+    return _render_template(request, "partials/config_section.html", ctx)

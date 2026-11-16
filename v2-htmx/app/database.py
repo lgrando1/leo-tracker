@@ -1,31 +1,41 @@
+import os
 from typing import Any, Dict, List, Optional
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
-from app.config import DATABASE_URL
+from sqlalchemy.pool import NullPool
+from app.config import DATABASE_URL, _normalize_db_url
 
 _engine: Optional[Engine] = None
 
 
 def get_engine() -> Engine:
     """
-    Retorna instância singleton do SQLAlchemy Engine configurada com
-    pool_pre_ping=True e pool_recycle=300 para evitar problemas de cold start
-    ou queda de conexão ociosa no Neon Serverless PostgreSQL.
+    Retorna instância singleton do SQLAlchemy Engine configurada de forma segura
+    para ambientes serverless (Vercel) e local com Neon PostgreSQL.
     """
     global _engine
     if _engine is None:
-        if not DATABASE_URL:
+        db_url = _normalize_db_url(os.getenv("DATABASE_URL", "") or DATABASE_URL)
+        if not db_url:
             raise RuntimeError(
-                "Variável DATABASE_URL não encontrada no arquivo .env. "
-                "Defina DATABASE_URL apontando para o seu banco Neon PostgreSQL."
+                "Variável DATABASE_URL não configurada nas Environment Variables (Vercel / .env)."
             )
-        _engine = create_engine(
-            DATABASE_URL,
-            pool_pre_ping=True,
-            pool_recycle=300,
-            pool_size=5,
-            max_overflow=10,
-        )
+        is_serverless = bool(os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME"))
+        if is_serverless:
+            _engine = create_engine(
+                db_url,
+                poolclass=NullPool,
+                connect_args={"connect_timeout": 10},
+            )
+        else:
+            _engine = create_engine(
+                db_url,
+                pool_pre_ping=True,
+                pool_recycle=300,
+                pool_size=5,
+                max_overflow=10,
+                connect_args={"connect_timeout": 10},
+            )
     return _engine
 
 
