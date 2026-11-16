@@ -421,37 +421,37 @@ async def partial_consumo_post(
     foto_prato: Optional[UploadFile] = File(default=None),
 ):
     data_alvo = _parse_date(data_consumo)
-    imagem_bytes: Optional[bytes] = None
-    if foto_prato and foto_prato.filename:
-        raw_bytes = await foto_prato.read()
-        if raw_bytes:
-            imagem_bytes = raw_bytes
-
     ai_feedback: Optional[str] = None
     ai_error: Optional[str] = None
 
-    if not (texto_input and texto_input.strip()) and not imagem_bytes:
-        ai_error = "Digite o que comeu, envie uma foto do prato/rótulo ou cole diretamente o JSON."
-    else:
-        ok, resultado = analisar_refeicao_groq(
-            texto_usuario=texto_input,
-            data_ref=data_alvo,
-            imagem_bytes=imagem_bytes,
-        )
-        if not ok:
-            ai_error = str(resultado)
+    try:
+        imagem_bytes: Optional[bytes] = None
+        if foto_prato and foto_prato.filename:
+            raw_bytes = await foto_prato.read()
+            if raw_bytes:
+                imagem_bytes = raw_bytes
+
+        if not (texto_input and texto_input.strip()) and not imagem_bytes:
+            ai_error = "Digite o que comeu, envie uma foto do prato/rótulo ou cole diretamente o JSON."
         else:
-            payload = resultado if isinstance(resultado, dict) else {}
-            alimentos = payload.get("alimentos") or []
-            if not alimentos:
-                ai_error = "A análise não retornou alimentos válidos."
+            ok, resultado = analisar_refeicao_groq(
+                texto_usuario=texto_input,
+                data_ref=data_alvo,
+                imagem_bytes=imagem_bytes,
+            )
+            if not ok:
+                ai_error = str(resultado)
             else:
-                try:
+                payload = resultado if isinstance(resultado, dict) else {}
+                alimentos = payload.get("alimentos") or []
+                if not alimentos:
+                    ai_error = f"A análise não retornou alimentos válidos. Resposta: {payload}"
+                else:
                     qtd = inserir_alimentos_consumo(alimentos, data_padrao=data_alvo)
                     analise_txt = payload.get("analise") or "Refeição processada!"
                     ai_feedback = f"{analise_txt} ({qtd} alimento(s) salvo(s))"
-                except Exception as exc:
-                    ai_error = f"Erro ao gravar em public.consumo: {exc}"
+    except Exception as ex:
+        ai_error = f"Erro: {str(ex)}"
 
     ctx = _build_base_context(data_alvo, ai_feedback=ai_feedback, ai_error=ai_error)
     ctx["include_summary_oob"] = True

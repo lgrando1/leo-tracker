@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+import os
 from datetime import date
 from typing import Any, Dict, Optional, Tuple
 from groq import Groq
@@ -22,15 +23,18 @@ def otimizar_imagem_base64(imagem_bytes: bytes, max_dim: int = 1024, quality: in
 def tentar_parse_json_direto(texto_usuario: str) -> Optional[Dict[str, Any]]:
     """
     Verifica se o usuário colou diretamente um JSON estruturado (lista ou objeto),
-    mantendo compatibilidade com o fluxo original do Streamlit.
+    mantendo compatibilidade com o fluxo original do @app.py.
     """
     if not texto_usuario:
         return None
     cleaned = texto_usuario.replace("```json", "").replace("```", "").strip()
-    if not (cleaned.startswith("{") or cleaned.startswith("[")):
+    s, e = cleaned.find("["), cleaned.rfind("]")
+    if s == -1 and cleaned.startswith("{"):
+        s, e = cleaned.find("{"), cleaned.rfind("}")
+    if s == -1 or e == -1:
         return None
     try:
-        parsed = json.loads(cleaned)
+        parsed = json.loads(cleaned[s : e + 1])
         if isinstance(parsed, list):
             return {"analise": "JSON importado diretamente.", "alimentos": parsed}
         if isinstance(parsed, dict):
@@ -42,34 +46,30 @@ def tentar_parse_json_direto(texto_usuario: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def analisar_refeicao_groq(
+def processar_texto_ia(
     texto_usuario: str,
-    data_ref: Optional[date] = None,
+    api_key: Optional[str] = None,
     imagem_bytes: Optional[bytes] = None,
+    data_ref: Optional[date] = None,
 ) -> Tuple[bool, Dict[str, Any] | str]:
     """
-    Processa descrição alimentar (texto, JSON direto ou imagem) usando o SDK da Groq
-    e retorna (sucesso, payload_estruturado_ou_erro).
-    Mantém exatamente o contrato de macros e micronutrientes do app.py original:
-    {
-      "analise": "Texto curto",
-      "alimentos": [{
-        "data": "YYYY-MM-DD", "alimento": "Nome",
-        "quantidade_g": 0, "kcal": 0, "p": 0, "c": 0, "g": 0, "gluten": "txt",
-        "ferro_mg": 0, "b12_mcg": 0, "zinco_mg": 0, "magnesio_mg": 0
-      }]
-    }
+    Função equivalente a processar_texto_ia de @app.py, com limpeza de GROQ_API_KEY
+    e captura explícita de qualquer exceção para exibição na interface HTMX.
     """
     if texto_usuario and not imagem_bytes:
         direto = tentar_parse_json_direto(texto_usuario)
         if direto is not None:
             return True, direto
 
-    if not GROQ_API_KEY:
-        return False, "GROQ_API_KEY não configurada no arquivo .env."
+    raw_key = api_key or os.getenv("GROQ_API_KEY") or GROQ_API_KEY or ""
+    clean_key = raw_key.strip().strip('"').strip("'").strip()
+    if not clean_key:
+        return False, "Erro: GROQ_API_KEY não configurada nas variáveis de ambiente (.env / Vercel)!"
+
+    model_text = (os.getenv("GROQ_MODEL_TEXT") or GROQ_MODEL_TEXT or "openai/gpt-oss-120b").strip().strip('"').strip("'")
+    model_vision = (os.getenv("GROQ_MODEL_VISION") or GROQ_MODEL_VISION or "qwen/qwen3.8-27b").strip().strip('"').strip("'")
 
     data_hoje_str = (data_ref or get_now_br().date()).strftime("%Y-%m-%d")
-    client = Groq(api_key=GROQ_API_KEY)
 
     prompt_system = f"""
 Aja como Nutricionista Matemático. Hoje: {data_hoje_str}.
@@ -86,7 +86,9 @@ Formato: {{"analise": "Texto curto", "alimentos": [{{"data": "YYYY-MM-DD", "alim
 """.strip()
 
     try:
-        if imagem_bytes:
+        client = Groq(api_key=clean_key)
+
+        if imagem_bytes is not None:
             b64_img = otimizar_imagem_base64(imagem_bytes)
             texto_prompt = (
                 texto_usuario.strip()
@@ -105,7 +107,7 @@ Formato: {{"analise": "Texto curto", "alimentos": [{{"data": "YYYY-MM-DD", "alim
                     {"role": "system", "content": prompt_system},
                     {"role": "user", "content": user_content},
                 ],
-                "model": GROQ_MODEL_VISION,
+                "model": model_vision,
                 "temperature": 0.1,
                 "reasoning_effort": "none",
                 "response_format": {"type": "json_object"},
@@ -116,12 +118,18 @@ Formato: {{"analise": "Texto curto", "alimentos": [{{"data": "YYYY-MM-DD", "alim
                     {"role": "system", "content": prompt_system},
                     {"role": "user", "content": texto_usuario},
                 ],
-                "model": GROQ_MODEL_TEXT,
+                "model": model_text,
                 "temperature": 0.1,
                 "response_format": {"type": "json_object"},
             }
 
-        completion = client.chat.completions.create(**kwargs)
+        try:
+            completion = client.chat.completions.create(**kwargs)
+        except TypeError:
+            # Fallback caso a versão do SDK não aceite reasoning_effort como argumento direto
+            kwargs.pop("reasoning_effort", None)
+            completion = client.chat.completions.create(**kwargs)
+
         raw = (
             (completion.choices[0].message.content or "")
             .replace("```json", "")
@@ -133,7 +141,22 @@ Formato: {{"analise": "Texto curto", "alimentos": [{{"data": "YYYY-MM-DD", "alim
             raw = raw[s : e + 1]
         content = json.loads(raw)
         if isinstance(content, list):
-            content = {"analise": "Refeição processada com sucesso.", "alimentos": content}
+            content = {"analise": "Processado", "alimentos": content}
         return True, content
     except Exception as ex:
-        return False, f"Erro ao consultar Groq API: {str(ex)}"
+        return False, f"Erro: {str(ex)}"
+
+
+def analisar_refeicao_groq(
+    texto_usuario: str,
+    data_ref: Optional[date] = None,
+    imagem_bytes: Optional[bytes] = None,
+) -> Tuple[bool, Dict[str, Any] | str]:
+    """Alias compatível com main.py que delega para processar_texto_ia."""
+    api_key = (os.getenv("GROQ_API_KEY") or GROQ_API_KEY or "").strip().strip('"').strip("'")
+    return processar_texto_ia(
+        texto_usuario=texto_usuario,
+        api_key=api_key,
+        imagem_bytes=imagem_bytes,
+        data_ref=data_ref,
+    )
