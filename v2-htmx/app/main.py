@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, unquote
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -59,15 +59,31 @@ from app.services.tracker_repo import (
 # ============================================================================
 # AUTENTICAÇÃO NATIVA HTTP BASIC (100% STATELESS PARA VERCEL SERVERLESS + HTMX)
 # ============================================================================
-security = HTTPBasic()
+# auto_error=False permite liberar /manifest.json, /sw.js e /static/* antes de exigir Basic Auth
+security = HTTPBasic(auto_error=False)
+
+PWA_PUBLIC_PATHS = ("/manifest.json", "/sw.js", "/favicon.ico")
 
 
-def verificar_acesso(credentials: HTTPBasicCredentials = Depends(security)) -> str:
+def verificar_acesso(
+    request: Request,
+    credentials: Optional[HTTPBasicCredentials] = Depends(security),
+) -> str:
     """
     Valida usuário e senha via HTTP Basic Auth usando secrets.compare_digest.
-    - Usuário padrão: 'leo' (ou variável APP_USER do ambiente)
-    - Senha padrão: lida de APP_PASSWORD (ou PASSWORD) do ambiente, fallback 'admin'
+    Libera explicitamente /static/*, /manifest.json e /sw.js para instalação PWA no Android.
     """
+    path = request.url.path or "/"
+    if path.startswith("/static/") or path == "/static" or path in PWA_PUBLIC_PATHS:
+        return "pwa-public"
+
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Acesso restrito",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+
     expected_user = (os.getenv("APP_USER") or APP_USER or "leo").strip()
     expected_pass = (
         os.getenv("APP_PASSWORD")
@@ -269,8 +285,32 @@ async def htmx_validation_exception_handler(request: Request, exc: RequestValida
 
 
 # ============================================================================
-# PÁGINA PRINCIPAL & DIAGNÓSTICO GROQ (/api/groq/ping)
+# ROTAS PÚBLICAS DO PWA (/manifest.json, /sw.js, /favicon.ico) & HEALTHCHECK
 # ============================================================================
+@app.get("/manifest.json", include_in_schema=False)
+async def pwa_manifest():
+    return FileResponse(
+        STATIC_DIR / "manifest.json",
+        media_type="application/manifest+json",
+    )
+
+
+@app.get("/sw.js", include_in_schema=False)
+async def pwa_service_worker():
+    return FileResponse(
+        STATIC_DIR / "sw.js",
+        media_type="application/javascript",
+    )
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def pwa_favicon():
+    return FileResponse(
+        STATIC_DIR / "icon-192.png",
+        media_type="image/png",
+    )
+
+
 @app.api_route("/health", methods=["GET", "HEAD"], response_class=JSONResponse)
 async def healthcheck():
     return {"status": "ok"}

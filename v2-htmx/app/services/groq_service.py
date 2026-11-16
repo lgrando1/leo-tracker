@@ -157,7 +157,8 @@ def otimizar_imagem_base64(imagem_bytes: bytes, max_dim: int = 1024, quality: in
     img = Image.open(io.BytesIO(imagem_bytes))
     if img.mode in ("RGBA", "P", "LA"):
         img = img.convert("RGB")
-    img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+    resample_filter = getattr(Image, "Resampling", Image).LANCZOS
+    img.thumbnail((max_dim, max_dim), resample_filter)
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=quality, optimize=True)
     return base64.b64encode(buf.getvalue()).decode("utf-8")
