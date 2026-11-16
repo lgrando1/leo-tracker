@@ -1,25 +1,35 @@
 from datetime import date, datetime, timedelta
+import html
 import os
 import pathlib
 import secrets
 import sys
+import traceback
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, unquote
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 # Garante que a raiz de v2-htmx/ esteja no sys.path no ambiente serverless da Vercel
 BASE_DIR = pathlib.Path(__file__).resolve().parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from app.config import APP_PASSWORD, APP_USER, get_now_br
+from app.config import APP_PASSWORD, APP_USER, GROQ_MODEL_TEXT, GROQ_MODEL_VISION, get_now_br
 from app.database import get_engine
-from app.services.groq_service import analisar_refeicao_groq, tentar_parse_json_direto
+from app.services.groq_service import (
+    analisar_refeicao_groq,
+    diagnosticar_chave_groq,
+    formatar_erro_diagnostico_groq,
+    ping_groq,
+    tentar_parse_json_direto,
+)
 from app.services.intervals_service import sincronizar_treinos_recentes
 from app.services.tracker_repo import (
     DEFAULT_METAS,
@@ -280,12 +290,73 @@ def _build_base_context(
     }
 
 
+@app.exception_handler(RequestValidationError)
+async def htmx_validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Impede que erros 422 de formulário sejam engolidos silenciosamente pelo HTMX."""
+    _, key_status = diagnosticar_chave_groq()
+    msg = (
+        f"🚨 Erro de Validação de Formulário (422 capturado):\n"
+        f"• Chave detectada (GROQ_API_KEY): {key_status}\n"
+        f"• Tipo: {type(exc).__name__}\n"
+        f"• Detalhes: {exc.errors()}"
+    )
+    box = (
+        f'<div role="alert" class="bg-red-100 border border-red-400 text-red-800 p-4 rounded-lg text-xs font-mono whitespace-pre-wrap">'
+        f"{html.escape(msg)}</div>"
+    )
+    return HTMLResponse(content=box, status_code=200)
+
+
 # ============================================================================
-# PÁGINA PRINCIPAL (SUPORTA GET E HEAD PARA EVITAR 405 EM CHECKS DE STATUS)
+# PÁGINA PRINCIPAL & DIAGNÓSTICO GROQ (/api/groq/ping)
 # ============================================================================
 @app.api_route("/health", methods=["GET", "HEAD"], response_class=JSONResponse)
 async def healthcheck():
     return {"status": "ok"}
+
+
+@app.get("/api/groq/ping")
+async def api_groq_ping(request: Request, format: Optional[str] = Query(default=None)):
+    """
+    Endpoint de diagnóstico rápido da Groq API:
+    Testa instanciar o cliente Groq e envia 'Responda apenas: OK' usando 'llama-3.3-70b-versatile'.
+    """
+    info = ping_groq()
+    accept = request.headers.get("accept", "")
+    is_htmx = request.headers.get("HX-Request") == "true"
+
+    if format == "json" or ("application/json" in accept and not is_htmx):
+        return JSONResponse(content=info, status_code=200)
+
+    if info["ok"]:
+        texto = (
+            f"✅ CONEXÃO GROQ OK ({info['elapsed_ms']} ms)\n"
+            f"• Chave detectada: {info['key_detected']}\n"
+            f"• Modelo de ping testado: {info['model_tested']} -> Resposta: {info['response']!r}\n"
+            f"• Modelo de texto configurado (GROQ_MODEL_TEXT): {info['configured_text_model']}\n"
+            f"• Modelo de visão configurado (GROQ_MODEL_VISION): {info['configured_vision_model']}"
+        )
+        html_box = (
+            f'<div role="status" class="bg-emerald-100 border border-emerald-400 text-emerald-900 p-4 rounded-lg text-xs font-mono whitespace-pre-wrap">'
+            f"{html.escape(texto)}</div>"
+        )
+    else:
+        texto = (
+            f"❌ FALHA NO TESTE GROQ ({info['elapsed_ms']} ms)\n"
+            f"• Chave detectada: {info['key_detected']}\n"
+            f"• Modelo de ping testado: {info['model_tested']}\n"
+            f"• Modelo de texto configurado (GROQ_MODEL_TEXT): {info['configured_text_model']}\n"
+            f"• Modelo de visão configurado (GROQ_MODEL_VISION): {info['configured_vision_model']}\n"
+            f"• Erro: {info['error']}"
+        )
+        if info.get("traceback"):
+            texto += f"\n\n--- Traceback ---\n{info['traceback']}"
+        html_box = (
+            f'<div role="alert" class="bg-red-100 border border-red-400 text-red-800 p-4 rounded-lg text-xs font-mono whitespace-pre-wrap">'
+            f"{html.escape(texto)}</div>"
+        )
+
+    return HTMLResponse(content=html_box, status_code=200)
 
 
 @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
@@ -414,25 +485,36 @@ async def partial_consumo_get(request: Request, data: Optional[str] = Query(defa
 
 
 @app.post("/partials/consumo", response_class=HTMLResponse)
-async def partial_consumo_post(
-    request: Request,
-    texto_input: str = Form(default=""),
-    data_consumo: Optional[str] = Form(default=None),
-    foto_prato: Optional[UploadFile] = File(default=None),
-):
-    data_alvo = _parse_date(data_consumo)
+async def partial_consumo_post(request: Request):
+    """
+    Processa o formulário de alimentação lendo request.form() diretamente dentro de um
+    bloco try/except abrangente (evitando erro 422 de UploadFile vazio no FastAPI) e
+    retornando sempre HTTP 200 com caixa vermelha de diagnóstico caso ocorra qualquer erro.
+    """
+    data_alvo = get_now_br().date()
     ai_feedback: Optional[str] = None
     ai_error: Optional[str] = None
 
     try:
+        form = await request.form()
+        texto_input = str(form.get("texto_input") or "").strip()
+        data_consumo = str(form.get("data_consumo") or "").strip() or None
+        data_alvo = _parse_date(data_consumo)
+
+        foto_field = form.get("foto_prato")
         imagem_bytes: Optional[bytes] = None
-        if foto_prato and foto_prato.filename:
-            raw_bytes = await foto_prato.read()
+        if isinstance(foto_field, StarletteUploadFile) and foto_field.filename:
+            raw_bytes = await foto_field.read()
             if raw_bytes:
                 imagem_bytes = raw_bytes
 
-        if not (texto_input and texto_input.strip()) and not imagem_bytes:
-            ai_error = "Digite o que comeu, envie uma foto do prato/rótulo ou cole diretamente o JSON."
+        if not texto_input and not imagem_bytes:
+            _, key_status = diagnosticar_chave_groq()
+            ai_error = formatar_erro_diagnostico_groq(
+                erro_titulo="Nenhum texto ou imagem foi recebido no formulário.",
+                key_status=key_status,
+                modelo=GROQ_MODEL_TEXT,
+            )
         else:
             # 1. Bypass opcional da IA se o usuário colou um JSON diretamente ({...} ou [...])
             is_direct_json = False
@@ -445,14 +527,20 @@ async def partial_consumo_post(
 
             if is_direct_json:
                 if direct_err or not direct_payload:
-                    ai_error = direct_err or "Falha ao validar o JSON colado."
+                    _, key_status = diagnosticar_chave_groq()
+                    ai_error = formatar_erro_diagnostico_groq(
+                        erro_titulo=direct_err or "Falha ao validar o JSON colado.",
+                        key_status=key_status,
+                        modelo="Bypass JSON Direto",
+                        raw_response=texto_input,
+                    )
                 else:
                     alimentos = direct_payload.get("alimentos") or []
                     qtd = inserir_alimentos_consumo(alimentos, data_padrao=data_alvo)
                     analise_txt = direct_payload.get("analise") or "📦 JSON registrado diretamente!"
                     ai_feedback = f"{analise_txt} ({qtd} alimento(s) salvo(s))"
             else:
-                # 2. Chamada à API da Groq (texto ou imagem) com extração regex resiliente
+                # 2. Chamada à API da Groq (texto ou imagem)
                 ok, resultado = analisar_refeicao_groq(
                     texto_usuario=texto_input,
                     data_ref=data_alvo,
@@ -464,17 +552,44 @@ async def partial_consumo_post(
                     payload = resultado if isinstance(resultado, dict) else {}
                     alimentos = payload.get("alimentos") or []
                     if not alimentos:
-                        ai_error = f"A análise não retornou alimentos válidos. Resposta: {payload}"
+                        _, key_status = diagnosticar_chave_groq()
+                        ai_error = formatar_erro_diagnostico_groq(
+                            erro_titulo="A análise não retornou itens na lista 'alimentos'.",
+                            key_status=key_status,
+                            modelo=GROQ_MODEL_VISION if imagem_bytes else GROQ_MODEL_TEXT,
+                            raw_response=str(payload),
+                        )
                     else:
                         qtd = inserir_alimentos_consumo(alimentos, data_padrao=data_alvo)
                         analise_txt = payload.get("analise") or "Refeição processada!"
                         ai_feedback = f"{analise_txt} ({qtd} alimento(s) salvo(s))"
-    except Exception as ex:
-        ai_error = f"Erro: {str(ex)}"
+    except Exception as e:
+        _, key_status = diagnosticar_chave_groq()
+        tb_str = traceback.format_exc()
+        ai_error = formatar_erro_diagnostico_groq(
+            erro_titulo=f"{type(e).__name__}: {str(e)}",
+            key_status=key_status,
+            modelo=GROQ_MODEL_TEXT,
+            exc=e,
+            tb_str=tb_str,
+        )
 
-    ctx = _build_base_context(data_alvo, ai_feedback=ai_feedback, ai_error=ai_error)
-    ctx["include_summary_oob"] = True
-    return _render_template(request, "partials/meals_list.html", ctx)
+    try:
+        ctx = _build_base_context(data_alvo, ai_feedback=ai_feedback, ai_error=ai_error)
+        ctx["include_summary_oob"] = True
+        return _render_template(request, "partials/meals_list.html", ctx)
+    except Exception as render_exc:
+        tb_str = traceback.format_exc()
+        fallback_msg = (
+            f"{ai_error or ''}\n\n"
+            f"Erro adicional ao renderizar template ({type(render_exc).__name__}): {render_exc}\n{tb_str}"
+        ).strip()
+        box = (
+            f'<div id="meals-section">'
+            f'<div role="alert" class="bg-red-100 border border-red-400 text-red-800 p-4 rounded-lg text-xs font-mono whitespace-pre-wrap">'
+            f"{html.escape(fallback_msg)}</div></div>"
+        )
+        return HTMLResponse(content=box, status_code=200)
 
 
 @app.delete("/partials/consumo/{consumo_id}", response_class=HTMLResponse)

@@ -18,15 +18,7 @@
     {% endif %}
 
     {% if ai_error %}
-    <aside role="alert" class="rounded-2xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200 shadow-sm">
-        <div class="flex items-start gap-2.5">
-            <span class="text-lg">⚠️</span>
-            <div>
-                <p class="font-bold text-rose-300 text-xs uppercase tracking-wider">Falha ao Processar Refeição</p>
-                <p class="mt-1 text-rose-100">{{ ai_error }}</p>
-            </div>
-        </div>
-    </aside>
+    <div role="alert" class="bg-red-100 border border-red-400 text-red-800 p-4 rounded-lg text-xs font-mono whitespace-pre-wrap">{{ ai_error }}</div>
     {% endif %}
 
     <!-- Lista de Alimentos Consumidos na Data Selecionada -->

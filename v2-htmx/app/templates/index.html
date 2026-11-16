@@ -128,17 +128,35 @@
                             Digite o que comeu, envie uma foto do prato/rótulo ou cole diretamente o JSON.
                         </p>
                     </div>
-                    <span class="text-[11px] font-mono bg-slate-800 text-slate-300 px-2.5 py-1 rounded-md border border-slate-700">
-                        Groq · gpt-oss-120b / qwen3.8-27b
-                    </span>
+                    <div class="flex items-center gap-2">
+                        <button
+                            type="button"
+                            hx-get="/api/groq/ping"
+                            hx-target="#groq-ping-container"
+                            hx-swap="innerHTML"
+                            hx-indicator="#groq-ping-indicator"
+                            class="text-[11px] font-semibold bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 px-2.5 py-1 rounded-md border border-indigo-500/30 transition flex items-center gap-1.5"
+                            title="Testar conexão com a API do Groq (llama-3.3-70b-versatile)"
+                        >
+                            <span>🩺 Testar Groq</span>
+                            <span id="groq-ping-indicator" class="htmx-indicator animate-spin">⏳</span>
+                        </button>
+                        <span class="text-[11px] font-mono bg-slate-800 text-slate-300 px-2.5 py-1 rounded-md border border-slate-700">
+                            Groq IA
+                        </span>
+                    </div>
                 </div>
+
+                <!-- Container de diagnóstico rápido (/api/groq/ping) -->
+                <div id="groq-ping-container" class="mb-3 empty:hidden"></div>
 
                 <form
                     hx-post="/partials/consumo"
                     hx-encoding="multipart/form-data"
                     hx-target="#meals-section"
                     hx-swap="outerHTML"
-                    hx-on::after-request="if(event.detail.successful) { this.querySelector('textarea').value = ''; this.querySelector('input[type=file]').value = ''; }"
+                    hx-indicator="#groq-loading-indicator"
+                    hx-on::after-request="if(event.detail.successful && !document.querySelector('#meals-section [role=alert]')) { this.querySelector('textarea').value = ''; this.querySelector('input[type=file]').value = ''; }"
                     class="space-y-3"
                 >
                     <input type="hidden" name="data_consumo" class="sync-date-input" value="{{ data_alvo.strftime('%Y-%m-%d') }}" />
@@ -173,12 +191,12 @@
                             class="rounded-xl bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-semibold text-sm px-5 py-2.5 transition flex items-center justify-center gap-2 shadow-md shrink-0"
                         >
                             <span>🚀 Processar Alimentação</span>
-                            <span class="htmx-indicator inline-flex items-center gap-1 text-xs font-normal text-emerald-100">
+                            <span id="groq-loading-indicator" class="htmx-indicator inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-100">
                                 <svg class="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
                                 </svg>
-                                Processando...
+                                Analisando com Groq...
                             </span>
                         </button>
                     </div>

@@ -3,11 +3,120 @@ import io
 import json
 import os
 import re
+import time
+import traceback
 from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 from groq import Groq
 from PIL import Image
 from app.config import GROQ_API_KEY, GROQ_MODEL_TEXT, GROQ_MODEL_VISION, get_now_br
+
+
+def diagnosticar_chave_groq(api_key: Optional[str] = None) -> Tuple[str, str]:
+    """
+    Retorna (clean_key, descricao_status_chave) sem expor o segredo completo.
+    Ex: ('gsk_...', 'Sim (inicia com gsk_abcd..., 56 chars)') ou ('', 'Não (vazia ou ausente no ambiente)')
+    """
+    raw_key = api_key or os.getenv("GROQ_API_KEY") or GROQ_API_KEY or ""
+    clean_key = raw_key.strip().strip('"').strip("'").strip()
+    if not clean_key:
+        return "", "Não (variável GROQ_API_KEY vazia ou ausente no ambiente)"
+    prefixo = clean_key[:8] if len(clean_key) >= 8 else clean_key[:4]
+    return clean_key, f"Sim (inicia com {prefixo}..., {len(clean_key)} caracteres)"
+
+
+def formatar_erro_diagnostico_groq(
+    erro_titulo: str,
+    key_status: str,
+    modelo: str,
+    exc: Optional[BaseException] = None,
+    tb_str: Optional[str] = None,
+    raw_response: Optional[str] = None,
+) -> str:
+    """Monta texto detalhado de diagnóstico para exibição na caixa vermelha do frontend."""
+    linhas = [
+        f"🚨 DIAGNÓSTICO GROQ API",
+        f"• Chave detectada (GROQ_API_KEY): {key_status}",
+        f"• Modelo configurado na chamada: {modelo}",
+    ]
+    if exc is not None:
+        linhas.append(f"• Exceção ({type(exc).__name__}): {str(exc)}")
+    else:
+        linhas.append(f"• Detalhe do erro: {erro_titulo}")
+
+    if raw_response:
+        preview = raw_response[:400]
+        linhas.append(f"\n--- Texto bruto retornado pela API (primeiros 400 chars) ---\n{preview}")
+
+    if tb_str:
+        tb_resumido = "\n".join(tb_str.strip().splitlines()[-10:])
+        linhas.append(f"\n--- Traceback resumido ---\n{tb_resumido}")
+
+    return "\n".join(linhas)
+
+
+def ping_groq() -> Dict[str, Any]:
+    """
+    Testa instanciar o cliente Groq e envia um prompt mínimo ('Responda apenas: OK')
+    usando 'llama-3.3-70b-versatile' para diagnóstico rápido (/api/groq/ping).
+    """
+    clean_key, key_status = diagnosticar_chave_groq()
+    modelo_teste = "llama-3.3-70b-versatile"
+    modelo_texto_env = (os.getenv("GROQ_MODEL_TEXT") or GROQ_MODEL_TEXT or "openai/gpt-oss-120b").strip().strip('"').strip("'")
+    modelo_vision_env = (os.getenv("GROQ_MODEL_VISION") or GROQ_MODEL_VISION or "qwen/qwen3.8-27b").strip().strip('"').strip("'")
+
+    t0 = time.perf_counter()
+    if not clean_key:
+        return {
+            "ok": False,
+            "status": "ERRO",
+            "key_detected": key_status,
+            "model_tested": modelo_teste,
+            "configured_text_model": modelo_texto_env,
+            "configured_vision_model": modelo_vision_env,
+            "elapsed_ms": 0,
+            "response": None,
+            "error": "GROQ_API_KEY não encontrada no ambiente.",
+            "traceback": None,
+        }
+
+    try:
+        client = Groq(api_key=clean_key)
+        completion = client.chat.completions.create(
+            messages=[{"role": "user", "content": "Responda apenas: OK"}],
+            model=modelo_teste,
+            temperature=0.0,
+            max_tokens=16,
+        )
+        elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        resposta = (completion.choices[0].message.content or "").strip()
+        return {
+            "ok": True,
+            "status": "OK",
+            "key_detected": key_status,
+            "model_tested": modelo_teste,
+            "configured_text_model": modelo_texto_env,
+            "configured_vision_model": modelo_vision_env,
+            "elapsed_ms": elapsed_ms,
+            "response": resposta,
+            "error": None,
+            "traceback": None,
+        }
+    except Exception as e:
+        elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        tb = traceback.format_exc()
+        return {
+            "ok": False,
+            "status": "ERRO",
+            "key_detected": key_status,
+            "model_tested": modelo_teste,
+            "configured_text_model": modelo_texto_env,
+            "configured_vision_model": modelo_vision_env,
+            "elapsed_ms": elapsed_ms,
+            "response": None,
+            "error": f"{type(e).__name__}: {str(e)}",
+            "traceback": "\n".join(tb.strip().splitlines()[-10:]),
+        }
 
 
 def otimizar_imagem_base64(imagem_bytes: bytes, max_dim: int = 1024, quality: int = 85) -> str:
@@ -88,10 +197,8 @@ def extrair_e_parsear_json(
     if not raw:
         return False, "Erro de parsing JSON: resposta vazia do modelo."
 
-    # Remove cercas markdown ```json ... ```
     sem_cercas = re.sub(r"```(?:json)?", "", raw, flags=re.IGNORECASE).replace("```", "").strip()
 
-    # Extrai bloco JSON via regex com re.DOTALL
     match_obj = re.search(r"\{.*\}", sem_cercas, re.DOTALL)
     if match_obj:
         candidato = match_obj.group(0).strip()
@@ -105,8 +212,8 @@ def extrair_e_parsear_json(
         preview = raw[:200].replace("\n", " ")
         return (
             False,
-            f"Falha ao decodificar JSON ({je.msg} na pos {je.pos}). "
-            f"Primeiros 200 caracteres retornados: {preview!r}",
+            f"json.JSONDecodeError: {je.msg} (pos {je.pos}). "
+            f"Primeiros 200 caracteres: {preview!r}",
         )
 
     payload = normalizar_payload_nutricional(parsed, data_padrao_str, analise_padrao=analise_padrao)
@@ -126,10 +233,6 @@ def tentar_parse_json_direto(
     """
     Verifica se o texto enviado pelo usuário é um JSON colado diretamente
     (começa com '{' e termina com '}', ou começa com '[' e termina com ']').
-    Retorna:
-      - (True, payload_dict, None) se for um JSON válido com 'alimentos'
-      - (True, None, mensagem_erro) se começar com '{' e terminar com '}', mas falhar no parsing/validação
-      - (False, None, None) se for texto natural comum (deve seguir para a IA Groq)
     """
     if not texto_usuario:
         return False, None, None
@@ -160,7 +263,7 @@ def processar_texto_ia(
 ) -> Tuple[bool, Dict[str, Any] | str]:
     """
     Processa descrição alimentar (texto livre, JSON direto ou imagem) usando o SDK da Groq
-    com extração resiliente via regex e tratamento explícito de json.JSONDecodeError.
+    e retorna diagnóstico completo em caso de falha.
     """
     data_hoje_str = (data_ref or get_now_br().date()).strftime("%Y-%m-%d")
 
@@ -169,15 +272,25 @@ def processar_texto_ia(
         if is_direct_json:
             if direct_payload is not None:
                 return True, direct_payload
-            return False, direct_err or "JSON direto inválido."
+            _, key_status = diagnosticar_chave_groq(api_key)
+            return False, formatar_erro_diagnostico_groq(
+                erro_titulo=direct_err or "JSON direto inválido",
+                key_status=key_status,
+                modelo="Bypass JSON Direto (sem chamada à IA)",
+                raw_response=texto_usuario,
+            )
 
-    raw_key = api_key or os.getenv("GROQ_API_KEY") or GROQ_API_KEY or ""
-    clean_key = raw_key.strip().strip('"').strip("'").strip()
-    if not clean_key:
-        return False, "Erro: GROQ_API_KEY não configurada nas variáveis de ambiente (.env / Vercel)!"
-
+    clean_key, key_status = diagnosticar_chave_groq(api_key)
     model_text = (os.getenv("GROQ_MODEL_TEXT") or GROQ_MODEL_TEXT or "openai/gpt-oss-120b").strip().strip('"').strip("'")
     model_vision = (os.getenv("GROQ_MODEL_VISION") or GROQ_MODEL_VISION or "qwen/qwen3.8-27b").strip().strip('"').strip("'")
+    modelo_ativo = model_vision if imagem_bytes is not None else model_text
+
+    if not clean_key:
+        return False, formatar_erro_diagnostico_groq(
+            erro_titulo="GROQ_API_KEY não configurada!",
+            key_status=key_status,
+            modelo=modelo_ativo,
+        )
 
     prompt_system = f"""
 Aja como Nutricionista Matemático. Hoje: {data_hoje_str}.
@@ -251,7 +364,6 @@ SAÍDA: Retorne APENAS um objeto JSON válido (sem texto fora do JSON e sem bloc
         try:
             completion = client.chat.completions.create(**kwargs)
         except Exception as call_err:
-            # Fallback resiliente se o modelo não suportar reasoning_effort ou response_format json_object
             err_msg = str(call_err).lower()
             if "reasoning_effort" in err_msg or "response_format" in err_msg or isinstance(call_err, TypeError):
                 kwargs.pop("reasoning_effort", None)
@@ -262,12 +374,25 @@ SAÍDA: Retorne APENAS um objeto JSON válido (sem texto fora do JSON e sem bloc
                 raise
 
         raw_response = completion.choices[0].message.content or ""
-        return extrair_e_parsear_json(raw_response, data_padrao_str=data_hoje_str)
+        ok_parse, resultado_parse = extrair_e_parsear_json(raw_response, data_padrao_str=data_hoje_str)
+        if not ok_parse:
+            return False, formatar_erro_diagnostico_groq(
+                erro_titulo=str(resultado_parse),
+                key_status=key_status,
+                modelo=modelo_ativo,
+                raw_response=raw_response,
+            )
+        return True, resultado_parse
     except Exception as ex:
-        if raw_response:
-            preview = raw_response[:200].replace("\n", " ")
-            return False, f"Erro: {str(ex)} | Resposta bruta (200 chars): {preview!r}"
-        return False, f"Erro: {str(ex)}"
+        tb_str = traceback.format_exc()
+        return False, formatar_erro_diagnostico_groq(
+            erro_titulo=f"{type(ex).__name__}: {str(ex)}",
+            key_status=key_status,
+            modelo=modelo_ativo,
+            exc=ex,
+            tb_str=tb_str,
+            raw_response=raw_response,
+        )
 
 
 def analisar_refeicao_groq(
