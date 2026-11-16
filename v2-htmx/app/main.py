@@ -19,7 +19,7 @@ if str(BASE_DIR) not in sys.path:
 
 from app.config import APP_PASSWORD, APP_USER, get_now_br
 from app.database import get_engine
-from app.services.groq_service import analisar_refeicao_groq
+from app.services.groq_service import analisar_refeicao_groq, tentar_parse_json_direto
 from app.services.intervals_service import sincronizar_treinos_recentes
 from app.services.tracker_repo import (
     DEFAULT_METAS,
@@ -434,22 +434,41 @@ async def partial_consumo_post(
         if not (texto_input and texto_input.strip()) and not imagem_bytes:
             ai_error = "Digite o que comeu, envie uma foto do prato/rótulo ou cole diretamente o JSON."
         else:
-            ok, resultado = analisar_refeicao_groq(
-                texto_usuario=texto_input,
-                data_ref=data_alvo,
-                imagem_bytes=imagem_bytes,
-            )
-            if not ok:
-                ai_error = str(resultado)
-            else:
-                payload = resultado if isinstance(resultado, dict) else {}
-                alimentos = payload.get("alimentos") or []
-                if not alimentos:
-                    ai_error = f"A análise não retornou alimentos válidos. Resposta: {payload}"
+            # 1. Bypass opcional da IA se o usuário colou um JSON diretamente ({...} ou [...])
+            is_direct_json = False
+            direct_payload = None
+            direct_err = None
+            if texto_input and not imagem_bytes:
+                is_direct_json, direct_payload, direct_err = tentar_parse_json_direto(
+                    texto_input, data_ref=data_alvo
+                )
+
+            if is_direct_json:
+                if direct_err or not direct_payload:
+                    ai_error = direct_err or "Falha ao validar o JSON colado."
                 else:
+                    alimentos = direct_payload.get("alimentos") or []
                     qtd = inserir_alimentos_consumo(alimentos, data_padrao=data_alvo)
-                    analise_txt = payload.get("analise") or "Refeição processada!"
+                    analise_txt = direct_payload.get("analise") or "📦 JSON registrado diretamente!"
                     ai_feedback = f"{analise_txt} ({qtd} alimento(s) salvo(s))"
+            else:
+                # 2. Chamada à API da Groq (texto ou imagem) com extração regex resiliente
+                ok, resultado = analisar_refeicao_groq(
+                    texto_usuario=texto_input,
+                    data_ref=data_alvo,
+                    imagem_bytes=imagem_bytes,
+                )
+                if not ok:
+                    ai_error = str(resultado)
+                else:
+                    payload = resultado if isinstance(resultado, dict) else {}
+                    alimentos = payload.get("alimentos") or []
+                    if not alimentos:
+                        ai_error = f"A análise não retornou alimentos válidos. Resposta: {payload}"
+                    else:
+                        qtd = inserir_alimentos_consumo(alimentos, data_padrao=data_alvo)
+                        analise_txt = payload.get("analise") or "Refeição processada!"
+                        ai_feedback = f"{analise_txt} ({qtd} alimento(s) salvo(s))"
     except Exception as ex:
         ai_error = f"Erro: {str(ex)}"
 

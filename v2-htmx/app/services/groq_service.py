@@ -2,8 +2,9 @@ import base64
 import io
 import json
 import os
+import re
 from datetime import date
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from groq import Groq
 from PIL import Image
 from app.config import GROQ_API_KEY, GROQ_MODEL_TEXT, GROQ_MODEL_VISION, get_now_br
@@ -20,30 +21,135 @@ def otimizar_imagem_base64(imagem_bytes: bytes, max_dim: int = 1024, quality: in
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
-def tentar_parse_json_direto(texto_usuario: str) -> Optional[Dict[str, Any]]:
+def normalizar_item_alimento(item: Dict[str, Any], data_padrao_str: str) -> Dict[str, Any]:
+    """Garante que todas as chaves estruturadas de macros e micronutrientes existam com tipos válidos."""
+    def _to_float(val: Any, default: float = 0.0) -> float:
+        if val is None or val == "":
+            return default
+        try:
+            if isinstance(val, str):
+                val = val.replace(",", ".").strip()
+            return float(val)
+        except Exception:
+            return default
+
+    return {
+        "data": str(item.get("data") or data_padrao_str).strip(),
+        "alimento": str(item.get("alimento") or item.get("nome") or "Alimento").strip(),
+        "quantidade_g": _to_float(item.get("quantidade_g", item.get("quantidade", 0))),
+        "kcal": _to_float(item.get("kcal", item.get("calorias", 0))),
+        "p": _to_float(item.get("p", item.get("proteina", 0))),
+        "c": _to_float(item.get("c", item.get("carbo", item.get("carboidrato", 0)))),
+        "g": _to_float(item.get("g", item.get("gordura", item.get("lipideos", 0)))),
+        "gluten": str(item.get("gluten") or "Não informado").strip(),
+        "ferro_mg": _to_float(item.get("ferro_mg", item.get("ferro", 0))),
+        "b12_mcg": _to_float(item.get("b12_mcg", item.get("b12", 0))),
+        "zinco_mg": _to_float(item.get("zinco_mg", item.get("zinco", 0))),
+        "magnesio_mg": _to_float(item.get("magnesio_mg", item.get("magnesio", 0))),
+    }
+
+
+def normalizar_payload_nutricional(
+    content: Any, data_padrao_str: str, analise_padrao: str = "Refeição processada com sucesso."
+) -> Dict[str, Any]:
+    """Valida e padroniza o dicionário final com as chaves 'analise' e 'alimentos'."""
+    if isinstance(content, list):
+        lista_bruta = content
+        analise = analise_padrao
+    elif isinstance(content, dict):
+        analise = str(content.get("analise") or analise_padrao).strip()
+        if "alimentos" in content and isinstance(content["alimentos"], list):
+            lista_bruta = content["alimentos"]
+        elif any(k in content for k in ("alimento", "nome", "kcal", "p", "proteina")):
+            lista_bruta = [content]
+        else:
+            lista_bruta = []
+    else:
+        lista_bruta = []
+        analise = analise_padrao
+
+    alimentos_norm: List[Dict[str, Any]] = [
+        normalizar_item_alimento(it, data_padrao_str)
+        for it in lista_bruta
+        if isinstance(it, dict)
+    ]
+    return {"analise": analise, "alimentos": alimentos_norm}
+
+
+def extrair_e_parsear_json(
+    texto_bruto: str, data_padrao_str: str, analise_padrao: str = "Refeição processada com sucesso."
+) -> Tuple[bool, Dict[str, Any] | str]:
     """
-    Verifica se o usuário colou diretamente um JSON estruturado (lista ou objeto),
-    mantendo compatibilidade com o fluxo original do @app.py.
+    Sanitiza cercas Markdown (```json e ```), extrai o bloco JSON via regex
+    re.search(r"\\{.*\\}", texto, re.DOTALL) e executa json.loads() com captura
+    de json.JSONDecodeError exibindo os primeiros 200 caracteres da resposta bruta.
+    """
+    raw = (texto_bruto or "").strip()
+    if not raw:
+        return False, "Erro de parsing JSON: resposta vazia do modelo."
+
+    # Remove cercas markdown ```json ... ```
+    sem_cercas = re.sub(r"```(?:json)?", "", raw, flags=re.IGNORECASE).replace("```", "").strip()
+
+    # Extrai bloco JSON via regex com re.DOTALL
+    match_obj = re.search(r"\{.*\}", sem_cercas, re.DOTALL)
+    if match_obj:
+        candidato = match_obj.group(0).strip()
+    else:
+        match_arr = re.search(r"\[.*\]", sem_cercas, re.DOTALL)
+        candidato = match_arr.group(0).strip() if match_arr else sem_cercas
+
+    try:
+        parsed = json.loads(candidato)
+    except json.JSONDecodeError as je:
+        preview = raw[:200].replace("\n", " ")
+        return (
+            False,
+            f"Falha ao decodificar JSON ({je.msg} na pos {je.pos}). "
+            f"Primeiros 200 caracteres retornados: {preview!r}",
+        )
+
+    payload = normalizar_payload_nutricional(parsed, data_padrao_str, analise_padrao=analise_padrao)
+    if not payload.get("alimentos"):
+        preview = raw[:200].replace("\n", " ")
+        return (
+            False,
+            f"JSON válido, mas a lista 'alimentos' está vazia ou ausente. "
+            f"Primeiros 200 caracteres: {preview!r}",
+        )
+    return True, payload
+
+
+def tentar_parse_json_direto(
+    texto_usuario: str, data_ref: Optional[date] = None
+) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
+    """
+    Verifica se o texto enviado pelo usuário é um JSON colado diretamente
+    (começa com '{' e termina com '}', ou começa com '[' e termina com ']').
+    Retorna:
+      - (True, payload_dict, None) se for um JSON válido com 'alimentos'
+      - (True, None, mensagem_erro) se começar com '{' e terminar com '}', mas falhar no parsing/validação
+      - (False, None, None) se for texto natural comum (deve seguir para a IA Groq)
     """
     if not texto_usuario:
-        return None
-    cleaned = texto_usuario.replace("```json", "").replace("```", "").strip()
-    s, e = cleaned.find("["), cleaned.rfind("]")
-    if s == -1 and cleaned.startswith("{"):
-        s, e = cleaned.find("{"), cleaned.rfind("}")
-    if s == -1 or e == -1:
-        return None
-    try:
-        parsed = json.loads(cleaned[s : e + 1])
-        if isinstance(parsed, list):
-            return {"analise": "JSON importado diretamente.", "alimentos": parsed}
-        if isinstance(parsed, dict):
-            if "alimentos" in parsed and isinstance(parsed["alimentos"], list):
-                return parsed
-            return {"analise": "Item JSON importado diretamente.", "alimentos": [parsed]}
-    except Exception:
-        return None
-    return None
+        return False, None, None
+
+    cleaned = re.sub(r"```(?:json)?", "", texto_usuario, flags=re.IGNORECASE).replace("```", "").strip()
+    is_json_obj = cleaned.startswith("{") and cleaned.endswith("}")
+    is_json_arr = cleaned.startswith("[") and cleaned.endswith("]")
+
+    if not (is_json_obj or is_json_arr):
+        return False, None, None
+
+    data_hoje_str = (data_ref or get_now_br().date()).strftime("%Y-%m-%d")
+    ok, res = extrair_e_parsear_json(
+        cleaned,
+        data_padrao_str=data_hoje_str,
+        analise_padrao="📦 JSON importado diretamente (bypass da API Groq).",
+    )
+    if ok and isinstance(res, dict):
+        return True, res, None
+    return True, None, str(res)
 
 
 def processar_texto_ia(
@@ -53,13 +159,17 @@ def processar_texto_ia(
     data_ref: Optional[date] = None,
 ) -> Tuple[bool, Dict[str, Any] | str]:
     """
-    Função equivalente a processar_texto_ia de @app.py, com limpeza de GROQ_API_KEY
-    e captura explícita de qualquer exceção para exibição na interface HTMX.
+    Processa descrição alimentar (texto livre, JSON direto ou imagem) usando o SDK da Groq
+    com extração resiliente via regex e tratamento explícito de json.JSONDecodeError.
     """
+    data_hoje_str = (data_ref or get_now_br().date()).strftime("%Y-%m-%d")
+
     if texto_usuario and not imagem_bytes:
-        direto = tentar_parse_json_direto(texto_usuario)
-        if direto is not None:
-            return True, direto
+        is_direct_json, direct_payload, direct_err = tentar_parse_json_direto(texto_usuario, data_ref=data_ref)
+        if is_direct_json:
+            if direct_payload is not None:
+                return True, direct_payload
+            return False, direct_err or "JSON direto inválido."
 
     raw_key = api_key or os.getenv("GROQ_API_KEY") or GROQ_API_KEY or ""
     clean_key = raw_key.strip().strip('"').strip("'").strip()
@@ -69,8 +179,6 @@ def processar_texto_ia(
     model_text = (os.getenv("GROQ_MODEL_TEXT") or GROQ_MODEL_TEXT or "openai/gpt-oss-120b").strip().strip('"').strip("'")
     model_vision = (os.getenv("GROQ_MODEL_VISION") or GROQ_MODEL_VISION or "qwen/qwen3.8-27b").strip().strip('"').strip("'")
 
-    data_hoje_str = (data_ref or get_now_br().date()).strftime("%Y-%m-%d")
-
     prompt_system = f"""
 Aja como Nutricionista Matemático. Hoje: {data_hoje_str}.
 DIRETRIZES:
@@ -79,12 +187,29 @@ DIRETRIZES:
 3. MULTIPLIQUE a densidade calórica padrão pelo peso estimado/informado.
 4. GORDURA OCULTA: Se for fritura/grelhado, adicione gordura extra.
 5. MICRONUTRIENTES: Estime Ferro, B12, Zinco e Magnésio por engenharia reversa.
-SAÍDA: Retorne APENAS JSON válido.
-Formato: {{"analise": "Texto curto", "alimentos": [{{"data": "YYYY-MM-DD", "alimento": "Nome",
-"quantidade_g": 0, "kcal": 0, "p": 0, "c": 0, "g": 0, "gluten": "txt",
-"ferro_mg": 0, "b12_mcg": 0, "zinco_mg": 0, "magnesio_mg": 0}}]}}
+SAÍDA: Retorne APENAS um objeto JSON válido (sem texto fora do JSON e sem blocos markdown), contendo EXATAMENTE estas chaves:
+{{
+  "analise": "Texto curto",
+  "alimentos": [
+    {{
+      "data": "{data_hoje_str}",
+      "alimento": "Nome",
+      "quantidade_g": 0,
+      "kcal": 0,
+      "p": 0,
+      "c": 0,
+      "g": 0,
+      "gluten": "txt",
+      "ferro_mg": 0,
+      "b12_mcg": 0,
+      "zinco_mg": 0,
+      "magnesio_mg": 0
+    }}
+  ]
+}}
 """.strip()
 
+    raw_response = ""
     try:
         client = Groq(api_key=clean_key)
 
@@ -93,7 +218,7 @@ Formato: {{"analise": "Texto curto", "alimentos": [{{"data": "YYYY-MM-DD", "alim
             texto_prompt = (
                 texto_usuario.strip()
                 if texto_usuario and texto_usuario.strip()
-                else "Analise visualmente esta refeição/rótulo e estime todos os alimentos, pesos em gramas, macros e micronutrientes."
+                else "Analise visualmente esta refeição/rótulo e estime todos os alimentos, pesos em gramas, macros e micronutrientes no formato JSON solicitado."
             )
             user_content = [
                 {"type": "text", "text": texto_prompt},
@@ -125,25 +250,23 @@ Formato: {{"analise": "Texto curto", "alimentos": [{{"data": "YYYY-MM-DD", "alim
 
         try:
             completion = client.chat.completions.create(**kwargs)
-        except TypeError:
-            # Fallback caso a versão do SDK não aceite reasoning_effort como argumento direto
-            kwargs.pop("reasoning_effort", None)
-            completion = client.chat.completions.create(**kwargs)
+        except Exception as call_err:
+            # Fallback resiliente se o modelo não suportar reasoning_effort ou response_format json_object
+            err_msg = str(call_err).lower()
+            if "reasoning_effort" in err_msg or "response_format" in err_msg or isinstance(call_err, TypeError):
+                kwargs.pop("reasoning_effort", None)
+                if "response_format" in err_msg:
+                    kwargs.pop("response_format", None)
+                completion = client.chat.completions.create(**kwargs)
+            else:
+                raise
 
-        raw = (
-            (completion.choices[0].message.content or "")
-            .replace("```json", "")
-            .replace("```", "")
-            .strip()
-        )
-        s, e = raw.find("{"), raw.rfind("}")
-        if s != -1 and e != -1:
-            raw = raw[s : e + 1]
-        content = json.loads(raw)
-        if isinstance(content, list):
-            content = {"analise": "Processado", "alimentos": content}
-        return True, content
+        raw_response = completion.choices[0].message.content or ""
+        return extrair_e_parsear_json(raw_response, data_padrao_str=data_hoje_str)
     except Exception as ex:
+        if raw_response:
+            preview = raw_response[:200].replace("\n", " ")
+            return False, f"Erro: {str(ex)} | Resposta bruta (200 chars): {preview!r}"
         return False, f"Erro: {str(ex)}"
 
 
