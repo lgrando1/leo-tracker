@@ -1,4 +1,15 @@
-<div id="weight-section" {% if oob_weight %}hx-swap-oob="true"{% endif %} class="space-y-4">
+<div
+    id="weight-section"
+    {% if oob_weight %}
+    hx-swap-oob="true"
+    {% else %}
+    hx-get="/partials/peso"
+    hx-include="#global-date-picker"
+    hx-trigger="refreshDashboard from:body"
+    hx-swap="outerHTML"
+    {% endif %}
+    class="space-y-4"
+>
     {% if include_summary_oob %}
         {% with oob=True %}
             {% include "partials/summary_cards.html" %}

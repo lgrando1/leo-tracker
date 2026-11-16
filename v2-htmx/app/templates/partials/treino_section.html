@@ -1,4 +1,11 @@
-<div id="treino-section" class="space-y-6">
+<div
+    id="treino-section"
+    hx-get="/partials/treino"
+    hx-include="#dt-treino-picker"
+    hx-trigger="refreshDashboard from:body"
+    hx-swap="outerHTML"
+    class="space-y-6"
+>
     <!-- Cabeçalho + Seletor de Data do Treino + Botão Sincronizar Intervals.icu -->
     <article class="rounded-2xl bg-slate-900 border border-slate-800 p-5 shadow-lg space-y-4">
         <div class="flex flex-wrap items-center justify-between gap-4">

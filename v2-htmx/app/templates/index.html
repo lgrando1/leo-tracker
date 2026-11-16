@@ -1,6 +1,20 @@
 {% extends "base.html" %}
 
 {% block content %}
+    <!-- Gatilho Automático de Sincronização com Intervals.icu (Peso/Wellness + Treinos) -->
+    <div class="flex items-center justify-end">
+        <div
+            id="intervals-sync-badge"
+            hx-post="/api/intervals/auto-sync"
+            hx-trigger="load"
+            hx-swap="outerHTML"
+            class="inline-flex items-center gap-2 rounded-lg bg-slate-800/80 border border-slate-700 px-3 py-1.5 text-xs text-slate-300"
+        >
+            <span class="animate-spin text-indigo-400">⏳</span>
+            <span>Sincronizando Intervals...</span>
+        </div>
+    </div>
+
     <!-- 1. Painel de Métricas do Dia e Status (Peso, Jejum, Calorias, Proteína, Carbo, Gordura e Micros) -->
     {% with oob=False %}
         {% include "partials/summary_cards.html" %}

@@ -1,6 +1,13 @@
 <section
     id="summary-cards"
-    {% if oob %}hx-swap-oob="true"{% endif %}
+    {% if oob %}
+    hx-swap-oob="true"
+    {% else %}
+    hx-get="/partials/summary"
+    hx-include="#global-date-picker"
+    hx-trigger="refreshDashboard from:body"
+    hx-swap="outerHTML"
+    {% endif %}
     aria-label="Status e Métricas do Dia"
     class="space-y-4"
 >

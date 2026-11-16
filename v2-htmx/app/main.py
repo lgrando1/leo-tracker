@@ -30,7 +30,10 @@ from app.services.groq_service import (
     ping_groq,
     tentar_parse_json_direto,
 )
-from app.services.intervals_service import sincronizar_treinos_recentes
+from app.services.intervals_service import (
+    sincronizar_peso_intervals,
+    sincronizar_treinos_recentes,
+)
 from app.services.tracker_repo import (
     DEFAULT_METAS,
     atualizar_metas,
@@ -319,6 +322,79 @@ async def api_groq_ping(request: Request, format: Optional[str] = Query(default=
         )
 
     return HTMLResponse(content=html_box, status_code=200)
+
+
+@app.post("/api/intervals/auto-sync", response_class=HTMLResponse)
+async def api_intervals_auto_sync(
+    request: Request,
+    force: Optional[int] = Query(default=0),
+):
+    """
+    Rota unificada de Auto-Sync com o Intervals.icu:
+    - Respeita cookie 'last_intervals_sync' (max_age=900 / 15 min), exceto quando force=1.
+    - Executa sincronizar_treinos_recentes() e sincronizar_peso_intervals() dentro de try/except seguro.
+    - Emite cabeçalho HX-Trigger: refreshDashboard quando houver novos dados ou sincronização forçada.
+    """
+    if not force:
+        try:
+            form = await request.form()
+            if str(form.get("force") or "") == "1":
+                force = 1
+        except Exception:
+            pass
+
+    cached = request.cookies.get("last_intervals_sync")
+    if cached and not force:
+        badge_cached = (
+            '<div id="intervals-sync-badge" class="inline-flex items-center gap-2 rounded-lg bg-slate-800/80 border border-slate-700 px-3 py-1.5 text-xs text-slate-300">'
+            '<span class="text-emerald-400 font-semibold">✓ Intervals sincronizado</span>'
+            '<button type="button" hx-post="/api/intervals/auto-sync?force=1" hx-target="#intervals-sync-badge" hx-swap="outerHTML" '
+            'class="text-slate-400 hover:text-white underline decoration-dotted ml-1" title="Forçar sincronização agora">↻</button>'
+            "</div>"
+        )
+        return HTMLResponse(content=badge_cached, status_code=200)
+
+    houve_atualizacao = False
+    status_texto = "✓ Intervals sincronizado (Peso e Treinos)"
+    cor_classe = "text-emerald-400"
+
+    try:
+        eng = get_engine()
+        ok_tr, msg_tr = sincronizar_treinos_recentes(engine=eng, dias_retroativos=7)
+        ok_pe, msg_pe, qtd_pe = sincronizar_peso_intervals(engine=eng, dias_retroativos=14)
+
+        if qtd_pe > 0 or (ok_tr and "processado(s)" in msg_tr) or force:
+            houve_atualizacao = True
+
+        if not ok_tr and not ok_pe:
+            status_texto = "⚠️ Intervals: verifique credenciais"
+            cor_classe = "text-amber-400"
+        elif qtd_pe > 0:
+            status_texto = f"✓ Intervals sincronizado (+{qtd_pe} peso(s) e treinos)"
+    except Exception as e:
+        status_texto = f"⚠️ Intervals offline ({type(e).__name__})"
+        cor_classe = "text-amber-400"
+
+    badge_html = (
+        '<div id="intervals-sync-badge" class="inline-flex items-center gap-2 rounded-lg bg-slate-800/80 border border-slate-700 px-3 py-1.5 text-xs text-slate-300">'
+        f'<span class="{cor_classe} font-semibold">{html.escape(status_texto)}</span>'
+        '<button type="button" hx-post="/api/intervals/auto-sync?force=1" hx-target="#intervals-sync-badge" hx-swap="outerHTML" '
+        'class="text-slate-400 hover:text-white underline decoration-dotted ml-1" title="Forçar nova sincronização">↻</button>'
+        "</div>"
+    )
+
+    headers: Dict[str, str] = {}
+    if houve_atualizacao:
+        headers["HX-Trigger"] = "refreshDashboard"
+
+    response = HTMLResponse(content=badge_html, status_code=200, headers=headers)
+    response.set_cookie(
+        key="last_intervals_sync",
+        value="1",
+        max_age=900,
+        samesite="lax",
+    )
+    return response
 
 
 # ============================================================================
@@ -643,7 +719,11 @@ async def partial_treino_sync(
 ):
     dt_tr = _parse_date(dt_alvo)
     try:
-        ok, msg = sincronizar_treinos_recentes(engine=get_engine(), dias_retroativos=7)
+        eng = get_engine()
+        ok_tr, msg_tr = sincronizar_treinos_recentes(engine=eng, dias_retroativos=7)
+        ok_pe, msg_pe, _ = sincronizar_peso_intervals(engine=eng, dias_retroativos=14)
+        ok = ok_tr or ok_pe
+        msg = f"{msg_tr} | {msg_pe}"
     except Exception as exc:
         ok, msg = False, f"Erro ao conectar com banco/Intervals.icu: {exc}"
     ctx = _build_base_context(
@@ -652,7 +732,9 @@ async def partial_treino_sync(
         treino_feedback=msg if ok else None,
         treino_error=None if ok else msg,
     )
-    return _render_template(request, "partials/treino_section.html", ctx)
+    resp = _render_template(request, "partials/treino_section.html", ctx)
+    resp.headers["HX-Trigger"] = "refreshDashboard"
+    return resp
 
 
 @app.delete("/partials/treino/{exercicio_id}", response_class=HTMLResponse)

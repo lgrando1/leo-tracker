@@ -1,10 +1,21 @@
+import os
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 import requests
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
-from app.config import INTERVALS_API_KEY, INTERVALS_ATHLETE_ID
+from app.config import INTERVALS_API_KEY, INTERVALS_ATHLETE_ID, get_now_br
 from app.database import get_engine
+
+
+def _get_intervals_creds() -> Tuple[str, str]:
+    api_key = (
+        os.getenv("INTERVALS_API_KEY") or INTERVALS_API_KEY or ""
+    ).strip().strip('"').strip("'").strip()
+    athlete_id = (
+        os.getenv("INTERVALS_ATHLETE_ID") or INTERVALS_ATHLETE_ID or ""
+    ).strip().strip('"').strip("'").strip()
+    return api_key, athlete_id
 
 
 def conectar_intervals(dias_retroativos: int = 7) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
@@ -12,25 +23,26 @@ def conectar_intervals(dias_retroativos: int = 7) -> Tuple[Optional[List[Dict[st
     Busca atividades dos últimos N dias na API do Intervals.icu,
     reproduzindo a função conectar_intervals(dias_retroativos=7) de @app.py.
     """
-    if not INTERVALS_API_KEY or not INTERVALS_ATHLETE_ID:
+    api_key, athlete_id = _get_intervals_creds()
+    if not api_key or not athlete_id:
         return (
             None,
-            "Credenciais do Intervals.icu (INTERVALS_API_KEY e INTERVALS_ATHLETE_ID) não encontradas no arquivo .env!",
+            "Credenciais do Intervals.icu (INTERVALS_API_KEY e INTERVALS_ATHLETE_ID) não encontradas no ambiente!",
         )
 
-    hoje_dt = datetime.now()
+    hoje_dt = get_now_br()
     data_inicio = (hoje_dt - timedelta(days=dias_retroativos)).strftime("%Y-%m-%dT00:00:00")
     data_fim = hoje_dt.strftime("%Y-%m-%dT23:59:59")
 
-    url = f"https://intervals.icu/api/v1/athlete/{INTERVALS_ATHLETE_ID}/activities?oldest={data_inicio}&newest={data_fim}"
-    auth = ("API_KEY", INTERVALS_API_KEY)
+    url = f"https://intervals.icu/api/v1/athlete/{athlete_id}/activities?oldest={data_inicio}&newest={data_fim}"
+    auth = ("API_KEY", api_key)
 
     try:
-        res = requests.get(url, auth=auth, timeout=20)
+        res = requests.get(url, auth=auth, timeout=8)
         res.raise_for_status()
         dataset = res.json()
     except Exception as e:
-        return None, f"Erro na conexão com o Intervals.icu: {e}"
+        return None, f"Erro na conexão com o Intervals.icu (activities): {e}"
 
     treinos: List[Dict[str, Any]] = []
     if dataset and isinstance(dataset, list):
@@ -98,3 +110,89 @@ def sincronizar_treinos_recentes(
         return True, f"✅ Sincronização com Intervals.icu concluída! ({len(treinos)} treino(s) processado(s))"
     except Exception as e:
         return False, f"Erro ao salvar treinos no banco: {e}"
+
+
+def sincronizar_peso_intervals(
+    engine: Optional[Engine] = None, dias_retroativos: int = 14
+) -> Tuple[bool, str, int]:
+    """
+    Consulta GET https://intervals.icu/api/v1/athlete/{ATHLETE_ID}/wellness?oldest={data_inicio}&newest={data_fim}
+    (últimos 14 dias) com timeout=8 e sincroniza os registros válidos de peso ('weight')
+    na tabela public.peso do Neon (inserindo se não existir na data ou atualizando se mudou).
+    Retorna (ok, mensagem, quantidade_inserida_ou_atualizada).
+    """
+    api_key, athlete_id = _get_intervals_creds()
+    if not api_key or not athlete_id:
+        return (
+            False,
+            "Credenciais do Intervals.icu ausentes para sincronizar wellness/peso.",
+            0,
+        )
+
+    hoje_dt = get_now_br().date()
+    data_inicio = (hoje_dt - timedelta(days=dias_retroativos)).strftime("%Y-%m-%d")
+    data_fim = hoje_dt.strftime("%Y-%m-%d")
+
+    url = f"https://intervals.icu/api/v1/athlete/{athlete_id}/wellness?oldest={data_inicio}&newest={data_fim}"
+    auth = ("API_KEY", api_key)
+
+    try:
+        res = requests.get(url, auth=auth, timeout=8)
+        res.raise_for_status()
+        dataset = res.json()
+    except Exception as e:
+        return False, f"Erro ao consultar wellness no Intervals.icu: {e}", 0
+
+    if not dataset or not isinstance(dataset, list):
+        return True, "Nenhum dado de wellness retornado.", 0
+
+    eng = engine or get_engine()
+    alterados = 0
+    verificados = 0
+
+    try:
+        with eng.begin() as conn:
+            for item in dataset:
+                if not isinstance(item, dict):
+                    continue
+                raw_w = item.get("weight")
+                data_id = item.get("id")  # Formato YYYY-MM-DD no endpoint wellness
+                if raw_w is None or not data_id:
+                    continue
+                try:
+                    peso_val = round(float(raw_w), 2)
+                except (ValueError, TypeError):
+                    continue
+                if peso_val <= 0:
+                    continue
+
+                verificados += 1
+                row = conn.execute(
+                    text(
+                        "SELECT id, peso_kg FROM public.peso WHERE data = :d ORDER BY id DESC LIMIT 1"
+                    ),
+                    {"d": data_id},
+                ).mappings().first()
+
+                if row is None:
+                    conn.execute(
+                        text("INSERT INTO public.peso (data, peso_kg) VALUES (:d, :p)"),
+                        {"d": data_id, "p": peso_val},
+                    )
+                    alterados += 1
+                else:
+                    peso_existente = float(row["peso_kg"] or 0.0)
+                    if abs(peso_existente - peso_val) > 0.01:
+                        conn.execute(
+                            text("UPDATE public.peso SET peso_kg = :p WHERE id = :id"),
+                            {"p": peso_val, "id": row["id"]},
+                        )
+                        alterados += 1
+
+        return (
+            True,
+            f"Wellness sincronizado ({verificados} dia(s) com peso, {alterados} novo(s)/atualizado(s)).",
+            alterados,
+        )
+    except Exception as e:
+        return False, f"Erro ao sincronizar peso do Intervals no banco: {e}", 0
