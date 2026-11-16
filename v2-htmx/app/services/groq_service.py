@@ -7,9 +7,15 @@ import time
 import traceback
 from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
-from groq import Groq
+from groq import Groq, NotFoundError
 from PIL import Image
 from app.config import GROQ_API_KEY, GROQ_MODEL_TEXT, GROQ_MODEL_VISION, get_now_br
+
+FALLBACK_TEXT_MODELS = [
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "llama-3.1-8b-instant",
+]
 
 
 def diagnosticar_chave_groq(api_key: Optional[str] = None) -> Tuple[str, str]:
@@ -25,6 +31,16 @@ def diagnosticar_chave_groq(api_key: Optional[str] = None) -> Tuple[str, str]:
     return clean_key, f"Sim (inicia com {prefixo}..., {len(clean_key)} caracteres)"
 
 
+def listar_modelos_disponiveis(client: Groq) -> List[str]:
+    """Retorna a lista ordenada de IDs de modelos ativos na chave via client.models.list()."""
+    try:
+        models_resp = client.models.list()
+        data = getattr(models_resp, "data", []) or []
+        return sorted([str(m.id) for m in data if getattr(m, "id", None)])
+    except Exception:
+        return []
+
+
 def formatar_erro_diagnostico_groq(
     erro_titulo: str,
     key_status: str,
@@ -32,10 +48,11 @@ def formatar_erro_diagnostico_groq(
     exc: Optional[BaseException] = None,
     tb_str: Optional[str] = None,
     raw_response: Optional[str] = None,
+    available_models: Optional[List[str]] = None,
 ) -> str:
     """Monta texto detalhado de diagnóstico para exibição na caixa vermelha do frontend."""
     linhas = [
-        f"🚨 DIAGNÓSTICO GROQ API",
+        "🚨 DIAGNÓSTICO GROQ API",
         f"• Chave detectada (GROQ_API_KEY): {key_status}",
         f"• Modelo configurado na chamada: {modelo}",
     ]
@@ -43,6 +60,12 @@ def formatar_erro_diagnostico_groq(
         linhas.append(f"• Exceção ({type(exc).__name__}): {str(exc)}")
     else:
         linhas.append(f"• Detalhe do erro: {erro_titulo}")
+
+    if available_models:
+        linhas.append(
+            f"\n--- Modelos ativos na chave (client.models.list() · {len(available_models)} modelos) ---\n"
+            + ", ".join(available_models)
+        )
 
     if raw_response:
         preview = raw_response[:400]
@@ -57,13 +80,17 @@ def formatar_erro_diagnostico_groq(
 
 def ping_groq() -> Dict[str, Any]:
     """
-    Testa instanciar o cliente Groq e envia um prompt mínimo ('Responda apenas: OK')
-    usando 'llama-3.3-70b-versatile' para diagnóstico rápido (/api/groq/ping).
+    Testa instanciar o cliente Groq, lista todos os modelos ativos via client.models.list()
+    e envia um prompt mínimo ('Responda apenas: OK') usando GROQ_MODEL_TEXT (padrão 'openai/gpt-oss-120b').
     """
     clean_key, key_status = diagnosticar_chave_groq()
-    modelo_teste = "llama-3.3-70b-versatile"
-    modelo_texto_env = (os.getenv("GROQ_MODEL_TEXT") or GROQ_MODEL_TEXT or "openai/gpt-oss-120b").strip().strip('"').strip("'")
-    modelo_vision_env = (os.getenv("GROQ_MODEL_VISION") or GROQ_MODEL_VISION or "qwen/qwen3.8-27b").strip().strip('"').strip("'")
+    modelo_texto_env = (
+        os.getenv("GROQ_MODEL_TEXT") or GROQ_MODEL_TEXT or "openai/gpt-oss-120b"
+    ).strip().strip('"').strip("'")
+    modelo_vision_env = (
+        os.getenv("GROQ_MODEL_VISION") or GROQ_MODEL_VISION or "qwen/qwen3.8-27b"
+    ).strip().strip('"').strip("'")
+    modelo_teste = modelo_texto_env
 
     t0 = time.perf_counter()
     if not clean_key:
@@ -74,14 +101,18 @@ def ping_groq() -> Dict[str, Any]:
             "model_tested": modelo_teste,
             "configured_text_model": modelo_texto_env,
             "configured_vision_model": modelo_vision_env,
+            "available_models": [],
             "elapsed_ms": 0,
             "response": None,
             "error": "GROQ_API_KEY não encontrada no ambiente.",
             "traceback": None,
         }
 
+    available_models: List[str] = []
     try:
         client = Groq(api_key=clean_key)
+        available_models = listar_modelos_disponiveis(client)
+
         completion = client.chat.completions.create(
             messages=[{"role": "user", "content": "Responda apenas: OK"}],
             model=modelo_teste,
@@ -97,6 +128,7 @@ def ping_groq() -> Dict[str, Any]:
             "model_tested": modelo_teste,
             "configured_text_model": modelo_texto_env,
             "configured_vision_model": modelo_vision_env,
+            "available_models": available_models,
             "elapsed_ms": elapsed_ms,
             "response": resposta,
             "error": None,
@@ -112,6 +144,7 @@ def ping_groq() -> Dict[str, Any]:
             "model_tested": modelo_teste,
             "configured_text_model": modelo_texto_env,
             "configured_vision_model": modelo_vision_env,
+            "available_models": available_models,
             "elapsed_ms": elapsed_ms,
             "response": None,
             "error": f"{type(e).__name__}: {str(e)}",
@@ -262,8 +295,10 @@ def processar_texto_ia(
     data_ref: Optional[date] = None,
 ) -> Tuple[bool, Dict[str, Any] | str]:
     """
-    Processa descrição alimentar (texto livre, JSON direto ou imagem) usando o SDK da Groq
-    e retorna diagnóstico completo em caso de falha.
+    Processa descrição alimentar (texto livre, JSON direto ou imagem) usando o SDK da Groq.
+    Se o modelo configurado retornar NotFoundError (404), tenta fallbacks compatíveis
+    ('openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'llama-3.1-8b-instant') ou lista os
+    modelos disponíveis em client.models.list() na mensagem de erro.
     """
     data_hoje_str = (data_ref or get_now_br().date()).strftime("%Y-%m-%d")
 
@@ -323,6 +358,7 @@ SAÍDA: Retorne APENAS um objeto JSON válido (sem texto fora do JSON e sem bloc
 """.strip()
 
     raw_response = ""
+    client: Optional[Groq] = None
     try:
         client = Groq(api_key=clean_key)
 
@@ -363,6 +399,25 @@ SAÍDA: Retorne APENAS um objeto JSON válido (sem texto fora do JSON e sem bloc
 
         try:
             completion = client.chat.completions.create(**kwargs)
+        except NotFoundError:
+            # Se for chamada de texto e o modelo configurado deu 404, tenta os fallbacks permitidos
+            if imagem_bytes is None:
+                completion = None
+                last_err: Optional[Exception] = None
+                for fb_model in FALLBACK_TEXT_MODELS:
+                    if fb_model == kwargs.get("model"):
+                        continue
+                    try:
+                        kwargs["model"] = fb_model
+                        modelo_ativo = fb_model
+                        completion = client.chat.completions.create(**kwargs)
+                        break
+                    except Exception as e_fb:
+                        last_err = e_fb
+                if completion is None:
+                    raise last_err or NotFoundError("Modelo não encontrado", response=None, body=None)
+            else:
+                raise
         except Exception as call_err:
             err_msg = str(call_err).lower()
             if "reasoning_effort" in err_msg or "response_format" in err_msg or isinstance(call_err, TypeError):
@@ -385,6 +440,9 @@ SAÍDA: Retorne APENAS um objeto JSON válido (sem texto fora do JSON e sem bloc
         return True, resultado_parse
     except Exception as ex:
         tb_str = traceback.format_exc()
+        modelos_ativos: List[str] = []
+        if client is not None and (isinstance(ex, NotFoundError) or "404" in str(ex) or "model_not_found" in str(ex).lower()):
+            modelos_ativos = listar_modelos_disponiveis(client)
         return False, formatar_erro_diagnostico_groq(
             erro_titulo=f"{type(ex).__name__}: {str(ex)}",
             key_status=key_status,
@@ -392,6 +450,7 @@ SAÍDA: Retorne APENAS um objeto JSON válido (sem texto fora do JSON e sem bloc
             exc=ex,
             tb_str=tb_str,
             raw_response=raw_response,
+            available_models=modelos_ativos,
         )
 
 

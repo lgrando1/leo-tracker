@@ -277,7 +277,8 @@ async def healthcheck():
 async def api_groq_ping(request: Request, format: Optional[str] = Query(default=None)):
     """
     Endpoint de diagnóstico rápido da Groq API:
-    Testa instanciar o cliente Groq e envia 'Responda apenas: OK' usando 'llama-3.3-70b-versatile'.
+    Testa instanciar o cliente Groq, lista modelos ativos via client.models.list()
+    e envia 'Responda apenas: OK' usando GROQ_MODEL_TEXT (padrão 'openai/gpt-oss-120b').
     """
     info = ping_groq()
     accept = request.headers.get("accept", "")
@@ -286,13 +287,16 @@ async def api_groq_ping(request: Request, format: Optional[str] = Query(default=
     if format == "json" or ("application/json" in accept and not is_htmx):
         return JSONResponse(content=info, status_code=200)
 
+    modelos_lista = info.get("available_models") or []
+    modelos_str = ", ".join(modelos_lista) if modelos_lista else "Nenhum retornado por client.models.list()"
+
     if info["ok"]:
         texto = (
             f"✅ CONEXÃO GROQ OK ({info['elapsed_ms']} ms)\n"
             f"• Chave detectada: {info['key_detected']}\n"
-            f"• Modelo de ping testado: {info['model_tested']} -> Resposta: {info['response']!r}\n"
-            f"• Modelo de texto configurado (GROQ_MODEL_TEXT): {info['configured_text_model']}\n"
-            f"• Modelo de visão configurado (GROQ_MODEL_VISION): {info['configured_vision_model']}"
+            f"• Modelo de ping testado (GROQ_MODEL_TEXT): {info['model_tested']} -> Resposta: {info['response']!r}\n"
+            f"• Modelo de visão configurado (GROQ_MODEL_VISION): {info['configured_vision_model']}\n"
+            f"• Modelos ativos na chave ({len(modelos_lista)}): {modelos_str}"
         )
         html_box = (
             f'<div role="status" class="bg-emerald-100 border border-emerald-400 text-emerald-900 p-4 rounded-lg text-xs font-mono whitespace-pre-wrap">'
@@ -302,10 +306,10 @@ async def api_groq_ping(request: Request, format: Optional[str] = Query(default=
         texto = (
             f"❌ FALHA NO TESTE GROQ ({info['elapsed_ms']} ms)\n"
             f"• Chave detectada: {info['key_detected']}\n"
-            f"• Modelo de ping testado: {info['model_tested']}\n"
-            f"• Modelo de texto configurado (GROQ_MODEL_TEXT): {info['configured_text_model']}\n"
+            f"• Modelo de ping testado (GROQ_MODEL_TEXT): {info['model_tested']}\n"
             f"• Modelo de visão configurado (GROQ_MODEL_VISION): {info['configured_vision_model']}\n"
-            f"• Erro: {info['error']}"
+            f"• Erro: {info['error']}\n"
+            f"• Modelos ativos na chave ({len(modelos_lista)}): {modelos_str}"
         )
         if info.get("traceback"):
             texto += f"\n\n--- Traceback ---\n{info['traceback']}"
