@@ -1,0 +1,137 @@
+<div id="config-section" class="max-w-2xl mx-auto space-y-4">
+    {% if include_summary_oob %}
+        {% with oob=True %}
+            {% include "partials/summary_cards.html" %}
+        {% endwith %}
+    {% endif %}
+
+    {% if config_feedback %}
+    <div role="status" class="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-300">
+        ✅ {{ config_feedback }}
+    </div>
+    {% endif %}
+
+    <article class="rounded-2xl bg-slate-900 border border-slate-800 p-6 shadow-lg space-y-5">
+        <div>
+            <h2 class="text-base font-bold text-white flex items-center gap-2">
+                <span>⚙️</span> Configurações e Metas (<code class="text-xs font-mono text-emerald-400">public.perfil · id=1</code>)
+            </h2>
+            <p class="text-xs text-slate-400 mt-1">
+                1.2 = Sedentário/Férias | 1.35 = Leve/Aulas | 1.55 = Moderado/Treino Pesado
+            </p>
+        </div>
+
+        <form
+            hx-post="/partials/config"
+            hx-target="#config-section"
+            hx-swap="outerHTML"
+            class="space-y-4"
+        >
+            <input type="hidden" name="data_alvo_str" class="sync-date-input" value="{{ data_alvo.strftime('%Y-%m-%d') }}" />
+
+            <div>
+                <label for="cfg-fator" class="block text-xs font-medium text-slate-300 mb-1">
+                    Fator de Atividade (Basal Multiplier)
+                </label>
+                <input
+                    id="cfg-fator"
+                    type="number"
+                    name="fator_atividade"
+                    step="0.05"
+                    min="1.0"
+                    max="2.5"
+                    required
+                    value="{{ '%.2f'|format(metas.fator) }}"
+                    class="w-full rounded-xl bg-slate-950 border border-slate-700 px-3.5 py-2 text-sm font-semibold text-white tabular-nums focus:border-emerald-500 focus:outline-none"
+                />
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-800">
+                <div>
+                    <label for="cfg-kcal" class="block text-xs font-medium text-slate-300 mb-1">Calorias Meta (kcal)</label>
+                    <input
+                        id="cfg-kcal"
+                        type="number"
+                        name="meta_kcal"
+                        step="1"
+                        required
+                        value="{{ metas.kcal }}"
+                        class="w-full rounded-xl bg-slate-950 border border-slate-700 px-3.5 py-2 text-sm font-semibold text-white tabular-nums focus:border-emerald-500 focus:outline-none"
+                    />
+                </div>
+
+                <div>
+                    <label for="cfg-prot" class="block text-xs font-medium text-slate-300 mb-1">Proteína Meta (g)</label>
+                    <input
+                        id="cfg-prot"
+                        type="number"
+                        name="meta_proteina"
+                        step="1"
+                        required
+                        value="{{ metas.prot }}"
+                        class="w-full rounded-xl bg-slate-950 border border-slate-700 px-3.5 py-2 text-sm font-semibold text-white tabular-nums focus:border-emerald-500 focus:outline-none"
+                    />
+                </div>
+
+                <div>
+                    <label for="cfg-carb" class="block text-xs font-medium text-slate-300 mb-1">Carbo Meta (g)</label>
+                    <input
+                        id="cfg-carb"
+                        type="number"
+                        name="meta_carbo"
+                        step="1"
+                        required
+                        value="{{ metas.carb }}"
+                        class="w-full rounded-xl bg-slate-950 border border-slate-700 px-3.5 py-2 text-sm font-semibold text-white tabular-nums focus:border-emerald-500 focus:outline-none"
+                    />
+                </div>
+
+                <div>
+                    <label for="cfg-gord" class="block text-xs font-medium text-slate-300 mb-1">Gordura Meta (g)</label>
+                    <input
+                        id="cfg-gord"
+                        type="number"
+                        name="meta_gordura"
+                        step="1"
+                        required
+                        value="{{ metas.gord }}"
+                        class="w-full rounded-xl bg-slate-950 border border-slate-700 px-3.5 py-2 text-sm font-semibold text-white tabular-nums focus:border-emerald-500 focus:outline-none"
+                    />
+                </div>
+
+                <div>
+                    <label for="cfg-alvo" class="block text-xs font-medium text-slate-300 mb-1">Peso Alvo (kg)</label>
+                    <input
+                        id="cfg-alvo"
+                        type="number"
+                        name="meta_peso_alvo"
+                        step="0.1"
+                        required
+                        value="{{ '%.1f'|format(metas.peso_alvo) }}"
+                        class="w-full rounded-xl bg-slate-950 border border-slate-700 px-3.5 py-2 text-sm font-semibold text-white tabular-nums focus:border-emerald-500 focus:outline-none"
+                    />
+                </div>
+
+                <div>
+                    <label for="cfg-ritmo" class="block text-xs font-medium text-slate-300 mb-1">Ritmo Semanal (kg/s)</label>
+                    <input
+                        id="cfg-ritmo"
+                        type="number"
+                        name="ritmo_semanal"
+                        step="0.1"
+                        required
+                        value="{{ '%.1f'|format(metas.ritmo) }}"
+                        class="w-full rounded-xl bg-slate-950 border border-slate-700 px-3.5 py-2 text-sm font-semibold text-white tabular-nums focus:border-emerald-500 focus:outline-none"
+                    />
+                </div>
+            </div>
+
+            <button
+                type="submit"
+                class="w-full rounded-xl bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-semibold text-sm py-2.5 px-4 transition shadow-md"
+            >
+                💾 Salvar Metas
+            </button>
+        </form>
+    </article>
+</div>

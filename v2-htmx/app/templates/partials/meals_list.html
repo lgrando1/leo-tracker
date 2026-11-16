@@ -1,0 +1,111 @@
+<div id="meals-section" class="space-y-4">
+    {% if include_summary_oob %}
+        {% with oob=True %}
+            {% include "partials/summary_cards.html" %}
+        {% endwith %}
+    {% endif %}
+
+    {% if ai_feedback %}
+    <aside role="status" class="rounded-2xl border border-emerald-500/40 bg-emerald-500/10 p-4 text-sm text-emerald-200 shadow-sm">
+        <div class="flex items-start gap-2.5">
+            <span class="text-lg">🧠</span>
+            <div>
+                <p class="font-bold text-emerald-300 text-xs uppercase tracking-wider">Análise do Nutricionista IA (Groq)</p>
+                <p class="mt-1 text-slate-100 leading-relaxed">{{ ai_feedback }}</p>
+            </div>
+        </div>
+    </aside>
+    {% endif %}
+
+    {% if ai_error %}
+    <aside role="alert" class="rounded-2xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200 shadow-sm">
+        <div class="flex items-start gap-2.5">
+            <span class="text-lg">⚠️</span>
+            <div>
+                <p class="font-bold text-rose-300 text-xs uppercase tracking-wider">Falha ao Processar Refeição</p>
+                <p class="mt-1 text-rose-100">{{ ai_error }}</p>
+            </div>
+        </div>
+    </aside>
+    {% endif %}
+
+    <!-- Lista de Alimentos Consumidos na Data Selecionada -->
+    <article class="rounded-2xl bg-slate-900 border border-slate-800 overflow-hidden shadow-lg">
+        <div class="px-5 py-4 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2">
+            <div>
+                <h3 class="text-sm font-bold text-white">
+                    🍽️ Registros Alimentares — {{ data_alvo.strftime('%d/%m/%Y') }}
+                </h3>
+                <p class="text-xs text-slate-400">
+                    {{ consumo.itens|length }} item(ns) · Total: <strong class="text-emerald-400 tabular-nums">{{ '%.0f'|format(consumo.totais.kcal) }} kcal</strong>
+                </p>
+            </div>
+            <div class="flex items-center gap-2 text-xs tabular-nums">
+                <span class="px-2.5 py-1 rounded-lg bg-sky-500/10 text-sky-300 border border-sky-500/20 font-medium">
+                    P: {{ '%.0f'|format(consumo.totais.proteina) }}g
+                </span>
+                <span class="px-2.5 py-1 rounded-lg bg-amber-500/10 text-amber-300 border border-amber-500/20 font-medium">
+                    C: {{ '%.0f'|format(consumo.totais.carbo) }}g
+                </span>
+                <span class="px-2.5 py-1 rounded-lg bg-rose-500/10 text-rose-300 border border-rose-500/20 font-medium">
+                    G: {{ '%.0f'|format(consumo.totais.gordura) }}g
+                </span>
+            </div>
+        </div>
+
+        {% if consumo.itens %}
+        <div class="divide-y divide-slate-800/80">
+            {% for item in consumo.itens %}
+            <div class="p-4 hover:bg-slate-800/35 transition flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div class="space-y-1">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <span class="font-semibold text-white text-sm">{{ item.alimento }}</span>
+                        {% if item.quantidade %}
+                        <span class="text-xs font-mono bg-slate-800 text-slate-300 px-2 py-0.5 rounded border border-slate-700 tabular-nums">
+                            {{ '%.0f'|format(item.quantidade) }}g
+                        </span>
+                        {% endif %}
+                        {% if item.gluten and item.gluten != 'Não informado' %}
+                        <span class="text-[11px] bg-amber-500/10 text-amber-300 border border-amber-500/25 px-2 py-0.5 rounded-full">
+                            🌾 {{ item.gluten }}
+                        </span>
+                        {% endif %}
+                    </div>
+
+                    <!-- Macros e Micronutrientes do Item -->
+                    <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400 tabular-nums">
+                        <span class="text-emerald-400 font-semibold">🔥 {{ '%.0f'|format(item.kcal or 0) }} kcal</span>
+                        <span>🥩 P: <strong class="text-slate-200">{{ '%.1f'|format(item.proteina or 0) }}g</strong></span>
+                        <span>🍞 C: <strong class="text-slate-200">{{ '%.1f'|format(item.carbo or 0) }}g</strong></span>
+                        <span>🥑 G: <strong class="text-slate-200">{{ '%.1f'|format(item.gordura or 0) }}g</strong></span>
+                        <span class="text-slate-600">|</span>
+                        <span title="Ferro">🩸 Fe: {{ '%.1f'|format(item.ferro_mg or 0) }}mg</span>
+                        <span title="Vitamina B12">⚡ B12: {{ '%.1f'|format(item.b12_mcg or 0) }}mcg</span>
+                        <span title="Zinco">🛡️ Zn: {{ '%.1f'|format(item.zinco_mg or 0) }}mg</span>
+                        <span title="Magnésio">💤 Mg: {{ '%.0f'|format(item.magnesio_mg or 0) }}mg</span>
+                    </div>
+                </div>
+
+                <div class="flex items-center justify-end shrink-0">
+                    <button
+                        type="button"
+                        hx-delete="/partials/consumo/{{ item.id }}?data={{ data_alvo.strftime('%Y-%m-%d') }}"
+                        hx-target="#meals-section"
+                        hx-swap="outerHTML"
+                        class="rounded-lg bg-slate-800/80 hover:bg-rose-500/20 border border-slate-700 hover:border-rose-500/40 text-slate-400 hover:text-rose-300 px-2.5 py-1.5 text-xs font-medium transition"
+                        title="Excluir registro alimentar"
+                    >
+                        ❌ Excluir
+                    </button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="p-8 text-center space-y-1">
+            <p class="text-sm font-medium text-slate-300">Nenhum alimento registrado em {{ data_alvo.strftime('%d/%m/%Y') }}.</p>
+            <p class="text-xs text-slate-500">Use o campo acima para descrever sua refeição e calcular macros + micronutrientes via Groq.</p>
+        </div>
+        {% endif %}
+    </article>
+</div>

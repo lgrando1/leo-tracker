@@ -1,0 +1,155 @@
+<section
+    id="summary-cards"
+    {% if oob %}hx-swap-oob="true"{% endif %}
+    aria-label="Status e Métricas do Dia"
+    class="space-y-4"
+>
+    <!-- Linha 1: Status da Sidebar (@app.py) + 4 Métricas de Macros do Dia -->
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
+        <!-- Card 1: Peso Atual vs Meta -->
+        <article class="rounded-2xl bg-slate-900 border border-slate-800 p-4 shadow-sm flex flex-col justify-between">
+            <div class="flex items-center justify-between">
+                <span class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">⚖️ Peso Atual</span>
+                <span class="text-[11px] text-emerald-400 font-medium">Meta: {{ '%.1f'|format(metas.peso_alvo) }} kg</span>
+            </div>
+            <div class="my-1.5">
+                <span class="text-xl font-extrabold text-white tabular-nums">{{ '%.1f'|format(peso.peso_atual) }} kg</span>
+                <p class="text-[11px] text-slate-400 tabular-nums">
+                    EWMA: <strong class="text-slate-200">{{ '%.1f'|format(peso.tendencia_atual) }} kg</strong> · Fator: {{ metas.fator }}x
+                </p>
+            </div>
+            <div>
+                <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                    <div class="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full transition-all duration-500" style="width: {{ progresso_peso }}%"></div>
+                </div>
+            </div>
+        </article>
+
+        <!-- Card 2: Jejum Atual -->
+        <article class="rounded-2xl bg-slate-900 border border-slate-800 p-4 shadow-sm flex flex-col justify-between">
+            <div class="flex items-center justify-between">
+                <span class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">⏱️ Jejum Atual</span>
+                <span class="text-[11px] text-slate-500">Última ref.</span>
+            </div>
+            <div class="my-1.5">
+                <span class="text-xl font-extrabold text-emerald-400 tabular-nums">{{ jejum }}</span>
+            </div>
+            <p class="text-[11px] text-slate-400 tabular-nums">
+                Cintura ref.: <strong class="text-slate-300">{{ '%.1f'|format(metas.last_waist) }} cm</strong>
+            </p>
+        </article>
+
+        <!-- Card 3: Calorias -->
+        {% set pct_kcal = ((consumo.totais.kcal / metas.kcal) * 100) if metas.kcal > 0 else 0 %}
+        <article class="rounded-2xl bg-slate-900 border border-slate-800 p-4 shadow-sm flex flex-col justify-between">
+            <div class="flex items-center justify-between">
+                <span class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">🔥 Calorias</span>
+                <span class="text-[11px] text-slate-400 tabular-nums">Meta: {{ metas.kcal }}</span>
+            </div>
+            <div class="my-1.5">
+                <span class="text-xl font-extrabold text-white tabular-nums">{{ '%.0f'|format(consumo.totais.kcal) }}</span>
+                <span class="text-xs text-slate-400">kcal</span>
+            </div>
+            <div>
+                <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                    <div
+                        class="h-full rounded-full transition-all duration-500 {% if pct_kcal > 105 %}bg-rose-500{% elif pct_kcal > 85 %}bg-amber-400{% else %}bg-emerald-500{% endif %}"
+                        style="width: {{ [pct_kcal, 100]|min }}%"
+                    ></div>
+                </div>
+            </div>
+        </article>
+
+        <!-- Card 4: Proteína -->
+        {% set pct_prot = ((consumo.totais.proteina / metas.prot) * 100) if metas.prot > 0 else 0 %}
+        <article class="rounded-2xl bg-slate-900 border border-slate-800 p-4 shadow-sm flex flex-col justify-between">
+            <div class="flex items-center justify-between">
+                <span class="text-[11px] font-semibold uppercase tracking-wider text-sky-400">🥩 Proteína</span>
+                <span class="text-[11px] text-slate-400 tabular-nums">Meta: {{ metas.prot }}g</span>
+            </div>
+            <div class="my-1.5">
+                <span class="text-xl font-extrabold text-white tabular-nums">{{ '%.0f'|format(consumo.totais.proteina) }}g</span>
+            </div>
+            <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                <div class="h-full bg-sky-400 rounded-full transition-all duration-500" style="width: {{ [pct_prot, 100]|min }}%"></div>
+            </div>
+        </article>
+
+        <!-- Card 5: Carboidrato -->
+        {% set pct_carb = ((consumo.totais.carbo / metas.carb) * 100) if metas.carb > 0 else 0 %}
+        <article class="rounded-2xl bg-slate-900 border border-slate-800 p-4 shadow-sm flex flex-col justify-between">
+            <div class="flex items-center justify-between">
+                <span class="text-[11px] font-semibold uppercase tracking-wider text-amber-400">🍞 Carbo</span>
+                <span class="text-[11px] text-slate-400 tabular-nums">Meta: {{ metas.carb }}g</span>
+            </div>
+            <div class="my-1.5">
+                <span class="text-xl font-extrabold text-white tabular-nums">{{ '%.0f'|format(consumo.totais.carbo) }}g</span>
+            </div>
+            <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                <div class="h-full bg-amber-400 rounded-full transition-all duration-500" style="width: {{ [pct_carb, 100]|min }}%"></div>
+            </div>
+        </article>
+
+        <!-- Card 6: Gordura -->
+        {% set pct_gord = ((consumo.totais.gordura / metas.gord) * 100) if metas.gord > 0 else 0 %}
+        <article class="rounded-2xl bg-slate-900 border border-slate-800 p-4 shadow-sm flex flex-col justify-between">
+            <div class="flex items-center justify-between">
+                <span class="text-[11px] font-semibold uppercase tracking-wider text-rose-400">🥑 Gordura</span>
+                <span class="text-[11px] text-slate-400 tabular-nums">Meta: {{ metas.gord }}g</span>
+            </div>
+            <div class="my-1.5">
+                <span class="text-xl font-extrabold text-white tabular-nums">{{ '%.0f'|format(consumo.totais.gordura) }}g</span>
+            </div>
+            <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                <div class="h-full bg-rose-400 rounded-full transition-all duration-500" style="width: {{ [pct_gord, 100]|min }}%"></div>
+            </div>
+        </article>
+    </div>
+
+    <!-- Linha 2: Barra de Micronutrientes do Dia (Ferro, B12, Zinco, Magnésio) -->
+    <div class="rounded-2xl bg-slate-900/70 border border-slate-800/80 px-4 py-3 grid grid-cols-2 sm:grid-cols-4 gap-4">
+        {% set fe_pct = ((consumo.totais.ferro_mg / 8.0) * 100)|round(0) %}
+        <div>
+            <div class="flex justify-between text-xs mb-1 tabular-nums">
+                <span class="text-slate-400">🩸 Ferro (mg)</span>
+                <span class="font-semibold text-slate-200">{{ '%.1f'|format(consumo.totais.ferro_mg) }} <span class="text-slate-500">/ 8.0</span></span>
+            </div>
+            <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                <div class="h-full bg-rose-400 rounded-full" style="width: {{ [fe_pct, 100]|min }}%"></div>
+            </div>
+        </div>
+
+        {% set b12_pct = ((consumo.totais.b12_mcg / 2.4) * 100)|round(0) %}
+        <div>
+            <div class="flex justify-between text-xs mb-1 tabular-nums">
+                <span class="text-slate-400">⚡ B12 (mcg)</span>
+                <span class="font-semibold text-slate-200">{{ '%.1f'|format(consumo.totais.b12_mcg) }} <span class="text-slate-500">/ 2.4</span></span>
+            </div>
+            <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                <div class="h-full bg-amber-400 rounded-full" style="width: {{ [b12_pct, 100]|min }}%"></div>
+            </div>
+        </div>
+
+        {% set zn_pct = ((consumo.totais.zinco_mg / 11.0) * 100)|round(0) %}
+        <div>
+            <div class="flex justify-between text-xs mb-1 tabular-nums">
+                <span class="text-slate-400">🛡️ Zinco (mg)</span>
+                <span class="font-semibold text-slate-200">{{ '%.1f'|format(consumo.totais.zinco_mg) }} <span class="text-slate-500">/ 11.0</span></span>
+            </div>
+            <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                <div class="h-full bg-emerald-400 rounded-full" style="width: {{ [zn_pct, 100]|min }}%"></div>
+            </div>
+        </div>
+
+        {% set mg_pct = ((consumo.totais.magnesio_mg / 400.0) * 100)|round(0) %}
+        <div>
+            <div class="flex justify-between text-xs mb-1 tabular-nums">
+                <span class="text-slate-400">💤 Magnésio (mg)</span>
+                <span class="font-semibold text-slate-200">{{ '%.0f'|format(consumo.totais.magnesio_mg) }} <span class="text-slate-500">/ 400.0</span></span>
+            </div>
+            <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                <div class="h-full bg-indigo-400 rounded-full" style="width: {{ [mg_pct, 100]|min }}%"></div>
+            </div>
+        </div>
+    </div>
+</section>

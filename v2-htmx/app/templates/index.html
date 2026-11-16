@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <!-- 1. Painel de Métricas do Dia e Status (Peso, Jejum, Calorias, Proteína, Carbo, Gordura e Micros) -->
+    {% with oob=False %}
+        {% include "partials/summary_cards.html" %}
+    {% endwith %}
+
+    <!-- 2. Navegação de Abas (Módulos do @app.py) -->
+    <nav aria-label="Módulos do Leo Tracker" class="flex flex-wrap gap-2 border-b border-slate-800 pb-3">
+        <button
+            type="button"
+            data-tab-btn="diario"
+            onclick="switchTab('diario')"
+            class="rounded-xl px-4 py-2 text-xs sm:text-sm font-semibold border transition bg-emerald-600 text-white border-emerald-500"
+        >
+            📝 Diário (Peso & Alimentação)
+        </button>
+        <button
+            type="button"
+            data-tab-btn="medidas"
+            onclick="switchTab('medidas')"
+            class="rounded-xl px-4 py-2 text-xs sm:text-sm font-semibold border transition bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200"
+        >
+            📏 Medidas Corporais
+        </button>
+        <button
+            type="button"
+            data-tab-btn="treino"
+            onclick="switchTab('treino')"
+            class="rounded-xl px-4 py-2 text-xs sm:text-sm font-semibold border transition bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200"
+        >
+            🏃‍♂️ Treino & Intervals.icu
+        </button>
+        <button
+            type="button"
+            data-tab-btn="historico"
+            onclick="switchTab('historico')"
+            class="rounded-xl px-4 py-2 text-xs sm:text-sm font-semibold border transition bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200"
+        >
+            📜 Histórico
+        </button>
+        <button
+            type="button"
+            data-tab-btn="config"
+            onclick="switchTab('config')"
+            class="rounded-xl px-4 py-2 text-xs sm:text-sm font-semibold border transition bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200"
+        >
+            ⚙️ Configurações
+        </button>
+    </nav>
+
+    <!-- ABA 1: DIÁRIO (PESO & ALIMENTAÇÃO) -->
+    <div id="panel-diario" data-tab-panel class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        <!-- Coluna Esquerda: Peso de Hoje + Evolução EWMA -->
+        <section aria-labelledby="heading-peso" class="lg:col-span-5 space-y-4">
+            <article class="rounded-2xl bg-slate-900 border border-slate-800 p-5 shadow-lg">
+                <div class="flex items-center justify-between mb-4">
+                    <div>
+                        <h2 id="heading-peso" class="text-base font-bold text-white flex items-center gap-2">
+                            <span>⚖️</span> Peso de Hoje
+                        </h2>
+                        <p class="text-xs text-slate-400">Registra em <code class="text-slate-300">public.peso</code> e atualiza a tendência EWMA</p>
+                    </div>
+                </div>
+
+                <form
+                    hx-post="/partials/peso"
+                    hx-target="#weight-section"
+                    hx-swap="outerHTML"
+                    class="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end"
+                >
+                    <input type="hidden" name="data_alvo_str" class="sync-date-input" value="{{ data_alvo.strftime('%Y-%m-%d') }}" />
+
+                    <div class="sm:col-span-5">
+                        <label for="input-data-peso" class="block text-xs font-medium text-slate-400 mb-1">Data</label>
+                        <input
+                            id="input-data-peso"
+                            type="date"
+                            name="data_peso"
+                            required
+                            value="{{ data_alvo.strftime('%Y-%m-%d') }}"
+                            class="sync-date-input w-full rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                        />
+                    </div>
+
+                    <div class="sm:col-span-4">
+                        <label for="input-peso-kg" class="block text-xs font-medium text-slate-400 mb-1">Peso (kg)</label>
+                        <input
+                            id="input-peso-kg"
+                            type="number"
+                            name="peso_kg"
+                            step="0.1"
+                            min="40"
+                            max="200"
+                            required
+                            value="{{ '%.1f'|format(peso.peso_atual) }}"
+                            class="w-full rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-sm font-semibold text-white tabular-nums focus:border-emerald-500 focus:outline-none"
+                        />
+                    </div>
+
+                    <div class="sm:col-span-3">
+                        <button
+                            type="submit"
+                            class="w-full rounded-xl bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-semibold text-sm py-2 px-3 transition flex items-center justify-center gap-1.5 shadow-sm"
+                        >
+                            <span>💾 Salvar</span>
+                            <span class="htmx-indicator animate-spin text-xs">⏳</span>
+                        </button>
+                    </div>
+                </form>
+            </article>
+
+            {% with include_summary_oob=False %}
+                {% include "partials/weight_section.html" %}
+            {% endwith %}
+        </section>
+
+        <!-- Coluna Direita: O que você comeu? (Groq IA) + Registros de Hoje -->
+        <section aria-labelledby="heading-nutricao" class="lg:col-span-7 space-y-4">
+            <article class="rounded-2xl bg-slate-900 border border-slate-800 p-5 shadow-lg">
+                <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+                    <div>
+                        <h2 id="heading-nutricao" class="text-base font-bold text-white flex items-center gap-2">
+                            <span>🍎</span> O que você comeu?
+                        </h2>
+                        <p class="text-xs text-slate-400">
+                            Digite o que comeu, envie uma foto do prato/rótulo ou cole diretamente o JSON.
+                        </p>
+                    </div>
+                    <span class="text-[11px] font-mono bg-slate-800 text-slate-300 px-2.5 py-1 rounded-md border border-slate-700">
+                        Groq · gpt-oss-120b / qwen3.8-27b
+                    </span>
+                </div>
+
+                <form
+                    hx-post="/partials/consumo"
+                    hx-encoding="multipart/form-data"
+                    hx-target="#meals-section"
+                    hx-swap="outerHTML"
+                    hx-on::after-request="if(event.detail.successful) { this.querySelector('textarea').value = ''; this.querySelector('input[type=file]').value = ''; }"
+                    class="space-y-3"
+                >
+                    <input type="hidden" name="data_consumo" class="sync-date-input" value="{{ data_alvo.strftime('%Y-%m-%d') }}" />
+
+                    <div>
+                        <label for="texto_input" class="sr-only">Descrição ou JSON</label>
+                        <textarea
+                            id="texto_input"
+                            name="texto_input"
+                            rows="3"
+                            placeholder="Ex: 2 ovos mexidos com queijo (ou adicione observações sobre a foto / cole JSON)"
+                            class="w-full rounded-xl bg-slate-950 border border-slate-700 p-3 text-sm text-slate-100 placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        ></textarea>
+                    </div>
+
+                    <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-1">
+                        <div class="flex-1">
+                            <label for="foto_prato" class="block text-xs text-slate-400 mb-1">
+                                📸 Foto do prato, comanda ou tabela nutricional (opcional)
+                            </label>
+                            <input
+                                id="foto_prato"
+                                type="file"
+                                name="foto_prato"
+                                accept="image/jpeg,image/png,image/webp"
+                                class="block w-full text-xs text-slate-400 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-800 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-slate-200 hover:file:bg-slate-700 cursor-pointer"
+                            />
+                        </div>
+
+                        <button
+                            type="submit"
+                            class="rounded-xl bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-semibold text-sm px-5 py-2.5 transition flex items-center justify-center gap-2 shadow-md shrink-0"
+                        >
+                            <span>🚀 Processar Alimentação</span>
+                            <span class="htmx-indicator inline-flex items-center gap-1 text-xs font-normal text-emerald-100">
+                                <svg class="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                                </svg>
+                                Processando...
+                            </span>
+                        </button>
+                    </div>
+                </form>
+            </article>
+
+            {% with include_summary_oob=False %}
+                {% include "partials/meals_list.html" %}
+            {% endwith %}
+        </section>
+    </div>
+
+    <!-- ABA 2: MEDIDAS CORPORAIS -->
+    <div id="panel-medidas" data-tab-panel class="hidden">
+        {% with include_summary_oob=False %}
+            {% include "partials/medidas_section.html" %}
+        {% endwith %}
+    </div>
+
+    <!-- ABA 3: TREINO & INTERVALS.ICU -->
+    <div id="panel-treino" data-tab-panel class="hidden">
+        {% include "partials/treino_section.html" %}
+    </div>
+
+    <!-- ABA 4: HISTÓRICO ALIMENTAR -->
+    <div id="panel-historico" data-tab-panel class="hidden">
+        {% include "partials/historico_section.html" %}
+    </div>
+
+    <!-- ABA 5: CONFIGURAÇÕES & METAS -->
+    <div id="panel-config" data-tab-panel class="hidden">
+        {% with include_summary_oob=False %}
+            {% include "partials/config_section.html" %}
+        {% endwith %}
+    </div>
+{% endblock %}

@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="h-full bg-slate-950 text-slate-100 antialiased">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>🦁 Leo Tracker Pro · v2 HTMX</title>
+
+    <!-- Tailwind CSS via CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- HTMX via CDN -->
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+
+    <!-- Chart.js via CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+
+    <style>
+        .htmx-indicator {
+            display: none;
+        }
+        .htmx-request .htmx-indicator,
+        .htmx-request.htmx-indicator {
+            display: inline-flex;
+        }
+        textarea {
+            field-sizing: content;
+            min-height: 5.5rem;
+        }
+        input:user-invalid, textarea:user-invalid {
+            border-color: rgb(239 68 68);
+        }
+        .tabular-nums {
+            font-variant-numeric: tabular-nums;
+        }
+    </style>
+</head>
+<body class="min-h-full flex flex-col selection:bg-emerald-500 selection:text-slate-950">
+    <!-- Top Header -->
+    <header class="border-b border-slate-800/80 bg-slate-900/80 backdrop-blur sticky top-0 z-30">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-wrap items-center justify-between gap-4">
+            <div class="flex items-center gap-3">
+                <span class="text-2xl" aria-hidden="true">🦁</span>
+                <div>
+                    <div class="flex items-center gap-2">
+                        <h1 class="text-lg font-bold tracking-tight text-white">Leo Tracker Pro</h1>
+                        <span class="inline-flex items-center rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-xs font-semibold text-emerald-400 border border-emerald-500/30">
+                            v2 · HTMX
+                        </span>
+                    </div>
+                    <p class="text-xs text-slate-400">Neon PostgreSQL · Groq Nutricionista IA · Intervals.icu</p>
+                </div>
+            </div>
+
+            <!-- Filtro de Data de Referência + Botão Atualizar + Botão Sair -->
+            <div class="flex flex-wrap items-center gap-2.5">
+                <label for="global-date-picker" class="text-xs font-medium text-slate-400 uppercase tracking-wider hidden sm:inline">
+                    Data:
+                </label>
+                <input
+                    id="global-date-picker"
+                    type="date"
+                    name="data"
+                    value="{{ data_alvo.strftime('%Y-%m-%d') }}"
+                    hx-get="/partials/consumo"
+                    hx-target="#meals-section"
+                    hx-swap="outerHTML"
+                    hx-trigger="change"
+                    onchange="document.querySelectorAll('.sync-date-input').forEach(el => el.value = this.value)"
+                    class="rounded-lg bg-slate-800 border border-slate-700 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                />
+                <button
+                    type="button"
+                    hx-get="/partials/summary"
+                    hx-include="#global-date-picker"
+                    hx-target="#summary-cards"
+                    hx-swap="outerHTML"
+                    title="Atualizar indicadores do topo"
+                    class="rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-200 transition"
+                >
+                    ↻ Atualizar
+                </button>
+
+                <form action="/logout" method="post" class="inline">
+                    <button
+                        type="submit"
+                        title="Encerrar sessão"
+                        class="rounded-lg bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 px-3 py-1.5 text-xs font-semibold text-rose-300 transition flex items-center gap-1.5"
+                    >
+                        <span>🚪 Sair</span>
+                    </button>
+                </form>
+            </div>
+        </div>
+    </header>
+
+    <!-- Conteúdo Principal -->
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+        {% if db_error %}
+        <aside role="alert" class="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-200">
+            <p class="font-semibold text-amber-300">⚠️ Aviso de Conexão com o Banco de Dados (Neon PostgreSQL)</p>
+            <p class="mt-1 text-xs opacity-90">{{ db_error }}</p>
+            <p class="mt-1 text-xs text-amber-300/80">
+                Verifique se <code class="bg-slate-900 px-1.5 py-0.5 rounded">DATABASE_URL</code> e <code class="bg-slate-900 px-1.5 py-0.5 rounded">GROQ_API_KEY</code> estão definidos no arquivo <code class="bg-slate-900 px-1.5 py-0.5 rounded">.env</code>.
+            </p>
+        </aside>
+        {% endif %}
+
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="border-t border-slate-800/80 py-4 mt-12 text-center text-xs text-slate-500">
+        <p>Leo Tracker Pro v2 · Baseado em <code class="text-slate-400">@app.py</code> · FastAPI + Jinja2 + HTMX + Tailwind CSS 🦁</p>
+    </footer>
+
+    <script>
+        function switchTab(tabId) {
+            document.querySelectorAll('[data-tab-panel]').forEach(panel => {
+                panel.classList.toggle('hidden', panel.id !== 'panel-' + tabId);
+            });
+            document.querySelectorAll('[data-tab-btn]').forEach(btn => {
+                const active = btn.getAttribute('data-tab-btn') === tabId;
+                btn.classList.toggle('bg-emerald-600', active);
+                btn.classList.toggle('text-white', active);
+                btn.classList.toggle('border-emerald-500', active);
+                btn.classList.toggle('bg-slate-900', !active);
+                btn.classList.toggle('text-slate-400', !active);
+                btn.classList.toggle('border-slate-800', !active);
+            });
+            if (tabId === 'diario' && window._leoWeightChart) {
+                window._leoWeightChart.resize();
+            }
+        }
+    </script>
+</body>
+</html>

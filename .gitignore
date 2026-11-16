@@ -1,0 +1,5 @@
+.env
+v2-htmx/.env
+__pycache__/
+*.pyc
+.streamlit/secrets.toml

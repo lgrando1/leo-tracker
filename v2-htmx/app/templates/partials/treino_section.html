@@ -1,0 +1,307 @@
+<div id="treino-section" class="space-y-6">
+    <!-- Cabeçalho + Seletor de Data do Treino + Botão Sincronizar Intervals.icu -->
+    <article class="rounded-2xl bg-slate-900 border border-slate-800 p-5 shadow-lg space-y-4">
+        <div class="flex flex-wrap items-center justify-between gap-4">
+            <div>
+                <h2 class="text-base font-bold text-white flex items-center gap-2">
+                    <span>🏃‍♂️</span> Monitoramento de Treino & Intervals.icu
+                </h2>
+                <p class="text-xs text-slate-400">
+                    Gerencia <code class="text-slate-300">public.exercicios</code> com sincronização automática do Intervals.icu (últimos 7 dias).
+                </p>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-3">
+                <div class="flex items-center gap-2">
+                    <label for="dt-treino-picker" class="text-xs font-medium text-slate-400">📅 Data do Treino:</label>
+                    <input
+                        id="dt-treino-picker"
+                        type="date"
+                        name="dt_alvo"
+                        value="{{ dt_treino.strftime('%Y-%m-%d') }}"
+                        hx-get="/partials/treino"
+                        hx-target="#treino-section"
+                        hx-swap="outerHTML"
+                        hx-trigger="change"
+                        class="rounded-xl bg-slate-950 border border-slate-700 px-3 py-1.5 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                    />
+                </div>
+
+                <form
+                    hx-post="/partials/treino/sync"
+                    hx-target="#treino-section"
+                    hx-swap="outerHTML"
+                >
+                    <input type="hidden" name="dt_alvo" value="{{ dt_treino.strftime('%Y-%m-%d') }}" />
+                    <button
+                        type="submit"
+                        class="rounded-xl bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-semibold text-xs sm:text-sm px-4 py-2 transition flex items-center gap-2 shadow-md"
+                    >
+                        <span>🚴‍♂️ Sincronizar Intervals.icu</span>
+                        <span class="htmx-indicator animate-spin text-xs">⏳</span>
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        {% if treino_feedback %}
+        <div role="status" class="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-2.5 text-xs font-medium text-emerald-300">
+            {{ treino_feedback }}
+        </div>
+        {% endif %}
+
+        {% if treino_error %}
+        <div role="alert" class="rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-2.5 text-xs font-medium text-rose-300">
+            🚨 {{ treino_error }}
+        </div>
+        {% endif %}
+
+        <!-- 3 Cards de Métricas do Treino (@app.py linhas 781-785) -->
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
+            <div class="rounded-xl bg-slate-950/80 border border-slate-800 p-4">
+                <div class="flex justify-between text-xs text-slate-400">
+                    <span>⏱️ Tempo Treino</span>
+                    <span class="text-emerald-400">Meta: 120 min</span>
+                </div>
+                <p class="text-2xl font-extrabold text-white mt-1 tabular-nums">{{ treino.min_treino }} min</p>
+                <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden mt-2">
+                    <div class="h-full bg-emerald-500 rounded-full" style="width: {{ treino.progresso_min }}%"></div>
+                </div>
+            </div>
+
+            <div class="rounded-xl bg-slate-950/80 border border-slate-800 p-4">
+                <div class="flex justify-between text-xs text-slate-400">
+                    <span>👣 Passos Treino</span>
+                    <span>Atividades registradas</span>
+                </div>
+                <p class="text-2xl font-extrabold text-sky-400 mt-1 tabular-nums">{{ treino.passos_atv }}</p>
+            </div>
+
+            <div class="rounded-xl bg-slate-950/80 border border-slate-800 p-4">
+                <div class="flex justify-between text-xs text-slate-400">
+                    <span>🏫 Passos Rotina</span>
+                    <span class="tabular-nums">Total Dia: {{ treino.total_rel }}</span>
+                </div>
+                <p class="text-2xl font-extrabold text-amber-400 mt-1 tabular-nums">{{ treino.passos_rot }}</p>
+            </div>
+        </div>
+    </article>
+
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        <!-- Coluna Esquerda: Fechamento do Dia + Adicionar Atividade Manual -->
+        <div class="lg:col-span-5 space-y-6">
+            <!-- Fechamento do Dia (@app.py linhas 788-799) -->
+            <article class="rounded-2xl bg-slate-900 border border-slate-800 p-5 shadow-lg space-y-3">
+                <h3 class="text-sm font-bold text-white">🏁 Fechamento do Dia</h3>
+                <form
+                    hx-post="/partials/treino/fechamento"
+                    hx-target="#treino-section"
+                    hx-swap="outerHTML"
+                    class="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end"
+                >
+                    <input type="hidden" name="dt_alvo" value="{{ dt_treino.strftime('%Y-%m-%d') }}" />
+                    <div class="sm:col-span-7">
+                        <label for="input-total-passos" class="block text-xs font-medium text-slate-400 mb-1">
+                            Total de Passos (Relógio)
+                        </label>
+                        <input
+                            id="input-total-passos"
+                            type="number"
+                            name="input_total"
+                            min="0"
+                            max="60000"
+                            required
+                            value="{{ treino.total_rel }}"
+                            class="w-full rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-sm font-semibold text-white tabular-nums focus:border-emerald-500 focus:outline-none"
+                        />
+                    </div>
+                    <div class="sm:col-span-5">
+                        <button
+                            type="submit"
+                            class="w-full rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs sm:text-sm py-2 px-3 transition shadow-sm"
+                        >
+                            💾 Salvar Fechamento
+                        </button>
+                    </div>
+                </form>
+            </article>
+
+            <!-- Adicionar Atividade Manual (@app.py linhas 802-818) -->
+            <article class="rounded-2xl bg-slate-900 border border-slate-800 p-5 shadow-lg space-y-4">
+                <h3 class="text-sm font-bold text-white">➕ Adicionar Atividade</h3>
+                <form
+                    hx-post="/partials/treino/atividade"
+                    hx-target="#treino-section"
+                    hx-swap="outerHTML"
+                    class="space-y-3"
+                >
+                    <input type="hidden" name="dt_alvo" value="{{ dt_treino.strftime('%Y-%m-%d') }}" />
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                            <label for="tr-tipo" class="block text-xs font-medium text-slate-400 mb-1">Atividade</label>
+                            <select
+                                id="tr-tipo"
+                                name="tipo"
+                                class="w-full rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                            >
+                                <option value="Caminhada Indoor">Caminhada Indoor</option>
+                                <option value="Caminhada Rua (Transporte)">Caminhada Rua (Transporte)</option>
+                                <option value="Musculação">Musculação</option>
+                                <option value="Bicicleta Ergométrica">Bicicleta Ergométrica</option>
+                                <option value="Outro">Outro</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label for="tr-duracao" class="block text-xs font-medium text-slate-400 mb-1">Duração (min)</label>
+                            <input
+                                id="tr-duracao"
+                                type="number"
+                                name="duracao"
+                                min="0"
+                                max="300"
+                                value="30"
+                                class="w-full rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-white tabular-nums focus:border-emerald-500 focus:outline-none"
+                            />
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-3 gap-3">
+                        <div>
+                            <label for="tr-passos" class="block text-xs font-medium text-slate-400 mb-1">Passos</label>
+                            <input
+                                id="tr-passos"
+                                type="number"
+                                name="passos"
+                                min="0"
+                                max="20000"
+                                value="0"
+                                class="w-full rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-white tabular-nums focus:border-emerald-500 focus:outline-none"
+                            />
+                        </div>
+
+                        <div>
+                            <label for="tr-dist" class="block text-xs font-medium text-slate-400 mb-1">Distância (km)</label>
+                            <input
+                                id="tr-dist"
+                                type="number"
+                                name="dist"
+                                step="0.1"
+                                min="0"
+                                max="200"
+                                value="0.0"
+                                class="w-full rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-white tabular-nums focus:border-emerald-500 focus:outline-none"
+                            />
+                        </div>
+
+                        <div>
+                            <label for="tr-cal" class="block text-xs font-medium text-slate-400 mb-1">Calorias</label>
+                            <input
+                                id="tr-cal"
+                                type="number"
+                                name="cal"
+                                min="0"
+                                max="3000"
+                                value="0"
+                                class="w-full rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-white tabular-nums focus:border-emerald-500 focus:outline-none"
+                            />
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                            <label for="tr-bpm" class="block text-xs font-medium text-slate-400 mb-1">BPM Médio (Opcional)</label>
+                            <input
+                                id="tr-bpm"
+                                type="number"
+                                name="bpm"
+                                min="0"
+                                max="220"
+                                value="0"
+                                class="w-full rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-white tabular-nums focus:border-emerald-500 focus:outline-none"
+                            />
+                        </div>
+
+                        <div>
+                            <label for="tr-obs" class="block text-xs font-medium text-slate-400 mb-1">Observações</label>
+                            <input
+                                id="tr-obs"
+                                type="text"
+                                name="obs"
+                                placeholder="Opcional"
+                                class="w-full rounded-xl bg-slate-950 border border-slate-700 px-3 py-2 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                            />
+                        </div>
+                    </div>
+
+                    <button
+                        type="submit"
+                        class="w-full rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm py-2.5 px-4 transition shadow-md"
+                    >
+                        💾 Registrar Atividade
+                    </button>
+                </form>
+            </article>
+        </div>
+
+        <!-- Coluna Direita: Lista de Registros de Treino do Dia (@app.py linhas 820-833) -->
+        <article class="lg:col-span-7 rounded-2xl bg-slate-900 border border-slate-800 overflow-hidden shadow-lg">
+            <div class="px-5 py-4 border-b border-slate-800 flex items-center justify-between">
+                <h3 class="text-sm font-bold text-white">
+                    📋 Registros — {{ dt_treino.strftime('%d/%m/%Y') }}
+                </h3>
+                <span class="text-xs text-slate-400">{{ treino.registros|length }} item(ns)</span>
+            </div>
+
+            {% if treino.registros %}
+            <div class="divide-y divide-slate-800/80">
+                {% for row in treino.registros %}
+                <div class="p-4 hover:bg-slate-800/35 transition flex items-center justify-between gap-4">
+                    <div class="space-y-1">
+                        {% if row.tipo == 'Fechamento Diário' %}
+                        <p class="text-sm font-bold text-amber-400">🏁 TOTAL DO DIA (Fechamento Diário)</p>
+                        <p class="text-xs text-slate-300 tabular-nums">
+                            Relógio: <strong>{{ row.passos_total_dia or 0 }}</strong> | Rotina: <strong>{{ row.passos_trabalho or 0 }}</strong>
+                        </p>
+                        {% else %}
+                        <div class="flex flex-wrap items-center gap-2">
+                            <span class="text-sm font-bold text-white">🏃‍♂️ {{ row.tipo }}</span>
+                            {% if row.nome_treino %}
+                            <span class="text-xs bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded-md">
+                                {{ row.nome_treino }}
+                            </span>
+                            {% endif %}
+                        </div>
+                        <div class="flex flex-wrap items-center gap-3 text-xs text-slate-400 tabular-nums">
+                            <span>⏱️ {{ row.duracao_min or 0 }} min</span>
+                            {% if row.passos %}<span>👣 {{ row.passos }} passos</span>{% endif %}
+                            {% if row.distancia_km %}<span>📏 {{ row.distancia_km }} km</span>{% endif %}
+                            <span>🔥 {{ row.calorias or 0 }} kcal</span>
+                            {% if row.bpm_medio %}<span>❤️ {{ row.bpm_medio }} bpm</span>{% endif %}
+                            {% if row.carga_tss %}<span>⚡ TSS: {{ row.carga_tss }}</span>{% endif %}
+                        </div>
+                        {% endif %}
+                    </div>
+
+                    <button
+                        type="button"
+                        hx-delete="/partials/treino/{{ row.id }}?dt_alvo={{ dt_treino.strftime('%Y-%m-%d') }}"
+                        hx-target="#treino-section"
+                        hx-swap="outerHTML"
+                        class="rounded-lg bg-slate-800 hover:bg-rose-500/20 border border-slate-700 hover:border-rose-500/40 text-slate-400 hover:text-rose-300 px-2.5 py-1.5 text-xs transition shrink-0"
+                        title="Excluir registro de treino"
+                    >
+                        🗑️
+                    </button>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="p-8 text-center text-sm text-slate-400">
+                Nenhuma atividade ou fechamento registrado para {{ dt_treino.strftime('%d/%m/%Y') }}.
+            </div>
+            {% endif %}
+        </article>
+    </div>
+</div>
