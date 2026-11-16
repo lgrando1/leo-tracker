@@ -1,4 +1,3 @@
-import hashlib
 import os
 from datetime import datetime
 from pathlib import Path
@@ -36,12 +35,13 @@ def _normalize_db_url(url: str) -> str:
 
 DATABASE_URL: str = _normalize_db_url(_clean_env("DATABASE_URL", ""))
 
-# Suporta APP_PASSWORD ou PASSWORD do .env (com fallback "admin" igual ao @app.py)
+# Suporta APP_PASSWORD ou PASSWORD do .env (com fallback fixo "admin" igual ao @app.py)
 APP_PASSWORD: str = _clean_env("APP_PASSWORD") or _clean_env("PASSWORD") or "admin"
 
-SECRET_KEY: str = _clean_env(
-    "SECRET_KEY",
-    hashlib.sha256(f"leotracker-v2-{APP_PASSWORD}".encode("utf-8")).hexdigest(),
+# Chave secreta fixa de fallback para evitar invalidação de sessão entre instâncias serverless na Vercel
+SECRET_KEY: str = (
+    _clean_env("SECRET_KEY")
+    or "leotracker-v2-fixed-serverless-secret-key-9f8e7d6c5b4a"
 )
 
 GROQ_API_KEY: str = _clean_env("GROQ_API_KEY", "")

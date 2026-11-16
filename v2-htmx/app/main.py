@@ -1,22 +1,25 @@
 from datetime import date, datetime, timedelta
+import os
 import pathlib
 from pathlib import Path
 import secrets
 import sys
 from typing import Any, Dict, Optional
+from urllib.parse import parse_qs, unquote
 
 from fastapi import FastAPI, File, Form, Query, Request, Response, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 # Garante que a raiz de v2-htmx/ esteja no sys.path no ambiente serverless da Vercel
 BASE_DIR = pathlib.Path(__file__).resolve().parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from app.config import APP_PASSWORD, SECRET_KEY, get_now_br
+from app.config import APP_PASSWORD, SECRET_KEY as CONFIG_SECRET_KEY, get_now_br
 from app.database import get_engine
 from app.services.groq_service import analisar_refeicao_groq
 from app.services.intervals_service import sincronizar_treinos_recentes
@@ -45,7 +48,7 @@ from app.services.tracker_repo import (
 app = FastAPI(
     title="Leo Tracker Pro · v2 HTMX",
     description="Aplicação FastAPI + Jinja2 + HTMX + Tailwind CSS baseada exclusivamente no @app.py.",
-    version="2.1.0",
+    version="2.1.1",
 )
 
 # Resolução absoluta de templates e static para compatibilidade com Vercel Serverless e execução local
@@ -63,34 +66,91 @@ if not STATIC_DIR.exists():
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-PUBLIC_PATHS = {"/login", "/logout", "/favicon.ico"}
+PUBLIC_PATHS = {"/login", "/logout", "/favicon.ico", "/health"}
+PUBLIC_PREFIXES = ("/login", "/logout", "/static", "/favicon.ico", "/health")
+
+# Fallback fixo para SECRET_KEY (nunca aleatório em runtime serverless)
+SECRET_KEY = (
+    os.getenv("SECRET_KEY")
+    or CONFIG_SECRET_KEY
+    or "leotracker-v2-fixed-serverless-secret-key-9f8e7d6c5b4a"
+)
+
+
+def _resolve_vercel_path(request: Request) -> str:
+    """
+    Normaliza o caminho da requisição quando o rewrite da Vercel (/(.*) -> /app/main.py)
+    encaminha scope['path'] como '/app/main.py' e preserva a rota original em
+    'x-now-route-matches' ou headers de proxy reverso.
+    """
+    raw_path = request.scope.get("path") or request.url.path or "/"
+
+    if raw_path in ("/app/main.py", "/app/main.py/"):
+        for header_name in ("x-forwarded-uri", "x-original-url", "x-rewrite-url"):
+            h_val = request.headers.get(header_name)
+            if h_val:
+                clean_h = h_val.split("?", 1)[0]
+                if clean_h and clean_h != "/app/main.py":
+                    raw_path = clean_h
+                    break
+        else:
+            route_matches = request.headers.get("x-now-route-matches")
+            if route_matches is not None:
+                parsed = parse_qs(route_matches, keep_blank_values=True)
+                matched = parsed.get("1", [""])[0]
+                raw_path = "/" + unquote(matched).lstrip("/")
+            else:
+                raw_path = "/"
+    elif raw_path.startswith("/app/main.py/"):
+        raw_path = raw_path[len("/app/main.py") :]
+
+    if not raw_path.startswith("/"):
+        raw_path = "/" + raw_path
+    if len(raw_path) > 1 and raw_path.endswith("/"):
+        raw_path = raw_path.rstrip("/")
+
+    request.scope["path"] = raw_path
+    request.scope["raw_path"] = raw_path.encode("utf-8")
+    return raw_path
+
+
+def _is_public_path(path: str) -> bool:
+    if path in PUBLIC_PATHS:
+        return True
+    return any(path == prefix or path.startswith(prefix + "/") for prefix in PUBLIC_PREFIXES)
 
 
 @app.middleware("http")
 async def auth_guard_middleware(request: Request, call_next):
     """
-    Protege todas as rotas da aplicação (incluindo endpoints HTMX /partials/*)
-    verificando a sessão assinada via cookie.
-    Nota: adicionado antes de SessionMiddleware para que SessionMiddleware
-    envolva este middleware e popule request.session primeiro.
+    Libera explicitamente as rotas públicas (/login, /logout, /static, /favicon.ico, /health)
+    antes de qualquer RedirectResponse(url="/login") e protege as demais rotas.
     """
-    path = request.url.path
-    if path not in PUBLIC_PATHS:
-        is_auth = request.session.get("authenticated") is True
-        if not is_auth:
-            if request.headers.get("HX-Request") == "true":
-                return Response(status_code=401, headers={"HX-Redirect": "/login"})
-            return RedirectResponse(url="/login", status_code=303)
+    path = _resolve_vercel_path(request)
+
+    if _is_public_path(path):
+        return await call_next(request)
+
+    is_auth = request.session.get("authenticated") is True
+    if not is_auth:
+        if request.headers.get("HX-Request") == "true":
+            return Response(status_code=401, headers={"HX-Redirect": "/login"})
+        return RedirectResponse(url="/login", status_code=303)
+
     return await call_next(request)
 
 
-# SessionMiddleware deve ser registrado por último para ser a camada mais externa
+# ProxyHeadersMiddleware antes do SessionMiddleware, conforme solicitado
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+
+# SessionMiddleware com secret_key fixo, https_only=False e same_site="lax"
 app.add_middleware(
     SessionMiddleware,
     secret_key=SECRET_KEY,
     session_cookie="leotracker_session",
     max_age=60 * 60 * 24 * 7,
     same_site="lax",
+    https_only=False,
 )
 
 
@@ -216,12 +276,15 @@ def _build_base_context(
 
 
 # ============================================================================
-# ROTAS DE AUTENTICAÇÃO
+# ROTAS DE AUTENTICAÇÃO E HEALTHCHECK
 # ============================================================================
+@app.get("/health", response_class=JSONResponse)
+async def healthcheck():
+    return {"status": "ok"}
+
+
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
-    if request.session.get("authenticated") is True:
-        return RedirectResponse(url="/", status_code=303)
     return templates.TemplateResponse("login.html", {"request": request, "error": None})
 
 
