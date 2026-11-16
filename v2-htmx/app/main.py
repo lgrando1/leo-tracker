@@ -1,13 +1,12 @@
 from datetime import date, datetime, timedelta
 import os
 import pathlib
-from pathlib import Path
 import secrets
 import sys
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, unquote
 
-from fastapi import FastAPI, File, Form, Query, Request, Response, UploadFile
+from fastapi import FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -48,7 +47,7 @@ from app.services.tracker_repo import (
 app = FastAPI(
     title="Leo Tracker Pro · v2 HTMX",
     description="Aplicação FastAPI + Jinja2 + HTMX + Tailwind CSS baseada exclusivamente no @app.py.",
-    version="2.1.1",
+    version="2.1.2",
 )
 
 # Resolução absoluta de templates e static para compatibilidade com Vercel Serverless e execução local
@@ -66,9 +65,6 @@ if not STATIC_DIR.exists():
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-PUBLIC_PATHS = {"/login", "/logout", "/favicon.ico", "/health"}
-PUBLIC_PREFIXES = ("/login", "/logout", "/static", "/favicon.ico", "/health")
-
 # Fallback fixo para SECRET_KEY (nunca aleatório em runtime serverless)
 SECRET_KEY = (
     os.getenv("SECRET_KEY")
@@ -79,9 +75,8 @@ SECRET_KEY = (
 
 def _resolve_vercel_path(request: Request) -> str:
     """
-    Normaliza o caminho da requisição quando o rewrite da Vercel (/(.*) -> /app/main.py)
-    encaminha scope['path'] como '/app/main.py' e preserva a rota original em
-    'x-now-route-matches' ou headers de proxy reverso.
+    Normaliza o caminho caso o rewrite da Vercel (/(.*) -> /app/main.py)
+    encaminhe scope['path'] como '/app/main.py'.
     """
     raw_path = request.scope.get("path") or request.url.path or "/"
 
@@ -114,33 +109,36 @@ def _resolve_vercel_path(request: Request) -> str:
     return raw_path
 
 
-def _is_public_path(path: str) -> bool:
-    if path in PUBLIC_PATHS:
-        return True
-    return any(path == prefix or path.startswith(prefix + "/") for prefix in PUBLIC_PREFIXES)
-
-
 @app.middleware("http")
-async def auth_guard_middleware(request: Request, call_next):
+async def vercel_path_and_api_auth_middleware(request: Request, call_next):
     """
-    Libera explicitamente as rotas públicas (/login, /logout, /static, /favicon.ico, /health)
-    antes de qualquer RedirectResponse(url="/login") e protege as demais rotas.
+    1. Normaliza o path na Vercel sem NUNCA emitir RedirectResponse('/login').
+    2. Libera rotas públicas ('/', '/login', '/auth/login', '/logout', '/static', '/favicon.ico', '/health').
+    3. Para rotas de parciais/API ('/partials/...', '/api/...'), se não estiver autenticado,
+       retorna HTMLResponse('Não autorizado', status_code=401) com cabeçalho HX-Redirect: '/'.
     """
     path = _resolve_vercel_path(request)
 
-    if _is_public_path(path):
+    if (
+        path in ("/", "/login", "/auth/login", "/logout", "/favicon.ico", "/health")
+        or path.startswith("/login")
+        or path.startswith("/auth/login")
+        or path.startswith("/logout")
+        or path.startswith("/static")
+    ):
         return await call_next(request)
 
-    is_auth = request.session.get("authenticated") is True
-    if not is_auth:
-        if request.headers.get("HX-Request") == "true":
-            return Response(status_code=401, headers={"HX-Redirect": "/login"})
-        return RedirectResponse(url="/login", status_code=303)
+    if not request.session.get("authenticated"):
+        return HTMLResponse(
+            "Não autorizado",
+            status_code=401,
+            headers={"HX-Redirect": "/"},
+        )
 
     return await call_next(request)
 
 
-# ProxyHeadersMiddleware antes do SessionMiddleware, conforme solicitado
+# ProxyHeadersMiddleware antes do SessionMiddleware
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 # SessionMiddleware com secret_key fixo, https_only=False e same_site="lax"
@@ -240,7 +238,6 @@ def _build_base_context(
 
     peso_atual = peso_data["peso_atual"]
     peso_alvo = metas["peso_alvo"]
-    # Mesma fórmula de progresso da sidebar do @app.py (linha 584)
     progresso_peso = (
         min(max(0.0, (150.0 - peso_atual) / max(0.1, (150.0 - peso_alvo))), 1.0) * 100.0
     )
@@ -276,19 +273,34 @@ def _build_base_context(
 
 
 # ============================================================================
-# ROTAS DE AUTENTICAÇÃO E HEALTHCHECK
+# ROTAS DE AUTENTICAÇÃO E PÁGINA PRINCIPAL (SEM REDIRECT PARA /login)
 # ============================================================================
 @app.get("/health", response_class=JSONResponse)
 async def healthcheck():
     return {"status": "ok"}
 
 
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request, data: Optional[str] = Query(default=None)):
+    if not request.session.get("authenticated"):
+        return templates.TemplateResponse(
+            "login.html", {"request": request, "error": None}
+        )
+    data_alvo = _parse_date(data)
+    ctx = _build_base_context(data_alvo)
+    ctx["request"] = request
+    return templates.TemplateResponse("index.html", ctx)
+
+
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
+    if request.session.get("authenticated"):
+        return RedirectResponse(url="/", status_code=303)
     return templates.TemplateResponse("login.html", {"request": request, "error": None})
 
 
 @app.post("/login", response_class=HTMLResponse)
+@app.post("/auth/login", response_class=HTMLResponse)
 async def login_submit(request: Request, password: str = Form(default="")):
     if secrets.compare_digest(password.strip(), APP_PASSWORD):
         request.session["authenticated"] = True
@@ -300,24 +312,16 @@ async def login_submit(request: Request, password: str = Form(default="")):
     )
 
 
-@app.post("/logout")
 @app.get("/logout")
+@app.post("/logout")
 async def logout(request: Request):
     request.session.clear()
-    return RedirectResponse(url="/login", status_code=303)
+    return RedirectResponse(url="/", status_code=303)
 
 
 # ============================================================================
-# PÁGINA PRINCIPAL & RESUMO DO TOPO
+# PARCIAIS: RESUMO DO TOPO
 # ============================================================================
-@app.get("/", response_class=HTMLResponse)
-async def index(request: Request, data: Optional[str] = Query(default=None)):
-    data_alvo = _parse_date(data)
-    ctx = _build_base_context(data_alvo)
-    ctx["request"] = request
-    return templates.TemplateResponse("index.html", ctx)
-
-
 @app.get("/partials/summary", response_class=HTMLResponse)
 async def partial_summary(request: Request, data: Optional[str] = Query(default=None)):
     data_alvo = _parse_date(data)
@@ -376,7 +380,7 @@ async def partial_peso_delete(
 
 
 # ============================================================================
-# PARCIAIS: MEDIDAS CORPORAIS (Weltman + public.body_measurements + public.peso + public.perfil)
+# PARCIAIS: MEDIDAS CORPORAIS
 # ============================================================================
 @app.post("/partials/medidas", response_class=HTMLResponse)
 async def partial_medidas_post(
