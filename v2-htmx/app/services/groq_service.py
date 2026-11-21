@@ -265,28 +265,49 @@ def tentar_parse_json_direto(
     texto_usuario: str, data_ref: Optional[date] = None
 ) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
     """
-    Verifica se o texto enviado pelo usuário é um JSON colado diretamente
-    (começa com '{' e termina com '}', ou começa com '[' e termina com ']').
+    Limpa eventuais cercas Markdown (```json e ```) e verifica se o texto
+    começa com '{' ou '['.
+    - Se começar com '{' ou '[', faz json.loads() diretamente no Python (sem chamar o Groq):
+      * Aceita formato completo {"analise": "...", "alimentos": [...]}, lista direta [...]
+        ou objeto único {...}.
+      * Se houver erro de sintaxe JSON, captura json.JSONDecodeError e retorna mensagem
+        clara sem chamar o Groq.
     """
     if not texto_usuario:
         return False, None, None
 
     cleaned = re.sub(r"```(?:json)?", "", texto_usuario, flags=re.IGNORECASE).replace("```", "").strip()
-    is_json_obj = cleaned.startswith("{") and cleaned.endswith("}")
-    is_json_arr = cleaned.startswith("[") and cleaned.endswith("]")
-
-    if not (is_json_obj or is_json_arr):
+    if not (cleaned.startswith("{") or cleaned.startswith("[")):
         return False, None, None
 
     data_hoje_str = (data_ref or get_now_br().date()).strftime("%Y-%m-%d")
-    ok, res = extrair_e_parsear_json(
-        cleaned,
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError as je:
+        preview = cleaned[:200].replace("\n", " ")
+        return (
+            True,
+            None,
+            f"JSONDecodeError no JSON colado: {je.msg} (linha {je.lineno}, coluna {je.colno}, pos {je.pos}). "
+            f"Trecho inicial: {preview!r}",
+        )
+
+    payload = normalizar_payload_nutricional(
+        parsed,
         data_padrao_str=data_hoje_str,
         analise_padrao="📦 JSON importado diretamente (bypass da API Groq).",
     )
-    if ok and isinstance(res, dict):
-        return True, res, None
-    return True, None, str(res)
+    if not payload.get("alimentos"):
+        preview = cleaned[:200].replace("\n", " ")
+        return (
+            True,
+            None,
+            f"JSON sintaticamente válido, mas nenhum item alimentar válido foi encontrado. "
+            f"Esperado 'alimentos': [...] ou objeto/lista com 'alimento', 'kcal', 'p', 'c', 'g'. "
+            f"Trecho: {preview!r}",
+        )
+
+    return True, payload, None
 
 
 def processar_texto_ia(

@@ -273,7 +273,10 @@
                         </p>
                         {% else %}
                         <div class="flex flex-wrap items-center gap-2">
-                            <span class="text-sm font-bold text-white">🏃‍♂️ {{ row.tipo }}</span>
+                            <span class="text-sm font-bold text-white">
+                                {% if 'Musculação' in (row.tipo or '') or 'Hevy' in (row.tipo or '') %}🏋️‍♂️{% else %}🏃‍♂️{% endif %}
+                                {{ row.tipo }}
+                            </span>
                             {% if row.nome_treino %}
                             <span class="text-xs bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded-md">
                                 {{ row.nome_treino }}
@@ -288,6 +291,11 @@
                             {% if row.bpm_medio %}<span>❤️ {{ row.bpm_medio }} bpm</span>{% endif %}
                             {% if row.carga_tss %}<span>⚡ TSS: {{ row.carga_tss }}</span>{% endif %}
                         </div>
+                        {% if row.observacoes %}
+                        <p class="text-xs text-slate-400/90 whitespace-pre-line bg-slate-950/60 border border-slate-800/80 rounded-lg px-2.5 py-1.5 mt-1">
+                            {{ row.observacoes }}
+                        </p>
+                        {% endif %}
                         {% endif %}
                     </div>
 

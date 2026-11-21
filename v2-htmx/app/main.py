@@ -1,5 +1,6 @@
 from datetime import date, datetime, timedelta
 import html
+import json
 import os
 import pathlib
 import secrets
@@ -31,6 +32,8 @@ from app.services.groq_service import (
     tentar_parse_json_direto,
 )
 from app.services.intervals_service import (
+    debug_wellness_intervals,
+    enviar_peso_intervals,
     sincronizar_peso_intervals,
     sincronizar_treinos_recentes,
 )
@@ -401,7 +404,7 @@ async def api_intervals_auto_sync(
     try:
         eng = get_engine()
         ok_tr, msg_tr = sincronizar_treinos_recentes(engine=eng, dias_retroativos=7)
-        ok_pe, msg_pe, qtd_pe = sincronizar_peso_intervals(engine=eng, dias_retroativos=14)
+        ok_pe, msg_pe, qtd_pe = sincronizar_peso_intervals(engine=eng, dias_retroativos=30)
 
         if qtd_pe > 0 or (ok_tr and "processado(s)" in msg_tr) or force:
             houve_atualizacao = True
@@ -437,6 +440,50 @@ async def api_intervals_auto_sync(
     return response
 
 
+@app.get("/api/intervals/debug-wellness")
+async def api_intervals_debug_wellness(
+    request: Request, format: Optional[str] = Query(default=None)
+):
+    """
+    Endpoint de diagnóstico que exibe os últimos 5 registros brutos retornados pela
+    API /wellness do Intervals.icu (últimos 30 dias) para inspecionar a chegada do campo 'weight'.
+    """
+    info = debug_wellness_intervals(dias_retroativos=30)
+    accept = request.headers.get("accept", "")
+    is_htmx = request.headers.get("HX-Request") == "true"
+
+    if format == "json" or ("application/json" in accept and not is_htmx):
+        return JSONResponse(content=info, status_code=200)
+
+    raw_json_str = json.dumps(info.get("last_5_raw") or [], indent=2, ensure_ascii=False)
+    weight_json_str = json.dumps(info.get("last_5_with_weight") or [], indent=2, ensure_ascii=False)
+
+    if info["ok"]:
+        texto = (
+            f"🩺 DEBUG WELLNESS INTERVALS.ICU ({info['range']})\n"
+            f"• Athlete ID: {info['athlete_id']}\n"
+            f"• Dias retornados pela API (30d): {info['total_days_returned']}\n"
+            f"• Dias com campo 'weight' preenchido: {info['days_with_weight']}\n\n"
+            f"--- Últimos 5 dias COM peso preenchido ---\n{weight_json_str}\n\n"
+            f"--- Últimos 5 registros brutos (/wellness) ---\n{raw_json_str}"
+        )
+        box = (
+            f'<div role="status" class="bg-slate-950 border border-indigo-500/40 text-indigo-200 p-3.5 rounded-xl text-[11px] font-mono whitespace-pre-wrap max-h-72 overflow-y-auto">'
+            f"{html.escape(texto)}</div>"
+        )
+    else:
+        texto = (
+            f"❌ ERRO AO CONSULTAR /wellness DO INTERVALS.ICU\n"
+            f"• Athlete ID: {info['athlete_id']}\n"
+            f"• Erro: {info['error']}"
+        )
+        box = (
+            f'<div role="alert" class="bg-red-100 border border-red-400 text-red-800 p-3.5 rounded-xl text-xs font-mono whitespace-pre-wrap">'
+            f"{html.escape(texto)}</div>"
+        )
+    return HTMLResponse(content=box, status_code=200)
+
+
 # ============================================================================
 # PARCIAIS: RESUMO DO TOPO
 # ============================================================================
@@ -459,6 +506,7 @@ async def partial_peso_get(request: Request, data: Optional[str] = Query(default
     return _render_template(request, "partials/weight_section.html", ctx)
 
 
+@app.post("/api/peso/registrar", response_class=HTMLResponse)
 @app.post("/partials/peso", response_class=HTMLResponse)
 async def partial_peso_post(
     request: Request,
@@ -466,12 +514,21 @@ async def partial_peso_post(
     peso_kg: float = Form(...),
     data_alvo_str: Optional[str] = Form(default=None),
 ):
+    """
+    Salva o peso no banco Neon (public.peso) E envia PUT para
+    /api/v1/athlete/{ATHLETE_ID}/wellness/{YYYY-MM-DD} no Intervals.icu (sincronização bidirecional).
+    """
     dt_peso = _parse_date(data_peso)
     dt_alvo = _parse_date(data_alvo_str or data_peso)
     feedback = None
     try:
-        inserir_peso(dt_peso, float(peso_kg))
-        feedback = f"Peso de {peso_kg:.1f} kg salvo em {dt_peso.strftime('%d/%m/%Y')}!"
+        val_kg = float(peso_kg)
+        inserir_peso(dt_peso, val_kg)
+        ok_int, msg_int = enviar_peso_intervals(dt_peso, val_kg)
+        if ok_int:
+            feedback = f"Peso de {val_kg:.1f} kg salvo no Neon ({dt_peso.strftime('%d/%m/%Y')}) e sincronizado via PUT no Intervals.icu!"
+        else:
+            feedback = f"Peso de {val_kg:.1f} kg salvo no Neon ({dt_peso.strftime('%d/%m/%Y')}) · {msg_int}"
     except Exception as exc:
         feedback = f"Erro ao salvar peso: {exc}"
 
@@ -761,7 +818,7 @@ async def partial_treino_sync(
     try:
         eng = get_engine()
         ok_tr, msg_tr = sincronizar_treinos_recentes(engine=eng, dias_retroativos=7)
-        ok_pe, msg_pe, _ = sincronizar_peso_intervals(engine=eng, dias_retroativos=14)
+        ok_pe, msg_pe, _ = sincronizar_peso_intervals(engine=eng, dias_retroativos=30)
         ok = ok_tr or ok_pe
         msg = f"{msg_tr} | {msg_pe}"
     except Exception as exc:

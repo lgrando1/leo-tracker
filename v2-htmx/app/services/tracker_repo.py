@@ -222,11 +222,23 @@ def get_peso_historico(limit: int = 30) -> Dict[str, Any]:
 
 
 def inserir_peso(data_peso: date, peso_kg: float) -> None:
-    """Insere novo registro em public.peso (@app.py linha 649)."""
-    execute_write(
-        "INSERT INTO public.peso (data, peso_kg) VALUES (:d, :p)",
-        {"d": data_peso, "p": peso_kg},
+    """
+    Insere ou atualiza o registro de peso da data em public.peso (id, data DATE, peso_kg REAL).
+    """
+    existente = fetch_one(
+        "SELECT id FROM public.peso WHERE data = :d ORDER BY id DESC LIMIT 1",
+        {"d": data_peso},
     )
+    if existente and existente.get("id"):
+        execute_write(
+            "UPDATE public.peso SET peso_kg = :p WHERE data = :d",
+            {"p": peso_kg, "d": data_peso},
+        )
+    else:
+        execute_write(
+            "INSERT INTO public.peso (data, peso_kg) VALUES (:d, :p)",
+            {"d": data_peso, "p": peso_kg},
+        )
 
 
 def remover_peso(peso_id: int) -> None:

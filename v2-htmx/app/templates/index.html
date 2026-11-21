@@ -69,17 +69,31 @@
         <!-- Coluna Esquerda: Peso de Hoje + Evolução EWMA -->
         <section aria-labelledby="heading-peso" class="lg:col-span-5 space-y-4">
             <article class="rounded-2xl bg-slate-900 border border-slate-800 p-5 shadow-lg">
-                <div class="flex items-center justify-between mb-4">
+                <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
                     <div>
                         <h2 id="heading-peso" class="text-base font-bold text-white flex items-center gap-2">
                             <span>⚖️</span> Peso de Hoje
                         </h2>
-                        <p class="text-xs text-slate-400">Registra em <code class="text-slate-300">public.peso</code> e atualiza a tendência EWMA</p>
+                        <p class="text-xs text-slate-400">Salva em <code class="text-slate-300">public.peso</code> (Neon) e envia <code class="text-slate-300">PUT /wellness</code> ao Intervals.icu</p>
                     </div>
+                    <button
+                        type="button"
+                        hx-get="/api/intervals/debug-wellness"
+                        hx-target="#wellness-debug-container"
+                        hx-swap="innerHTML"
+                        hx-indicator="#wellness-debug-spin"
+                        class="text-[11px] font-semibold bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 px-2.5 py-1 rounded-md border border-indigo-500/30 transition flex items-center gap-1"
+                        title="Ver os últimos 5 registros brutos de /wellness do Intervals.icu"
+                    >
+                        <span>🩺 Debug Wellness</span>
+                        <span id="wellness-debug-spin" class="htmx-indicator animate-spin">⏳</span>
+                    </button>
                 </div>
 
+                <div id="wellness-debug-container" class="mb-3 empty:hidden"></div>
+
                 <form
-                    hx-post="/partials/peso"
+                    hx-post="/api/peso/registrar"
                     hx-target="#weight-section"
                     hx-swap="outerHTML"
                     class="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end"
