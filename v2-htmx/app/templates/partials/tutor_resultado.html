@@ -2,28 +2,28 @@
 <div role="alert" class="bg-red-100 border border-red-400 text-red-800 p-4 rounded-lg text-xs font-mono whitespace-pre-wrap">{{ tutor_error }}</div>
 {% elif tutor %}
 <div class="space-y-4">
-    <!-- Resumo Compacto dos Dados Reais Coletados (7 dias) -->
+    <!-- Barra de Referência: Dados Reais Coletados (7d) vs. Metas Reais do Neon -->
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs tabular-nums">
         <div class="rounded-xl bg-slate-950/80 border border-slate-800 px-3 py-2">
-            <span class="text-[10px] uppercase tracking-wider text-slate-400 block">⚖️ Peso (7d)</span>
+            <span class="text-[10px] uppercase tracking-wider text-slate-400 block">⚖️ Peso Atual (7d)</span>
             <strong class="text-white">{{ '%.1f'|format(tutor.contexto.antropometria.peso_atual_kg) }} kg</strong>
-            <span class="text-slate-400">({{ '%+.1f'|format(tutor.contexto.antropometria.variacao_7d_kg) }} kg)</span>
+            <span class="text-slate-400">({{ '%+.1f'|format(tutor.contexto.antropometria.variacao_7d_kg) }} kg · Alvo {{ '%.0f'|format(tutor.contexto.metas_reais_cadastradas_neon.meta_peso_alvo_kg) }} kg)</span>
         </div>
 
         <div class="rounded-xl bg-slate-950/80 border border-slate-800 px-3 py-2">
-            <span class="text-[10px] uppercase tracking-wider text-slate-400 block">🥩 Nutrição Média</span>
-            <strong class="text-emerald-400">{{ tutor.contexto.nutricao_7d.media_kcal_dia }} kcal</strong>
-            <span class="text-sky-300">· {{ '%.1f'|format(tutor.contexto.nutricao_7d.media_proteina_g_dia) }}g P ({{ '%.2f'|format(tutor.contexto.nutricao_7d.proteina_g_por_kg_peso_atual) }} g/kg)</span>
+            <span class="text-[10px] uppercase tracking-wider text-slate-400 block">🥩 Média 7d vs Meta Neon</span>
+            <strong class="text-emerald-400">{{ tutor.contexto.nutricao_7d.media_kcal_dia }}/{{ tutor.contexto.metas_reais_cadastradas_neon.meta_kcal_diaria }} kcal</strong>
+            <span class="text-sky-300">· {{ '%.0f'|format(tutor.contexto.nutricao_7d.media_proteina_g_dia) }}/{{ tutor.contexto.metas_reais_cadastradas_neon.meta_proteina_g_diaria }}g P</span>
         </div>
 
         <div class="rounded-xl bg-slate-950/80 border border-slate-800 px-3 py-2">
-            <span class="text-[10px] uppercase tracking-wider text-slate-400 block">🚴‍♂️🏋️‍♂️ Carga & PMC</span>
+            <span class="text-[10px] uppercase tracking-wider text-slate-400 block">🚴‍♂️🏋️‍♂️ Carga & PMC (7d)</span>
             <strong class="text-indigo-300">{{ tutor.contexto.treinos_7d.total_sessoes }} treinos ({{ '%.0f'|format(tutor.contexto.treinos_7d.tss_total_semana) }} TSS)</strong>
             <span class="text-slate-400">· TSB {{ '%+.0f'|format(tutor.contexto.treinos_7d.tsb_prontidao) }}</span>
         </div>
 
         <div class="rounded-xl bg-slate-950/80 border border-slate-800 px-3 py-2">
-            <span class="text-[10px] uppercase tracking-wider text-slate-400 block">💤 Sono & FC Repouso</span>
+            <span class="text-[10px] uppercase tracking-wider text-slate-400 block">💤 Sono & FC Repouso (7d)</span>
             {% if tutor.contexto.sono_e_recuperacao_7d.media_sono_horas %}
             <strong class="text-amber-300">{{ '%.1f'|format(tutor.contexto.sono_e_recuperacao_7d.media_sono_horas) }}h</strong>
             {% else %}
@@ -38,44 +38,77 @@
         </div>
     </div>
 
-    <!-- 3 Blocos Estruturados do Parecer Técnico -->
+    <!-- 3 Cards Escaneáveis -->
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <!-- Bloco 1: Diagnóstico Cruzado (Carga x Sono x Dieta) -->
-        <article class="rounded-xl bg-slate-950/90 border border-indigo-500/30 p-4 space-y-2">
-            <div class="flex items-center gap-2">
+        <!-- Card 1: Diagnóstico Cruzado -->
+        <article class="rounded-xl bg-slate-950/90 border border-indigo-500/30 p-4 space-y-3">
+            <div class="flex items-center gap-2 border-b border-slate-800/80 pb-2">
                 <span class="text-base">🔬</span>
                 <h3 class="text-xs font-bold uppercase tracking-wider text-indigo-300">
-                    1. Diagnóstico Cruzado (Carga × Sono × Dieta)
+                    1. Diagnóstico Cruzado
                 </h3>
             </div>
-            <p class="text-xs sm:text-sm text-slate-200 leading-relaxed whitespace-pre-line">{{ tutor.blocos.diagnostico_cruzado }}</p>
+            <ul class="space-y-2.5 text-sm leading-relaxed">
+                {% for item in tutor.parecer.diagnostico %}
+                <li class="flex items-start gap-2">
+                    {% if item.status == 'alerta' %}
+                    <span class="mt-0.5 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-bold uppercase bg-rose-500/20 text-rose-300 border border-rose-500/30 shrink-0">Alerta</span>
+                    {% elif item.status == 'ok' %}
+                    <span class="mt-0.5 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-bold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shrink-0">OK</span>
+                    {% else %}
+                    <span class="mt-0.5 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-bold uppercase bg-sky-500/20 text-sky-300 border border-sky-500/30 shrink-0">Info</span>
+                    {% endif %}
+                    <div>
+                        <strong class="font-bold text-slate-100">• {{ item.titulo }}:</strong>
+                        <span class="text-slate-300">{{ item.texto }}</span>
+                    </div>
+                </li>
+                {% endfor %}
+            </ul>
         </article>
 
-        <!-- Bloco 2: Prioridade Número 1 para Hoje -->
-        <article class="rounded-xl bg-slate-950/90 border border-emerald-500/40 p-4 space-y-2">
-            <div class="flex items-center gap-2">
+        <!-- Card 2: Prioridades para Hoje -->
+        <article class="rounded-xl bg-slate-950/90 border border-emerald-500/40 p-4 space-y-3">
+            <div class="flex items-center gap-2 border-b border-slate-800/80 pb-2">
                 <span class="text-base">🎯</span>
                 <h3 class="text-xs font-bold uppercase tracking-wider text-emerald-300">
-                    2. Prioridade Número 1 para Hoje
+                    2. Prioridades para Hoje
                 </h3>
             </div>
-            <p class="text-xs sm:text-sm text-slate-100 font-medium leading-relaxed whitespace-pre-line">{{ tutor.blocos.prioridade_hoje }}</p>
+            <ul class="space-y-2.5 text-sm leading-relaxed">
+                {% for item in tutor.parecer.prioridades_hoje %}
+                <li class="flex items-start gap-2">
+                    <span class="font-extrabold text-emerald-400 tabular-nums shrink-0">{{ loop.index }}.</span>
+                    <div>
+                        <strong class="font-bold text-emerald-300">{{ item.acao }}:</strong>
+                        <span class="text-slate-200">{{ item.detalhe }}</span>
+                    </div>
+                </li>
+                {% endfor %}
+            </ul>
         </article>
 
-        <!-- Bloco 3: Ponto de Atenção na Semana -->
-        <article class="rounded-xl bg-slate-950/90 border border-amber-500/35 p-4 space-y-2">
-            <div class="flex items-center gap-2">
+        <!-- Card 3: Pontos de Atenção na Semana -->
+        <article class="rounded-xl bg-slate-950/90 border border-amber-500/35 p-4 space-y-3">
+            <div class="flex items-center gap-2 border-b border-slate-800/80 pb-2">
                 <span class="text-base">⚠️</span>
                 <h3 class="text-xs font-bold uppercase tracking-wider text-amber-300">
-                    3. Ponto de Atenção na Semana
+                    3. Pontos de Atenção na Semana
                 </h3>
             </div>
-            <p class="text-xs sm:text-sm text-slate-200 leading-relaxed whitespace-pre-line">{{ tutor.blocos.ponto_atencao_semana }}</p>
+            <ul class="space-y-2.5 text-sm leading-relaxed">
+                {% for ponto in tutor.parecer.pontos_atencao %}
+                <li class="flex items-start gap-2">
+                    <span class="text-amber-300 font-bold shrink-0">▸</span>
+                    <span class="text-slate-200">{{ ponto }}</span>
+                </li>
+                {% endfor %}
+            </ul>
         </article>
     </div>
 
-    <div class="flex items-center justify-between text-[11px] text-slate-500 px-1">
-        <span>Período analisado: {{ tutor.contexto.periodo }}</span>
+    <div class="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500 px-1">
+        <span>Período: {{ tutor.contexto.periodo }} · Metas Neon: {{ tutor.contexto.metas_reais_cadastradas_neon.meta_kcal_diaria }} kcal | P:{{ tutor.contexto.metas_reais_cadastradas_neon.meta_proteina_g_diaria }}g C:{{ tutor.contexto.metas_reais_cadastradas_neon.meta_carbo_g_diaria }}g G:{{ tutor.contexto.metas_reais_cadastradas_neon.meta_gordura_g_diaria }}g</span>
         <span>Modelo: <code class="text-slate-400">{{ tutor.modelo_usado }}</code></span>
     </div>
 </div>

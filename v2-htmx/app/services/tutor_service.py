@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 from groq import Groq, NotFoundError
 from app.config import GROQ_API_KEY, GROQ_MODEL_TEXT, get_now_br
-from app.database import fetch_all
+from app.database import fetch_all, fetch_one
 from app.services.groq_service import (
     FALLBACK_TEXT_MODELS,
     diagnosticar_chave_groq,
@@ -16,6 +16,36 @@ from app.services.groq_service import (
 )
 from app.services.intervals_service import _get_intervals_creds, _mapear_atividade_intervals
 from app.services.tracker_repo import get_metas, get_peso_historico
+
+
+def _buscar_metas_reais_neon() -> Dict[str, Any]:
+    """
+    Busca as metas reais ativas diretamente da tabela public.perfil no banco Neon.
+    """
+    try:
+        row = fetch_one("SELECT * FROM public.perfil ORDER BY id ASC LIMIT 1")
+        if row:
+            return {
+                "meta_kcal_diaria": int(float(row.get("meta_kcal") or 1638)),
+                "meta_proteina_g_diaria": int(float(row.get("meta_proteina") or 108)),
+                "meta_carbo_g_diaria": int(float(row.get("meta_carbo") or 164)),
+                "meta_gordura_g_diaria": int(float(row.get("meta_gordura") or 67)),
+                "meta_peso_alvo_kg": float(row.get("meta_peso_alvo") or 120.0),
+                "ritmo_semanal_kg": float(row.get("ritmo_semanal") or 0.8),
+                "fator_atividade": float(row.get("fator_atividade") or 1.2),
+            }
+    except Exception:
+        pass
+    m = get_metas()
+    return {
+        "meta_kcal_diaria": int(m.get("kcal", 1638)),
+        "meta_proteina_g_diaria": int(m.get("prot", 108)),
+        "meta_carbo_g_diaria": int(m.get("carb", 164)),
+        "meta_gordura_g_diaria": int(m.get("gord", 67)),
+        "meta_peso_alvo_kg": float(m.get("peso_alvo", 120.0)),
+        "ritmo_semanal_kg": float(m.get("ritmo", 0.8)),
+        "fator_atividade": float(m.get("fator", 1.2)),
+    }
 
 
 def _buscar_wellness_intervals(dias: int = 7) -> List[Dict[str, Any]]:
@@ -57,14 +87,20 @@ def _buscar_activities_intervals(dias: int = 7) -> List[Dict[str, Any]]:
 def montar_contexto_tutor(dias: int = 7) -> Dict[str, Any]:
     """
     Reúne em um dicionário compacto os dados reais dos últimos 7 dias:
-    1. Antropometria (peso inicial/atual do período, variação e metas configuradas)
-    2. Nutrição (Neon public.consumo: médias diárias, g/kg de proteína e dias com déficit acentuado)
-    3. Treinos (Intervals /activities + Neon public.exercicios: sessões, tipos, duração, TSS, CTL, ATL, TSB)
-    4. Sono e Recuperação (Intervals /wellness: horas de sono sleepSecs/3600, sleepScore e restingHR)
+    1. Metas Reais Cadastradas no Neon (public.perfil: kcal, proteína, carbo, gordura e peso alvo)
+    2. Antropometria (peso inicial/atual do período e variação)
+    3. Nutrição (Neon public.consumo: médias diárias comparadas com as metas reais do Neon)
+    4. Treinos (Intervals /activities + Neon public.exercicios: sessões, tipos, duração, TSS, CTL, ATL, TSB)
+    5. Sono e Recuperação (Intervals /wellness: horas de sono sleepSecs/3600, sleepScore e restingHR)
     """
     hoje = get_now_br().date()
     dt_ini = hoje - timedelta(days=dias)
-    metas = get_metas()
+    metas_reais = _buscar_metas_reais_neon()
+
+    meta_kcal = float(metas_reais["meta_kcal_diaria"])
+    meta_prot = float(metas_reais["meta_proteina_g_diaria"])
+    meta_carb = float(metas_reais["meta_carbo_g_diaria"])
+    meta_gord = float(metas_reais["meta_gordura_g_diaria"])
 
     # 1. Antropometria
     peso_hist = get_peso_historico(limit=30)
@@ -75,7 +111,7 @@ def montar_contexto_tutor(dias: int = 7) -> Dict[str, Any]:
         """
         SELECT data, peso_kg
         FROM public.peso
-        WHERE data >= :d1 AND data <= :d2 AND peso_kg IS NOT NULL
+        WHERE DATE(data) >= :d1 AND DATE(data) <= :d2 AND peso_kg IS NOT NULL
         ORDER BY data ASC, id ASC
         """,
         {"d1": dt_ini, "d2": hoje},
@@ -89,6 +125,7 @@ def montar_contexto_tutor(dias: int = 7) -> Dict[str, Any]:
         peso_fim_7d = peso_atual
 
     variacao_7d_kg = round(peso_fim_7d - peso_ini_7d, 2)
+    meta_prot_g_kg_configurada = round(meta_prot / max(peso_atual, 1.0), 2)
 
     # 2. Nutrição (Neon public.consumo)
     consumo_diario = fetch_all(
@@ -118,11 +155,8 @@ def montar_contexto_tutor(dias: int = 7) -> Dict[str, Any]:
 
     prot_g_kg = round(media_prot / max(peso_atual, 1.0), 2)
 
-    meta_prot = float(metas.get("prot") or 108)
-    meta_kcal = float(metas.get("kcal") or 1638)
-
-    dias_deficit_proteico: List[str] = []
-    dias_deficit_calorico_acentuado: List[str] = []
+    dias_abaixo_meta_prot: List[str] = []
+    dias_abaixo_meta_kcal: List[str] = []
     resumo_dias_nutri: List[Dict[str, Any]] = []
 
     for r in consumo_diario:
@@ -132,10 +166,10 @@ def montar_contexto_tutor(dias: int = 7) -> Dict[str, Any]:
         c_val = float(r["carbo_g"] or 0)
         g_val = float(r["gordura_g"] or 0)
 
-        if p_val < (meta_prot * 0.8):
-            dias_deficit_proteico.append(f"{d_str} ({p_val:.0f}g vs meta {meta_prot:.0f}g)")
+        if p_val < (meta_prot * 0.85):
+            dias_abaixo_meta_prot.append(f"{d_str} ({p_val:.0f}g vs meta real {meta_prot:.0f}g)")
         if k_val < (meta_kcal * 0.75):
-            dias_deficit_calorico_acentuado.append(f"{d_str} ({k_val:.0f} kcal vs meta {meta_kcal:.0f} kcal)")
+            dias_abaixo_meta_kcal.append(f"{d_str} ({k_val:.0f} kcal vs meta real {meta_kcal:.0f} kcal)")
 
         resumo_dias_nutri.append(
             {
@@ -266,7 +300,7 @@ def montar_contexto_tutor(dias: int = 7) -> Dict[str, Any]:
                     "distancia_km": dist_km,
                     "tss": tss_val,
                     "bpm_medio": atv.get("average_heartrate"),
-                    "detalhes": obs_map[:180] if obs_map else None,
+                    "detalhes": obs_map[:160] if obs_map else None,
                 }
             )
     else:
@@ -300,28 +334,36 @@ def montar_contexto_tutor(dias: int = 7) -> Dict[str, Any]:
 
     return {
         "periodo": f"{dt_ini.strftime('%Y-%m-%d')} a {hoje.strftime('%Y-%m-%d')} ({dias} dias)",
+        "metas_reais_cadastradas_neon": {
+            "meta_kcal_diaria": int(meta_kcal),
+            "meta_proteina_g_diaria": int(meta_prot),
+            "meta_proteina_g_por_kg_equivalente": meta_prot_g_kg_configurada,
+            "meta_carbo_g_diaria": int(meta_carb),
+            "meta_gordura_g_diaria": int(meta_gord),
+            "meta_peso_alvo_kg": metas_reais["meta_peso_alvo_kg"],
+        },
         "antropometria": {
             "peso_inicial_7d_kg": round(peso_ini_7d, 1),
             "peso_atual_kg": round(peso_atual, 1),
             "tendencia_ewma_kg": round(tendencia_ewma, 1),
             "variacao_7d_kg": variacao_7d_kg,
-            "meta_peso_alvo_kg": metas.get("peso_alvo"),
-            "meta_kcal_diaria": metas.get("kcal"),
-            "meta_macros_g": {
-                "proteina": metas.get("prot"),
-                "carbo": metas.get("carb"),
-                "gordura": metas.get("gord"),
-            },
+            "meta_peso_alvo_kg": metas_reais["meta_peso_alvo_kg"],
         },
         "nutricao_7d": {
             "dias_registrados": dias_com_registro,
             "media_kcal_dia": int(media_kcal),
+            "saldo_kcal_vs_meta_real_neon": int(round(media_kcal - meta_kcal)),
+            "pct_meta_kcal_atingida": int(round((media_kcal / max(meta_kcal, 1.0)) * 100)),
             "media_proteina_g_dia": media_prot,
+            "saldo_proteina_g_vs_meta_real_neon": round(media_prot - meta_prot, 1),
+            "pct_meta_proteina_atingida": int(round((media_prot / max(meta_prot, 1.0)) * 100)),
             "proteina_g_por_kg_peso_atual": prot_g_kg,
             "media_carbo_g_dia": media_carb,
+            "saldo_carbo_g_vs_meta_real_neon": round(media_carb - meta_carb, 1),
             "media_gordura_g_dia": media_gord,
-            "dias_com_deficit_proteico": dias_deficit_proteico,
-            "dias_com_deficit_calorico_acentuado": dias_deficit_calorico_acentuado,
+            "saldo_gordura_g_vs_meta_real_neon": round(media_gord - meta_gord, 1),
+            "dias_abaixo_da_meta_real_de_proteina": dias_abaixo_meta_prot,
+            "dias_abaixo_da_meta_real_de_kcal": dias_abaixo_meta_kcal,
             "historico_diario": resumo_dias_nutri,
         },
         "treinos_7d": {
@@ -346,40 +388,80 @@ def montar_contexto_tutor(dias: int = 7) -> Dict[str, Any]:
     }
 
 
-def _extrair_blocos_tutor(raw_text: str) -> Dict[str, str]:
+def _normalizar_status(st: Any) -> str:
+    s = str(st or "info").lower().strip()
+    if s in ("alerta", "warn", "warning", "erro", "danger", "critico", "crítico"):
+        return "alerta"
+    if s in ("ok", "sucesso", "bom", "otimo", "ótimo", "verde"):
+        return "ok"
+    return "info"
+
+
+def _extrair_estrutura_tutor(raw_text: str) -> Dict[str, Any]:
     """
-    Extrai os 3 blocos estruturados do retorno do modelo Groq (seja via JSON ou texto com seções).
+    Faz o parse e normaliza o JSON estrito retornado pelo Groq com as listas:
+    - diagnostico: [{"status": "alerta|ok|info", "titulo": "...", "texto": "..."}]
+    - prioridades_hoje: [{"acao": "...", "detalhe": "..."}]
+    - pontos_atencao: ["...", "..."]
     """
     cleaned = re.sub(r"```(?:json)?", "", raw_text or "", flags=re.IGNORECASE).replace("```", "").strip()
     match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-    if match:
-        try:
-            data = json.loads(match.group(0))
-            if isinstance(data, dict):
-                d1 = str(data.get("diagnostico_cruzado") or "").strip()
-                d2 = str(data.get("prioridade_hoje") or "").strip()
-                d3 = str(data.get("ponto_atencao_semana") or "").strip()
-                if d1 or d2 or d3:
-                    return {
-                        "diagnostico_cruzado": d1 or "Sem observações adicionais.",
-                        "prioridade_hoje": d2 or "Manter plano diário.",
-                        "ponto_atencao_semana": d3 or "Monitorar consistência.",
-                    }
-        except Exception:
-            pass
+    candidato = match.group(0) if match else cleaned
 
-    # Fallback se o modelo respondeu em texto livre
+    parsed = json.loads(candidato)
+    if not isinstance(parsed, dict):
+        raise ValueError("O retorno do modelo não é um objeto JSON.")
+
+    diag_raw = parsed.get("diagnostico") or []
+    diagnostico: List[Dict[str, str]] = []
+    if isinstance(diag_raw, list):
+        for item in diag_raw:
+            if isinstance(item, dict):
+                diagnostico.append(
+                    {
+                        "status": _normalizar_status(item.get("status")),
+                        "titulo": str(item.get("titulo") or "Tópico").strip(),
+                        "texto": str(item.get("texto") or "").strip(),
+                    }
+                )
+
+    prio_raw = parsed.get("prioridades_hoje") or []
+    prioridades_hoje: List[Dict[str, str]] = []
+    if isinstance(prio_raw, list):
+        for item in prio_raw:
+            if isinstance(item, dict):
+                prioridades_hoje.append(
+                    {
+                        "acao": str(item.get("acao") or "Ação").strip(),
+                        "detalhe": str(item.get("detalhe") or "").strip(),
+                    }
+                )
+            elif isinstance(item, str) and item.strip():
+                prioridades_hoje.append({"acao": "Prioridade", "detalhe": item.strip()})
+
+    pts_raw = parsed.get("pontos_atencao") or []
+    pontos_atencao: List[str] = []
+    if isinstance(pts_raw, list):
+        for item in pts_raw:
+            if isinstance(item, str) and item.strip():
+                pontos_atencao.append(item.strip())
+            elif isinstance(item, dict):
+                txt = str(item.get("texto") or item.get("detalhe") or "").strip()
+                if txt:
+                    pontos_atencao.append(txt)
+
     return {
-        "diagnostico_cruzado": cleaned or "Sem resposta gerada pelo modelo.",
-        "prioridade_hoje": "Consulte o diagnóstico acima para ajustar treino, sono e macronutrientes de hoje.",
-        "ponto_atencao_semana": "Manter consistência nos registros de alimentação, treino e sono.",
+        "diagnostico": diagnostico,
+        "prioridades_hoje": prioridades_hoje,
+        "pontos_atencao": pontos_atencao,
     }
 
 
 def gerar_parecer_tutor_groq(dias: int = 7) -> Tuple[bool, Dict[str, Any] | str]:
     """
-    Coleta o contexto real dos últimos 7 dias e consulta o modelo GROQ_MODEL_TEXT
-    com o system prompt de Tutor Fisiológico, retornando os 3 blocos acionáveis.
+    Coleta o contexto real dos últimos 7 dias (incluindo as metas reais cadastradas no Neon)
+    e consulta o modelo GROQ_MODEL_TEXT forçando response_format={"type": "json_object"}
+    com frases curtas e escaneáveis.
     """
     clean_key, key_status = diagnosticar_chave_groq()
     model_text = (
@@ -395,24 +477,45 @@ def gerar_parecer_tutor_groq(dias: int = 7) -> Tuple[bool, Dict[str, Any] | str]
         )
 
     contexto = montar_contexto_tutor(dias=dias)
+    metas_neon = contexto["metas_reais_cadastradas_neon"]
     contexto_json_str = json.dumps(contexto, ensure_ascii=False, indent=2)
 
-    system_prompt = (
-        "Você é um tutor de fisiologia do exercício, nutrição esportiva e recuperação. "
-        "Analise os dados reais dos últimos 7 dias (sono, FC de repouso, carga de treino CTL/ATL/TSB, "
-        "peso e ingestão de macros) e responda em português do Brasil de forma direta, técnica e acionável, sem rodeios.\n\n"
-        "Retorne APENAS um objeto JSON válido contendo EXATAMENTE estas 3 chaves:\n"
-        "{\n"
-        '  "diagnostico_cruzado": "Análise técnica cruzando Carga (TSS/CTL/ATL/TSB + Ciclismo/Hevy) x Sono/FC Repouso x Dieta (kcal e proteína g/kg + variação de peso).",\n'
-        '  "prioridade_hoje": "Ação número 1 mais importante para hoje (ex: priorizar sono/recuperação, ajustar carboidrato pré-pedal, bater meta proteica pós-força ou manter ritmo), com números claros.",\n'
-        '  "ponto_atencao_semana": "Principal gargalo ou risco fisiológico observado nos últimos 7 dias (ex: déficit proteico em dias de treino, queda no sono, TSB muito negativo ou falta de registros) e como corrigir."\n'
-        "}"
-    )
+    system_prompt = f"""Você é um tutor de fisiologia do exercício, nutrição esportiva e recuperação.
+Analise os dados reais dos últimos 7 dias (sono, FC de repouso, carga de treino CTL/ATL/TSB, peso e ingestão de macros) e responda em português do Brasil de forma direta, técnica e acionável, sem rodeios.
+
+REGRAS OBRIGATÓRIAS DE METAS REAIS DO NEON:
+- As metas reais cadastradas pelo usuário no banco Neon são EXATAMENTE:
+  * Calorias: {metas_neon['meta_kcal_diaria']} kcal/dia
+  * Proteína: {metas_neon['meta_proteina_g_diaria']} g/dia (equivalente a {metas_neon['meta_proteina_g_por_kg_equivalente']} g/kg)
+  * Carboidrato: {metas_neon['meta_carbo_g_diaria']} g/dia
+  * Gordura: {metas_neon['meta_gordura_g_diaria']} g/dia
+  * Peso Alvo: {metas_neon['meta_peso_alvo_kg']} kg
+- NUNCA assuma ou invente metas genéricas de literatura (como 2000 kcal, 2150 kcal ou 1.8 g/kg).
+- Sempre compare o consumo médio dos últimos 7 dias EXCLUSIVAMENTE contra as metas reais acima ({metas_neon['meta_kcal_diaria']} kcal e {metas_neon['meta_proteina_g_diaria']}g de proteína).
+
+FORMATO DE SAÍDA OBRIGATÓRIO:
+Retorne APENAS um objeto JSON válido (sem markdown e sem texto corrido longo), seguindo ESTRITAMENTE este esquema e limites de palavras:
+{{
+  "diagnostico": [
+    {{"status": "alerta|ok|info", "titulo": "Carga & Fadiga", "texto": "Frase curta (máx. 14 palavras)"}},
+    {{"status": "alerta|ok|info", "titulo": "Sono & Recuperação", "texto": "Frase curta (máx. 14 palavras)"}},
+    {{"status": "alerta|ok|info", "titulo": "Balanço Nutricional", "texto": "Frase curta comparando consumo médio com a meta real ({metas_neon['meta_kcal_diaria']} kcal / {metas_neon['meta_proteina_g_diaria']}g P)"}}
+  ],
+  "prioridades_hoje": [
+    {{"acao": "Título curto da ação 1", "detalhe": "Instrução prática direta (máx. 15 palavras)"}},
+    {{"acao": "Título curto da ação 2", "detalhe": "Instrução prática direta (máx. 15 palavras)"}},
+    {{"acao": "Título curto da ação 3", "detalhe": "Instrução prática direta (máx. 15 palavras)"}}
+  ],
+  "pontos_atencao": [
+    "Bullet curto 1 sobre risco da semana (máx. 15 palavras)",
+    "Bullet curto 2 sobre ajuste prático (máx. 15 palavras)"
+  ]
+}}"""
 
     user_prompt = (
-        f"Aqui estão os dados fisiológicos, nutricionais e de treinamento reais dos últimos {dias} dias:\n\n"
+        f"Dados reais dos últimos {dias} dias (com metas reais do Neon em 'metas_reais_cadastradas_neon'):\n\n"
         f"{contexto_json_str}\n\n"
-        "Gere o parecer técnico estruturado nos 3 blocos solicitados."
+        "Retorne apenas o JSON estruturado com frases curtas e escaneáveis."
     )
 
     raw_response = ""
@@ -425,7 +528,7 @@ def gerar_parecer_tutor_groq(dias: int = 7) -> Tuple[bool, Dict[str, Any] | str]
                 {"role": "user", "content": user_prompt},
             ],
             "model": model_text,
-            "temperature": 0.2,
+            "temperature": 0.15,
             "response_format": {"type": "json_object"},
         }
 
@@ -446,19 +549,13 @@ def gerar_parecer_tutor_groq(dias: int = 7) -> Tuple[bool, Dict[str, Any] | str]
                     last_err = e_fb
             if completion is None:
                 raise last_err or NotFoundError("Modelo não encontrado", response=None, body=None)
-        except Exception as call_err:
-            if "response_format" in str(call_err).lower():
-                kwargs.pop("response_format", None)
-                completion = client.chat.completions.create(**kwargs)
-            else:
-                raise
 
         raw_response = completion.choices[0].message.content or ""
-        blocos = _extrair_blocos_tutor(raw_response)
+        estrutura = _extrair_estrutura_tutor(raw_response)
         return True, {
             "modelo_usado": modelo_ativo,
             "contexto": contexto,
-            "blocos": blocos,
+            "parecer": estrutura,
         }
     except Exception as ex:
         tb_str = traceback.format_exc()
