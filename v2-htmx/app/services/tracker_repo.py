@@ -223,21 +223,22 @@ def get_peso_historico(limit: int = 30) -> Dict[str, Any]:
 
 def inserir_peso(data_peso: date, peso_kg: float) -> None:
     """
-    Insere ou atualiza o registro de peso da data em public.peso (id, data DATE, peso_kg REAL).
+    Insere ou atualiza o registro de peso da data na tabela peso usando DATE(data) = :data.
     """
+    data_str = data_peso.strftime("%Y-%m-%d") if hasattr(data_peso, "strftime") else str(data_peso)[:10]
     existente = fetch_one(
-        "SELECT id FROM public.peso WHERE data = :d ORDER BY id DESC LIMIT 1",
-        {"d": data_peso},
+        "SELECT id FROM peso WHERE DATE(data) = :data LIMIT 1",
+        {"data": data_str},
     )
-    if existente and existente.get("id"):
+    if existente is not None:
         execute_write(
-            "UPDATE public.peso SET peso_kg = :p WHERE data = :d",
-            {"p": peso_kg, "d": data_peso},
+            "UPDATE peso SET peso_kg = :peso WHERE DATE(data) = :data",
+            {"peso": peso_kg, "data": data_str},
         )
     else:
         execute_write(
-            "INSERT INTO public.peso (data, peso_kg) VALUES (:d, :p)",
-            {"d": data_peso, "p": peso_kg},
+            "INSERT INTO peso (data, peso_kg) VALUES (:data, :peso)",
+            {"data": data_str, "peso": peso_kg},
         )
 
 

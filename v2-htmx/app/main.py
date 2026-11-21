@@ -390,7 +390,7 @@ async def api_intervals_auto_sync(
         except Exception:
             pass
 
-    cached = request.cookies.get("last_intervals_sync")
+    cached = request.cookies.get("last_intervals_sync_v2")
     if cached and not force:
         badge_cached = (
             '<div id="intervals-sync-badge" class="inline-flex items-center gap-2 rounded-lg bg-slate-800/80 border border-slate-700 px-3 py-1.5 text-xs text-slate-300">'
@@ -402,26 +402,33 @@ async def api_intervals_auto_sync(
         return HTMLResponse(content=badge_cached, status_code=200)
 
     houve_atualizacao = False
+    houve_erro = False
     status_texto = "✓ Intervals sincronizado (Peso e Treinos)"
     cor_classe = "text-emerald-400"
 
     try:
         eng = get_engine()
-        ok_tr, msg_tr = sincronizar_treinos_recentes(engine=eng, dias_retroativos=7)
         ok_pe, msg_pe, qtd_pe = sincronizar_peso_intervals(engine=eng, dias_retroativos=30)
+        ok_tr, msg_tr = sincronizar_treinos_recentes(engine=eng, dias_retroativos=7)
         invalidar_cache_bike()
 
-        if qtd_pe > 0 or (ok_tr and "processado(s)" in msg_tr) or force:
+        if qtd_pe > 0 or (ok_tr and "treino(s)" in msg_tr) or force:
             houve_atualizacao = True
 
-        if not ok_tr and not ok_pe:
-            status_texto = "⚠️ Intervals: verifique credenciais"
+        if not ok_pe:
+            houve_erro = True
+            status_texto = f"❌ {msg_pe}"
+            cor_classe = "text-rose-400"
+        elif not ok_tr:
+            houve_erro = True
+            status_texto = f"⚠️ Peso OK ({qtd_pe}) · Treinos: {msg_tr}"
             cor_classe = "text-amber-400"
-        elif qtd_pe > 0:
-            status_texto = f"✓ Intervals sincronizado (+{qtd_pe} peso(s) e treinos)"
+        else:
+            status_texto = f"✓ Intervals: {msg_pe}"
     except Exception as e:
-        status_texto = f"⚠️ Intervals offline ({type(e).__name__})"
-        cor_classe = "text-amber-400"
+        houve_erro = True
+        status_texto = f"❌ Erro Intervals ({type(e).__name__}: {e})"
+        cor_classe = "text-rose-400"
 
     badge_html = (
         '<div id="intervals-sync-badge" class="inline-flex items-center gap-2 rounded-lg bg-slate-800/80 border border-slate-700 px-3 py-1.5 text-xs text-slate-300">'
@@ -436,12 +443,13 @@ async def api_intervals_auto_sync(
         headers["HX-Trigger"] = "refreshDashboard"
 
     response = HTMLResponse(content=badge_html, status_code=200, headers=headers)
-    response.set_cookie(
-        key="last_intervals_sync",
-        value="1",
-        max_age=900,
-        samesite="lax",
-    )
+    if not houve_erro:
+        response.set_cookie(
+            key="last_intervals_sync_v2",
+            value="1",
+            max_age=900,
+            samesite="lax",
+        )
     return response
 
 
@@ -451,9 +459,10 @@ async def api_intervals_debug_wellness(
 ):
     """
     Endpoint de diagnóstico que exibe os últimos 5 registros brutos retornados pela
-    API /wellness do Intervals.icu (últimos 30 dias) para inspecionar a chegada do campo 'weight'.
+    API /wellness do Intervals.icu (últimos 30 dias) e executa a gravação na tabela peso do Neon.
     """
     info = debug_wellness_intervals(dias_retroativos=30)
+    invalidar_cache_bike()
     accept = request.headers.get("accept", "")
     is_htmx = request.headers.get("HX-Request") == "true"
 
@@ -463,30 +472,36 @@ async def api_intervals_debug_wellness(
     raw_json_str = json.dumps(info.get("last_5_raw") or [], indent=2, ensure_ascii=False)
     weight_json_str = json.dumps(info.get("last_5_with_weight") or [], indent=2, ensure_ascii=False)
 
-    if info["ok"]:
+    if info["ok"] and info.get("sync_ok"):
         texto = (
             f"🩺 DEBUG WELLNESS INTERVALS.ICU ({info['range']})\n"
             f"• Athlete ID: {info['athlete_id']}\n"
             f"• Dias retornados pela API (30d): {info['total_days_returned']}\n"
-            f"• Dias com campo 'weight' preenchido: {info['days_with_weight']}\n\n"
+            f"• Dias com campo 'weight' preenchido: {info['days_with_weight']}\n"
+            f"• Resultado da gravação no Neon (tabela peso): ✅ {info.get('sync_message')}\n\n"
             f"--- Últimos 5 dias COM peso preenchido ---\n{weight_json_str}\n\n"
             f"--- Últimos 5 registros brutos (/wellness) ---\n{raw_json_str}"
         )
         box = (
-            f'<div role="status" class="bg-slate-950 border border-indigo-500/40 text-indigo-200 p-3.5 rounded-xl text-[11px] font-mono whitespace-pre-wrap max-h-72 overflow-y-auto">'
+            f'<div role="status" class="bg-slate-950 border border-emerald-500/40 text-emerald-200 p-3.5 rounded-xl text-[11px] font-mono whitespace-pre-wrap max-h-72 overflow-y-auto">'
             f"{html.escape(texto)}</div>"
+        )
+        return HTMLResponse(
+            content=box, status_code=200, headers={"HX-Trigger": "refreshDashboard"}
         )
     else:
         texto = (
-            f"❌ ERRO AO CONSULTAR /wellness DO INTERVALS.ICU\n"
+            f"❌ ERRO AO SINCRONIZAR /wellness DO INTERVALS.ICU COM O NEON\n"
             f"• Athlete ID: {info['athlete_id']}\n"
-            f"• Erro: {info['error']}"
+            f"• Dias com 'weight' na API: {info.get('days_with_weight')}\n"
+            f"• Detalhe do Erro: {info.get('error') or info.get('sync_message')}\n\n"
+            f"--- Últimos 5 dias COM peso preenchido ---\n{weight_json_str}"
         )
         box = (
-            f'<div role="alert" class="bg-red-100 border border-red-400 text-red-800 p-3.5 rounded-xl text-xs font-mono whitespace-pre-wrap">'
+            f'<div role="alert" class="bg-red-100 border border-red-400 text-red-800 p-3.5 rounded-xl text-xs font-mono whitespace-pre-wrap max-h-72 overflow-y-auto">'
             f"{html.escape(texto)}</div>"
         )
-    return HTMLResponse(content=box, status_code=200)
+        return HTMLResponse(content=box, status_code=200)
 
 
 # ============================================================================

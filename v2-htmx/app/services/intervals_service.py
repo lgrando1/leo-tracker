@@ -21,7 +21,7 @@ GENERIC_WORKOUT_NAMES = {
     "evening workout",
     "night workout",
     "lunch workout",
-    " morning weight training",
+    "morning weight training",
     "afternoon weight training",
     "evening weight training",
 }
@@ -47,7 +47,6 @@ def _mapear_atividade_intervals(atv: Dict[str, Any]) -> Tuple[str, str, str]:
     raw_name = str(atv.get("name") or "").strip()
     raw_desc = str(atv.get("description") or "").strip()
 
-    # Limpa linhas vazias da description (ex: lista de exercícios do Hevy)
     desc_lines = [ln.strip() for ln in raw_desc.splitlines() if ln.strip()]
     resumo_desc = " | ".join(desc_lines[:3])[:140] if desc_lines else ""
 
@@ -141,8 +140,8 @@ def sincronizar_treinos_recentes(
     engine: Optional[Engine] = None, dias_retroativos: int = 7
 ) -> Tuple[bool, str]:
     """
-    Sincroniza os treinos recentes do Intervals.icu no banco Neon (tabela public.exercicios)
-    com upsert em id_atividade, atualizando tipo, nome_treino, observacoes e métricas.
+    Sincroniza os treinos recentes do Intervals.icu no banco Neon (tabela exercicios)
+    usando SELECT -> UPDATE / INSERT com commit explícito (evitando depender de constraint UNIQUE).
     """
     treinos, erro = conectar_intervals(dias_retroativos=dias_retroativos)
     if erro:
@@ -152,34 +151,56 @@ def sincronizar_treinos_recentes(
 
     eng = engine or get_engine()
     try:
-        with eng.begin() as conn:
+        with eng.connect() as conn:
             for t in treinos:
-                query = text(
-                    """
-                    INSERT INTO public.exercicios (
-                        id_atividade, data, hora, tipo, nome_treino, duracao_min,
-                        distancia_km, elevacao_m, bpm_medio, bpm_max,
-                        cadencia_rpm, calorias, carga_tss, intensidade_if, observacoes
-                    ) VALUES (
-                        :id_atividade, :data, :hora, :tipo, :nome_treino, :tempo_mov_min,
-                        :distancia_km, :elevacao_m, :bpm_medio, :bpm_max,
-                        :cadencia_rpm, :calorias_kcal, :carga_tss, :intensidade_if, :observacoes
+                existente = conn.execute(
+                    text("SELECT id FROM exercicios WHERE id_atividade = :id_atividade LIMIT 1"),
+                    {"id_atividade": t["id_atividade"]},
+                ).first()
+
+                if existente is not None:
+                    conn.execute(
+                        text(
+                            """
+                            UPDATE exercicios SET
+                                tipo = :tipo,
+                                nome_treino = :nome_treino,
+                                duracao_min = :tempo_mov_min,
+                                distancia_km = :distancia_km,
+                                elevacao_m = :elevacao_m,
+                                bpm_medio = :bpm_medio,
+                                bpm_max = :bpm_max,
+                                cadencia_rpm = :cadencia_rpm,
+                                calorias = :calorias_kcal,
+                                carga_tss = :carga_tss,
+                                intensidade_if = :intensidade_if,
+                                observacoes = COALESCE(NULLIF(:observacoes, ''), observacoes)
+                            WHERE id_atividade = :id_atividade
+                            """
+                        ),
+                        t,
                     )
-                    ON CONFLICT (id_atividade) DO UPDATE SET
-                        tipo = EXCLUDED.tipo,
-                        nome_treino = EXCLUDED.nome_treino,
-                        duracao_min = EXCLUDED.duracao_min,
-                        carga_tss = EXCLUDED.carga_tss,
-                        calorias = EXCLUDED.calorias,
-                        intensidade_if = EXCLUDED.intensidade_if,
-                        cadencia_rpm = EXCLUDED.cadencia_rpm,
-                        observacoes = COALESCE(NULLIF(EXCLUDED.observacoes, ''), public.exercicios.observacoes);
-                    """
-                )
-                conn.execute(query, t)
-        return True, f"✅ Sincronização com Intervals.icu concluída! ({len(treinos)} treino(s) processado(s))"
+                else:
+                    conn.execute(
+                        text(
+                            """
+                            INSERT INTO exercicios (
+                                id_atividade, data, hora, tipo, nome_treino, duracao_min,
+                                distancia_km, elevacao_m, bpm_medio, bpm_max,
+                                cadencia_rpm, calorias, carga_tss, intensidade_if, observacoes
+                            ) VALUES (
+                                :id_atividade, :data, :hora, :tipo, :nome_treino, :tempo_mov_min,
+                                :distancia_km, :elevacao_m, :bpm_medio, :bpm_max,
+                                :cadencia_rpm, :calorias_kcal, :carga_tss, :intensidade_if, :observacoes
+                            )
+                            """
+                        ),
+                        t,
+                    )
+            conn.commit()
+        return True, f"✅ Sincronização de treinos concluída ({len(treinos)} treino(s))"
     except Exception as e:
-        return False, f"Erro ao salvar treinos no banco: {e}"
+        return False, f"Erro SQL em exercicios: {type(e).__name__}: {e}"
 
 
 def sincronizar_peso_intervals(
@@ -187,8 +208,13 @@ def sincronizar_peso_intervals(
 ) -> Tuple[bool, str, int]:
     """
     Consulta GET https://intervals.icu/api/v1/athlete/{ATHLETE_ID}/wellness?oldest={inicio}&newest={fim}
-    (últimos 30 dias) e sincroniza qualquer dia com 'weight' numérico válido (> 0)
-    na tabela public.peso (colunas: id, data DATE, peso_kg REAL) do Neon.
+    (últimos 30 dias) e sincroniza os registros válidos de peso ('weight' is not None e > 0)
+    na tabela peso do Neon sem usar ON CONFLICT (data):
+      1. SELECT id FROM peso WHERE DATE(data) = :data LIMIT 1
+      2. Se existir: UPDATE peso SET peso_kg = :peso WHERE DATE(data) = :data
+      3. Se não existir: INSERT INTO peso (data, peso_kg) VALUES (:data, :peso)
+      4. Executa conn.commit() explícito.
+    Qualquer erro SQL é retornado diretamente na mensagem (sem except silencioso).
     """
     api_key, athlete_id = _get_intervals_creds()
     if not api_key or not athlete_id:
@@ -205,67 +231,65 @@ def sincronizar_peso_intervals(
     url = f"https://intervals.icu/api/v1/athlete/{athlete_id}/wellness?oldest={data_inicio}&newest={data_fim}"
     auth = ("API_KEY", api_key)
 
-    try:
-        res = requests.get(url, auth=auth, timeout=8)
-        res.raise_for_status()
-        dataset = res.json()
-    except Exception as e:
-        return False, f"Erro ao consultar wellness no Intervals.icu: {e}", 0
+    res = requests.get(url, auth=auth, timeout=8)
+    res.raise_for_status()
+    dataset = res.json()
 
     if not dataset or not isinstance(dataset, list):
         return True, "Nenhum dado de wellness retornado pelo Intervals.icu.", 0
 
     eng = engine or get_engine()
-    alterados = 0
+    inseridos = 0
+    atualizados = 0
     verificados = 0
 
     try:
-        with eng.begin() as conn:
+        with eng.connect() as conn:
             for item in dataset:
                 if not isinstance(item, dict):
                     continue
                 raw_w = item.get("weight")
-                data_id = str(item.get("id") or item.get("date") or "").strip()[:10]
-                if raw_w is None or not data_id:
+                # Ignora dias onde weight é None sem interromper o loop
+                if raw_w is None:
                     continue
-                try:
-                    peso_val = round(float(raw_w), 2)
-                    dt_obj = datetime.strptime(data_id, "%Y-%m-%d").date()
-                except (ValueError, TypeError):
-                    continue
+
+                peso_val = round(float(raw_w), 2)
                 if peso_val <= 0:
                     continue
 
+                data_str = str(item.get("id") or item.get("date") or "").strip()[:10]
+                if not data_str:
+                    continue
+
                 verificados += 1
-                row = conn.execute(
-                    text(
-                        "SELECT id, peso_kg FROM public.peso WHERE data = :d ORDER BY id DESC LIMIT 1"
-                    ),
-                    {"d": dt_obj},
-                ).mappings().first()
+                existente = conn.execute(
+                    text("SELECT id FROM peso WHERE DATE(data) = :data LIMIT 1"),
+                    {"data": data_str},
+                ).first()
 
-                if row is None:
+                if existente is not None:
                     conn.execute(
-                        text("INSERT INTO public.peso (data, peso_kg) VALUES (:d, :p)"),
-                        {"d": dt_obj, "p": peso_val},
+                        text("UPDATE peso SET peso_kg = :peso WHERE DATE(data) = :data"),
+                        {"peso": peso_val, "data": data_str},
                     )
-                    alterados += 1
+                    atualizados += 1
                 else:
-                    peso_existente = float(row["peso_kg"] or 0.0)
-                    if abs(peso_existente - peso_val) > 0.01:
-                        conn.execute(
-                            text("UPDATE public.peso SET peso_kg = :p WHERE data = :d"),
-                            {"p": peso_val, "d": dt_obj},
-                        )
-                        alterados += 1
+                    conn.execute(
+                        text("INSERT INTO peso (data, peso_kg) VALUES (:data, :peso)"),
+                        {"data": data_str, "peso": peso_val},
+                    )
+                    inseridos += 1
 
+            conn.commit()
+
+        total_gravados = inseridos + atualizados
         return (
             True,
-            f"Wellness 30d sincronizado ({verificados} dia(s) com peso no Intervals, {alterados} inserido(s)/atualizado(s) no Neon).",
-            alterados,
+            f"Peso sincronizado: {verificados} lidos ({inseridos} novos, {atualizados} atualizados)",
+            total_gravados,
         )
     except Exception as e:
-        return False, f"Erro ao sincronizar peso do Intervals no banco Neon: {e}", 0
+        return False, f"Erro SQL ao gravar peso no Neon ({type(e).__name__}): {e}", 0
 
 
 def enviar_peso_intervals(data_peso: date, peso_kg: float) -> Tuple[bool, str]:
@@ -293,7 +317,8 @@ def enviar_peso_intervals(data_peso: date, peso_kg: float) -> Tuple[bool, str]:
 def debug_wellness_intervals(dias_retroativos: int = 30) -> Dict[str, Any]:
     """
     Retorna diagnóstico com os últimos 5 registros brutos retornados pela API /wellness
-    do Intervals.icu (e resumo de quantos registros possuem 'weight' nos últimos 30 dias).
+    do Intervals.icu e também executa sincronizar_peso_intervals() para exibir o resultado
+    exato da gravação no banco Neon.
     """
     api_key, athlete_id = _get_intervals_creds()
     hoje_dt = get_now_br().date()
@@ -307,6 +332,8 @@ def debug_wellness_intervals(dias_retroativos: int = 30) -> Dict[str, Any]:
             "range": f"{data_inicio} a {data_fim}",
             "total_days_returned": 0,
             "days_with_weight": 0,
+            "sync_ok": False,
+            "sync_message": "Credenciais ausentes",
             "last_5_raw": [],
             "last_5_with_weight": [],
             "error": "INTERVALS_API_KEY ou INTERVALS_ATHLETE_ID ausentes nas variáveis de ambiente.",
@@ -327,15 +354,20 @@ def debug_wellness_intervals(dias_retroativos: int = 30) -> Dict[str, Any]:
         ]
         ultimos_5_brutos = dataset[-5:] if len(dataset) >= 5 else dataset
 
+        sync_ok, sync_msg, sync_count = sincronizar_peso_intervals(dias_retroativos=dias_retroativos)
+
         return {
             "ok": True,
             "athlete_id": athlete_id,
             "range": f"{data_inicio} a {data_fim}",
             "total_days_returned": len(dataset),
             "days_with_weight": len(com_peso),
+            "sync_ok": sync_ok,
+            "sync_message": sync_msg,
+            "sync_count": sync_count,
             "last_5_raw": ultimos_5_brutos,
             "last_5_with_weight": com_peso[-5:],
-            "error": None,
+            "error": None if sync_ok else sync_msg,
         }
     except Exception as e:
         return {
@@ -344,6 +376,8 @@ def debug_wellness_intervals(dias_retroativos: int = 30) -> Dict[str, Any]:
             "range": f"{data_inicio} a {data_fim}",
             "total_days_returned": 0,
             "days_with_weight": 0,
+            "sync_ok": False,
+            "sync_message": f"{type(e).__name__}: {str(e)}",
             "last_5_raw": [],
             "last_5_with_weight": [],
             "error": f"{type(e).__name__}: {str(e)}",
