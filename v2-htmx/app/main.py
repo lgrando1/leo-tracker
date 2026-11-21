@@ -41,6 +41,7 @@ from app.services.intervals_service import (
     sincronizar_peso_intervals,
     sincronizar_treinos_recentes,
 )
+from app.services.tutor_service import gerar_parecer_tutor_groq
 from app.services.tracker_repo import (
     DEFAULT_METAS,
     atualizar_metas,
@@ -549,6 +550,38 @@ async def api_dashboard_graficos_bike(request: Request, force: Optional[int] = Q
     return _render_template(
         request, "partials/dashboard_graficos_bike.html", {"bike_dash": bike_dash}
     )
+
+
+# ============================================================================
+# TUTOR FISIOLÓGICO SOB DEMANDA (GROQ · 7 DIAS: NUTRIÇÃO x TREINO/PMC x SONO)
+# ============================================================================
+@app.post("/api/tutor/analisar", response_class=HTMLResponse)
+async def api_tutor_analisar(request: Request):
+    """
+    Cruza os últimos 7 dias de alimentação (Neon), exercícios (Neon/Intervals) e
+    sono/recuperação (/wellness do Intervals.icu) e retorna o parecer técnico em 3 blocos.
+    """
+    try:
+        ok, resultado = gerar_parecer_tutor_groq(dias=7)
+        if ok and isinstance(resultado, dict):
+            return _render_template(
+                request,
+                "partials/tutor_resultado.html",
+                {"tutor": resultado, "tutor_error": None},
+            )
+        return _render_template(
+            request,
+            "partials/tutor_resultado.html",
+            {"tutor": None, "tutor_error": str(resultado)},
+        )
+    except Exception as exc:
+        tb_str = traceback.format_exc()
+        err_msg = f"Erro ao gerar parecer do Tutor Fisiológico ({type(exc).__name__}): {exc}\n\n{tb_str}"
+        return _render_template(
+            request,
+            "partials/tutor_resultado.html",
+            {"tutor": None, "tutor_error": err_msg},
+        )
 
 
 # ============================================================================

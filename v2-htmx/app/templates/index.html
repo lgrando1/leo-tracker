@@ -20,6 +20,45 @@
         {% include "partials/summary_cards.html" %}
     {% endwith %}
 
+    <!-- Card Discreto: Tutor Fisiológico (Groq · Sob Demanda · 7 Dias) -->
+    <section aria-labelledby="heading-tutor" class="rounded-2xl bg-slate-900/90 border border-slate-800 p-4 sm:p-5 shadow-lg">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="flex items-center gap-3">
+                <span class="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-500/15 border border-indigo-500/30 text-lg shrink-0">
+                    🧠
+                </span>
+                <div>
+                    <h2 id="heading-tutor" class="text-sm font-bold text-white">
+                        Tutor Fisiológico (Groq · Análise Integrada de 7 Dias)
+                    </h2>
+                    <p class="text-xs text-slate-400">
+                        Cruza Nutrição (kcal e proteína g/kg), Treinos/PMC (CTL, ATL, TSB, Bike & Hevy) e Recuperação (/wellness: Sono & FC Repouso).
+                    </p>
+                </div>
+            </div>
+
+            <button
+                type="button"
+                hx-post="/api/tutor/analisar"
+                hx-target="#resultado-tutor"
+                hx-swap="innerHTML"
+                hx-indicator="#tutor-loading-indicator"
+                class="rounded-xl bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-semibold text-xs sm:text-sm px-4 py-2 transition flex items-center gap-2 shadow-md shrink-0"
+            >
+                <span>✨ Gerar Parecer do Tutor (7 dias)</span>
+                <span id="tutor-loading-indicator" class="htmx-indicator inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-100">
+                    <svg class="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    Analisando 7 dias com Groq...
+                </span>
+            </button>
+        </div>
+
+        <div id="resultado-tutor" class="mt-4 empty:hidden"></div>
+    </section>
+
     <!-- 2. Navegação de Abas (Módulos do @app.py) -->
     <nav aria-label="Módulos do Leo Tracker" class="flex flex-wrap gap-2 border-b border-slate-800 pb-3">
         <button

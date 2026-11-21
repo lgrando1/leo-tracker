@@ -1,0 +1,82 @@
+{% if tutor_error %}
+<div role="alert" class="bg-red-100 border border-red-400 text-red-800 p-4 rounded-lg text-xs font-mono whitespace-pre-wrap">{{ tutor_error }}</div>
+{% elif tutor %}
+<div class="space-y-4">
+    <!-- Resumo Compacto dos Dados Reais Coletados (7 dias) -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs tabular-nums">
+        <div class="rounded-xl bg-slate-950/80 border border-slate-800 px-3 py-2">
+            <span class="text-[10px] uppercase tracking-wider text-slate-400 block">⚖️ Peso (7d)</span>
+            <strong class="text-white">{{ '%.1f'|format(tutor.contexto.antropometria.peso_atual_kg) }} kg</strong>
+            <span class="text-slate-400">({{ '%+.1f'|format(tutor.contexto.antropometria.variacao_7d_kg) }} kg)</span>
+        </div>
+
+        <div class="rounded-xl bg-slate-950/80 border border-slate-800 px-3 py-2">
+            <span class="text-[10px] uppercase tracking-wider text-slate-400 block">🥩 Nutrição Média</span>
+            <strong class="text-emerald-400">{{ tutor.contexto.nutricao_7d.media_kcal_dia }} kcal</strong>
+            <span class="text-sky-300">· {{ '%.1f'|format(tutor.contexto.nutricao_7d.media_proteina_g_dia) }}g P ({{ '%.2f'|format(tutor.contexto.nutricao_7d.proteina_g_por_kg_peso_atual) }} g/kg)</span>
+        </div>
+
+        <div class="rounded-xl bg-slate-950/80 border border-slate-800 px-3 py-2">
+            <span class="text-[10px] uppercase tracking-wider text-slate-400 block">🚴‍♂️🏋️‍♂️ Carga & PMC</span>
+            <strong class="text-indigo-300">{{ tutor.contexto.treinos_7d.total_sessoes }} treinos ({{ '%.0f'|format(tutor.contexto.treinos_7d.tss_total_semana) }} TSS)</strong>
+            <span class="text-slate-400">· TSB {{ '%+.0f'|format(tutor.contexto.treinos_7d.tsb_prontidao) }}</span>
+        </div>
+
+        <div class="rounded-xl bg-slate-950/80 border border-slate-800 px-3 py-2">
+            <span class="text-[10px] uppercase tracking-wider text-slate-400 block">💤 Sono & FC Repouso</span>
+            {% if tutor.contexto.sono_e_recuperacao_7d.media_sono_horas %}
+            <strong class="text-amber-300">{{ '%.1f'|format(tutor.contexto.sono_e_recuperacao_7d.media_sono_horas) }}h</strong>
+            {% else %}
+            <strong class="text-slate-500">—</strong>
+            {% endif %}
+            {% if tutor.contexto.sono_e_recuperacao_7d.media_sleep_score %}
+            <span class="text-slate-300">· Score {{ '%.0f'|format(tutor.contexto.sono_e_recuperacao_7d.media_sleep_score) }}</span>
+            {% endif %}
+            {% if tutor.contexto.sono_e_recuperacao_7d.media_resting_hr_bpm %}
+            <span class="text-rose-300">· {{ '%.0f'|format(tutor.contexto.sono_e_recuperacao_7d.media_resting_hr_bpm) }} bpm</span>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- 3 Blocos Estruturados do Parecer Técnico -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <!-- Bloco 1: Diagnóstico Cruzado (Carga x Sono x Dieta) -->
+        <article class="rounded-xl bg-slate-950/90 border border-indigo-500/30 p-4 space-y-2">
+            <div class="flex items-center gap-2">
+                <span class="text-base">🔬</span>
+                <h3 class="text-xs font-bold uppercase tracking-wider text-indigo-300">
+                    1. Diagnóstico Cruzado (Carga × Sono × Dieta)
+                </h3>
+            </div>
+            <p class="text-xs sm:text-sm text-slate-200 leading-relaxed whitespace-pre-line">{{ tutor.blocos.diagnostico_cruzado }}</p>
+        </article>
+
+        <!-- Bloco 2: Prioridade Número 1 para Hoje -->
+        <article class="rounded-xl bg-slate-950/90 border border-emerald-500/40 p-4 space-y-2">
+            <div class="flex items-center gap-2">
+                <span class="text-base">🎯</span>
+                <h3 class="text-xs font-bold uppercase tracking-wider text-emerald-300">
+                    2. Prioridade Número 1 para Hoje
+                </h3>
+            </div>
+            <p class="text-xs sm:text-sm text-slate-100 font-medium leading-relaxed whitespace-pre-line">{{ tutor.blocos.prioridade_hoje }}</p>
+        </article>
+
+        <!-- Bloco 3: Ponto de Atenção na Semana -->
+        <article class="rounded-xl bg-slate-950/90 border border-amber-500/35 p-4 space-y-2">
+            <div class="flex items-center gap-2">
+                <span class="text-base">⚠️</span>
+                <h3 class="text-xs font-bold uppercase tracking-wider text-amber-300">
+                    3. Ponto de Atenção na Semana
+                </h3>
+            </div>
+            <p class="text-xs sm:text-sm text-slate-200 leading-relaxed whitespace-pre-line">{{ tutor.blocos.ponto_atencao_semana }}</p>
+        </article>
+    </div>
+
+    <div class="flex items-center justify-between text-[11px] text-slate-500 px-1">
+        <span>Período analisado: {{ tutor.contexto.periodo }}</span>
+        <span>Modelo: <code class="text-slate-400">{{ tutor.modelo_usado }}</code></span>
+    </div>
+</div>
+{% endif %}
