@@ -48,6 +48,14 @@
         </button>
         <button
             type="button"
+            data-tab-btn="bike"
+            onclick="switchTab('bike')"
+            class="rounded-xl px-4 py-2 text-xs sm:text-sm font-semibold border transition bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200"
+        >
+            🚴‍♂️ Bike & PMC (Longitudinal)
+        </button>
+        <button
+            type="button"
             data-tab-btn="historico"
             onclick="switchTab('historico')"
             class="rounded-xl px-4 py-2 text-xs sm:text-sm font-semibold border transition bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200"
@@ -249,7 +257,50 @@
         {% include "partials/treino_section.html" %}
     </div>
 
-    <!-- ABA 4: HISTÓRICO ALIMENTAR -->
+    <!-- ABA 4: BIKE, CARGA (PMC), ANTROPOMETRIA E NUTRIÇÃO LONGITUDINAL (dashboardbike.py) -->
+    <div id="panel-bike" data-tab-panel class="hidden space-y-6">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+                <h2 class="text-base font-bold text-white flex items-center gap-2">
+                    <span>🚴‍♂️</span> Observação Fisiológica Longitudinal (Ciclismo · PMC · Antropometria · Nutrição)
+                </h2>
+                <p class="text-xs text-slate-400">
+                    Agregação semanal (<code class="text-slate-300">W-SUN</code>) de recomposição corporal, carga mecânica e nutrição.
+                </p>
+            </div>
+            <button
+                type="button"
+                onclick="htmx.trigger(document.body, 'refreshDashboard')"
+                class="rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 px-3.5 py-1.5 text-xs font-semibold text-slate-200 transition"
+            >
+                ↻ Recarregar Painel Longitudinal
+            </button>
+        </div>
+
+        <!-- 1. Parcial de KPIs (GET /api/dashboard/kpis) -->
+        <div
+            id="bike-dashboard-kpis"
+            hx-get="/api/dashboard/kpis"
+            hx-trigger="load, refreshDashboard from:body"
+            hx-swap="outerHTML"
+            class="rounded-2xl bg-slate-900 border border-slate-800 p-5 text-xs text-slate-400"
+        >
+            ⏳ Carregando KPIs longitudinais...
+        </div>
+
+        <!-- 2. Parcial de Gráficos Chart.js e Tabela Resumo Semanal (GET /api/dashboard/graficos-bike) -->
+        <div
+            id="bike-dashboard-graficos"
+            hx-get="/api/dashboard/graficos-bike"
+            hx-trigger="load, refreshDashboard from:body"
+            hx-swap="outerHTML"
+            class="rounded-2xl bg-slate-900 border border-slate-800 p-6 text-xs text-slate-400"
+        >
+            ⏳ Carregando gráficos semanais (Antropometria, Dieta, PMC e Volume)...
+        </div>
+    </div>
+
+    <!-- ABA 5: HISTÓRICO ALIMENTAR -->
     <div id="panel-historico" data-tab-panel class="hidden">
         {% include "partials/historico_section.html" %}
     </div>

@@ -1,0 +1,437 @@
+<div
+    id="bike-dashboard-graficos"
+    hx-get="/api/dashboard/graficos-bike"
+    hx-trigger="refreshDashboard from:body"
+    hx-swap="outerHTML"
+    class="space-y-6"
+>
+    {% if bike_dash.has_data %}
+    <!-- Grid 1: 1. Antropometria (Peso & Cintura) + 2. Dieta (Proteína, Carbo & Kcal) -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Gráfico 1: Antropometria -->
+        <article class="rounded-2xl bg-slate-900 border border-slate-800 p-5 shadow-lg space-y-3">
+            <div>
+                <h3 class="text-sm font-bold text-white">1. Antropometria (Peso Médio e Cintura)</h3>
+                <p class="text-xs text-slate-400">Agregação semanal (W-SUN · closed=left) de <code class="text-slate-300">peso</code> e <code class="text-slate-300">body_measurements</code></p>
+            </div>
+            <div class="relative h-72 w-full">
+                <canvas id="bikeChartAntropometria"></canvas>
+            </div>
+        </article>
+
+        <!-- Gráfico 2: Dieta -->
+        <article class="rounded-2xl bg-slate-900 border border-slate-800 p-5 shadow-lg space-y-3">
+            <div>
+                <h3 class="text-sm font-bold text-white">2. Dieta (Média de Ingestão Diária)</h3>
+                <p class="text-xs text-slate-400">Proteína (g/dia) e Carboidrato (g/dia) empilhados vs. Calorias diárias (kcal/dia)</p>
+            </div>
+            <div class="relative h-72 w-full">
+                <canvas id="bikeChartDieta"></canvas>
+            </div>
+        </article>
+    </div>
+
+    {% if bike_dash.has_bike_data %}
+    <!-- Grid 2: 3. Carga e Balanço de Prontidão (PMC) + 4. Volume e Cadência da Bike -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Gráfico 3: PMC (TSS, CTL, ATL + TSB com Zona Ideal -10 a +5) -->
+        <article class="rounded-2xl bg-slate-900 border border-slate-800 p-5 shadow-lg space-y-4">
+            <div>
+                <h3 class="text-sm font-bold text-white">3. Carga e Balanço de Prontidão (PMC)</h3>
+                <p class="text-xs text-slate-400">TSS Semanal, Fitness (CTL), Fadiga Aguda (ATL) e Prontidão (TSB · Zona Ideal -10 a +5)</p>
+            </div>
+            <div class="relative h-56 w-full">
+                <canvas id="bikeChartPmcLoad"></canvas>
+            </div>
+            <div class="relative h-40 w-full border-t border-slate-800/80 pt-2">
+                <canvas id="bikeChartPmcTsb"></canvas>
+            </div>
+        </article>
+
+        <!-- Gráfico 4: Volume e Eficiência Neuromuscular (Distância km, Horas e Cadência RPM) -->
+        <article class="rounded-2xl bg-slate-900 border border-slate-800 p-5 shadow-lg space-y-4">
+            <div>
+                <h3 class="text-sm font-bold text-white">4. Volume do Ciclismo e Eficiência Neuromuscular</h3>
+                <p class="text-xs text-slate-400">Distância semanal (km), Tempo no selim (horas) e Cadência média (RPM)</p>
+            </div>
+            <div class="relative h-56 w-full">
+                <canvas id="bikeChartVolDist"></canvas>
+            </div>
+            <div class="relative h-40 w-full border-t border-slate-800/80 pt-2">
+                <canvas id="bikeChartVolCad"></canvas>
+            </div>
+        </article>
+    </div>
+    {% else %}
+    <article class="rounded-2xl bg-slate-900 border border-slate-800 p-6 text-center text-sm text-slate-400">
+        🚴‍♂️ Aguardando registros de ciclismo (<code class="text-slate-300">Ride</code> / <code class="text-slate-300">VirtualRide</code>) do Intervals.icu para renderizar os gráficos de PMC e Volume.
+    </article>
+    {% endif %}
+
+    <!-- 3. Tabela Resumo Semanal (dashboardbike.py linhas 253-268) -->
+    <article class="rounded-2xl bg-slate-900 border border-slate-800 overflow-hidden shadow-lg">
+        <div class="px-5 py-4 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2">
+            <div>
+                <h3 class="text-sm font-bold text-white">📊 Tabela Resumo Semanal (Observação Longitudinal)</h3>
+                <p class="text-xs text-slate-400">Semanas consolidadas (<code class="text-slate-300">W-SUN</code>) desde 30/12/2025</p>
+            </div>
+            <span class="text-xs text-slate-400">{{ bike_dash.tabela_semanal|length }} semanas</span>
+        </div>
+
+        <div class="overflow-x-auto max-h-96 overflow-y-auto">
+            <table class="w-full text-left border-collapse">
+                <thead class="bg-slate-950/70 sticky top-0 text-[11px] uppercase tracking-wider text-slate-400">
+                    <tr>
+                        <th scope="col" class="py-3 px-3.5">Semana</th>
+                        <th scope="col" class="py-3 px-3.5">Data Base</th>
+                        <th scope="col" class="py-3 px-3.5 text-right">Peso Médio</th>
+                        <th scope="col" class="py-3 px-3.5 text-right">DP Peso</th>
+                        <th scope="col" class="py-3 px-3.5 text-right">Delta Peso</th>
+                        <th scope="col" class="py-3 px-3.5 text-right">Cintura</th>
+                        <th scope="col" class="py-3 px-3.5 text-right">Prot (g/kg/d)</th>
+                        <th scope="col" class="py-3 px-3.5 text-right">TSS</th>
+                        <th scope="col" class="py-3 px-3.5 text-right">TSB</th>
+                        <th scope="col" class="py-3 px-3.5 text-right">Volume (km)</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800/60 text-xs sm:text-sm tabular-nums">
+                    {% for row in bike_dash.tabela_semanal %}
+                    <tr class="hover:bg-slate-800/40 transition">
+                        <td class="py-2.5 px-3.5 font-bold text-emerald-400">{{ row.semana }}</td>
+                        <td class="py-2.5 px-3.5 text-slate-300">{{ row.data_base }}</td>
+                        <td class="py-2.5 px-3.5 text-right font-semibold text-white">{{ row.peso_medio }}</td>
+                        <td class="py-2.5 px-3.5 text-right text-slate-400">{{ row.peso_std }}</td>
+                        <td class="py-2.5 px-3.5 text-right text-sky-300">{{ row.delta_peso }}</td>
+                        <td class="py-2.5 px-3.5 text-right text-amber-300">{{ row.cintura }}</td>
+                        <td class="py-2.5 px-3.5 text-right text-slate-200">{{ row.prot_kg_dia }}</td>
+                        <td class="py-2.5 px-3.5 text-right font-semibold text-purple-300">{{ row.tss }}</td>
+                        <td class="py-2.5 px-3.5 text-right font-bold {% if row.tsb_raw > 0 %}text-emerald-400{% elif row.tsb_raw < -20 %}text-rose-400{% else %}text-amber-300{% endif %}">
+                            {{ row.tsb }}
+                        </td>
+                        <td class="py-2.5 px-3.5 text-right font-semibold text-sky-400">{{ row.volume_km }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </article>
+
+    <!-- Inicialização Chart.js com destruição de instâncias anteriores -->
+    <script>
+        (function() {
+            if (typeof Chart === 'undefined') return;
+
+            window._leoBikeCharts = window._leoBikeCharts || {};
+            function resetChart(key) {
+                if (window._leoBikeCharts[key]) {
+                    try { window._leoBikeCharts[key].destroy(); } catch (e) {}
+                    window._leoBikeCharts[key] = null;
+                }
+            }
+
+            const labelsFull = {{ bike_dash.charts.labels_full | tojson }};
+            const pesoMedio = {{ bike_dash.charts.peso_medio | tojson }};
+            const cinturaCm = {{ bike_dash.charts.cintura_cm | tojson }};
+            const protDia = {{ bike_dash.charts.prot_dia | tojson }};
+            const carboDia = {{ bike_dash.charts.carbo_dia | tojson }};
+            const kcalDia = {{ bike_dash.charts.kcal_dia | tojson }};
+
+            // 1. Gráfico de Antropometria
+            const ctxAntro = document.getElementById('bikeChartAntropometria');
+            if (ctxAntro) {
+                resetChart('antro');
+                window._leoBikeCharts['antro'] = new Chart(ctxAntro, {
+                    type: 'line',
+                    data: {
+                        labels: labelsFull,
+                        datasets: [
+                            {
+                                label: 'Peso Médio (kg)',
+                                data: pesoMedio,
+                                borderColor: '#ef4444',
+                                backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                                borderWidth: 2.5,
+                                tension: 0.25,
+                                yAxisID: 'y'
+                            },
+                            {
+                                label: 'Cintura (cm)',
+                                data: cinturaCm,
+                                borderColor: '#f59e0b',
+                                backgroundColor: 'rgba(245, 158, 11, 0.15)',
+                                borderWidth: 2,
+                                borderDash: [4, 4],
+                                spanGaps: true,
+                                tension: 0.25,
+                                yAxisID: 'y1'
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 11 } } } },
+                        scales: {
+                            x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: 'rgba(51,65,85,0.25)' } },
+                            y: { type: 'linear', position: 'left', title: { display: true, text: 'Peso (kg)', color: '#ef4444' }, ticks: { color: '#94a3b8' }, grid: { color: 'rgba(51,65,85,0.3)' } },
+                            y1: { type: 'linear', position: 'right', title: { display: true, text: 'Cintura (cm)', color: '#f59e0b' }, ticks: { color: '#f59e0b' }, grid: { drawOnChartArea: false } }
+                        }
+                    }
+                });
+            }
+
+            // 2. Gráfico de Dieta
+            const ctxDieta = document.getElementById('bikeChartDieta');
+            if (ctxDieta) {
+                resetChart('dieta');
+                window._leoBikeCharts['dieta'] = new Chart(ctxDieta, {
+                    type: 'bar',
+                    data: {
+                        labels: labelsFull,
+                        datasets: [
+                            {
+                                type: 'bar',
+                                label: 'Prot/Dia (g)',
+                                data: protDia,
+                                backgroundColor: 'rgba(59, 130, 246, 0.75)',
+                                stack: 'macros',
+                                yAxisID: 'y'
+                            },
+                            {
+                                type: 'bar',
+                                label: 'Carbo/Dia (g)',
+                                data: carboDia,
+                                backgroundColor: 'rgba(16, 185, 129, 0.75)',
+                                stack: 'macros',
+                                yAxisID: 'y'
+                            },
+                            {
+                                type: 'line',
+                                label: 'Kcal/Dia',
+                                data: kcalDia,
+                                borderColor: '#06b6d4',
+                                backgroundColor: '#06b6d4',
+                                borderWidth: 2.5,
+                                tension: 0.25,
+                                yAxisID: 'y1'
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 11 } } } },
+                        scales: {
+                            x: { stacked: true, ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: 'rgba(51,65,85,0.25)' } },
+                            y: { stacked: true, type: 'linear', position: 'left', title: { display: true, text: 'Macros Diários (g)', color: '#94a3b8' }, ticks: { color: '#94a3b8' }, grid: { color: 'rgba(51,65,85,0.3)' } },
+                            y1: { type: 'linear', position: 'right', title: { display: true, text: 'Kcal Diárias', color: '#06b6d4' }, ticks: { color: '#06b6d4' }, grid: { drawOnChartArea: false } }
+                        }
+                    }
+                });
+            }
+
+            {% if bike_dash.has_bike_data %}
+            const labelsBike = {{ bike_dash.charts.labels_bike | tojson }};
+            const tssData = {{ bike_dash.charts.tss | tojson }};
+            const ctlData = {{ bike_dash.charts.ctl | tojson }};
+            const atlData = {{ bike_dash.charts.atl | tojson }};
+            const tsbData = {{ bike_dash.charts.tsb | tojson }};
+            const tsbColors = {{ bike_dash.charts.tsb_colors | tojson }};
+            const distKm = {{ bike_dash.charts.distancia_km | tojson }};
+            const duracaoH = {{ bike_dash.charts.duracao_h | tojson }};
+            const cadenciaRpm = {{ bike_dash.charts.cadencia | tojson }};
+
+            // 3A. PMC: TSS + CTL + ATL
+            const ctxPmcLoad = document.getElementById('bikeChartPmcLoad');
+            if (ctxPmcLoad) {
+                resetChart('pmcLoad');
+                window._leoBikeCharts['pmcLoad'] = new Chart(ctxPmcLoad, {
+                    type: 'bar',
+                    data: {
+                        labels: labelsBike,
+                        datasets: [
+                            {
+                                type: 'bar',
+                                label: 'TSS Semanal',
+                                data: tssData,
+                                backgroundColor: 'rgba(139, 92, 246, 0.45)',
+                                borderColor: '#8b5cf6',
+                                borderWidth: 1,
+                                yAxisID: 'y'
+                            },
+                            {
+                                type: 'line',
+                                label: 'Fitness (CTL)',
+                                data: ctlData,
+                                borderColor: '#3b82f6',
+                                borderWidth: 2.5,
+                                tension: 0.25,
+                                yAxisID: 'y1'
+                            },
+                            {
+                                type: 'line',
+                                label: 'Fadiga Aguda (ATL)',
+                                data: atlData,
+                                borderColor: '#ec4899',
+                                borderWidth: 2,
+                                borderDash: [4, 4],
+                                tension: 0.25,
+                                yAxisID: 'y1'
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 11 } } } },
+                        scales: {
+                            x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: 'rgba(51,65,85,0.25)' } },
+                            y: { type: 'linear', position: 'left', title: { display: true, text: 'TSS Semanal', color: '#8b5cf6' }, ticks: { color: '#94a3b8' }, grid: { color: 'rgba(51,65,85,0.3)' } },
+                            y1: { type: 'linear', position: 'right', title: { display: true, text: 'Load (CTL / ATL)', color: '#3b82f6' }, ticks: { color: '#3b82f6' }, grid: { drawOnChartArea: false } }
+                        }
+                    }
+                });
+            }
+
+            // 3B. PMC: TSB com linhas de referência da Zona Ideal (-10 a +5)
+            const ctxPmcTsb = document.getElementById('bikeChartPmcTsb');
+            if (ctxPmcTsb) {
+                resetChart('pmcTsb');
+                const zonaMinLine = labelsBike.map(() => -10);
+                const zonaMaxLine = labelsBike.map(() => 5);
+                window._leoBikeCharts['pmcTsb'] = new Chart(ctxPmcTsb, {
+                    type: 'bar',
+                    data: {
+                        labels: labelsBike,
+                        datasets: [
+                            {
+                                type: 'bar',
+                                label: 'Prontidão (TSB)',
+                                data: tsbData,
+                                backgroundColor: tsbColors,
+                                borderRadius: 4
+                            },
+                            {
+                                type: 'line',
+                                label: 'Zona Ideal (+5)',
+                                data: zonaMaxLine,
+                                borderColor: 'rgba(16, 185, 129, 0.55)',
+                                borderWidth: 1.5,
+                                borderDash: [3, 3],
+                                pointRadius: 0,
+                                fill: false
+                            },
+                            {
+                                type: 'line',
+                                label: 'Zona Ideal (-10)',
+                                data: zonaMinLine,
+                                borderColor: 'rgba(16, 185, 129, 0.55)',
+                                backgroundColor: 'rgba(16, 185, 129, 0.12)',
+                                borderWidth: 1.5,
+                                borderDash: [3, 3],
+                                pointRadius: 0,
+                                fill: '-1'
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 10 } } } },
+                        scales: {
+                            x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: 'rgba(51,65,85,0.25)' } },
+                            y: { title: { display: true, text: 'TSB', color: '#10b981' }, ticks: { color: '#94a3b8' }, grid: { color: 'rgba(51,65,85,0.3)' } }
+                        }
+                    }
+                });
+            }
+
+            // 4A. Volume: Distância (km) e Tempo (Horas)
+            const ctxVolDist = document.getElementById('bikeChartVolDist');
+            if (ctxVolDist) {
+                resetChart('volDist');
+                window._leoBikeCharts['volDist'] = new Chart(ctxVolDist, {
+                    type: 'bar',
+                    data: {
+                        labels: labelsBike,
+                        datasets: [
+                            {
+                                type: 'bar',
+                                label: 'Tempo no Selim (h)',
+                                data: duracaoH,
+                                backgroundColor: 'rgba(14, 165, 233, 0.45)',
+                                borderColor: '#0ea5e9',
+                                borderWidth: 1,
+                                yAxisID: 'y1'
+                            },
+                            {
+                                type: 'line',
+                                label: 'Distância (km)',
+                                data: distKm,
+                                borderColor: '#ef4444',
+                                backgroundColor: '#ef4444',
+                                borderWidth: 2.5,
+                                tension: 0.25,
+                                yAxisID: 'y'
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 11 } } } },
+                        scales: {
+                            x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: 'rgba(51,65,85,0.25)' } },
+                            y: { type: 'linear', position: 'left', title: { display: true, text: 'Distância (km)', color: '#ef4444' }, ticks: { color: '#94a3b8' }, grid: { color: 'rgba(51,65,85,0.3)' } },
+                            y1: { type: 'linear', position: 'right', title: { display: true, text: 'Horas', color: '#0ea5e9' }, ticks: { color: '#0ea5e9' }, grid: { drawOnChartArea: false } }
+                        }
+                    }
+                });
+            }
+
+            // 4B. Cadência Média (RPM)
+            const ctxVolCad = document.getElementById('bikeChartVolCad');
+            if (ctxVolCad) {
+                resetChart('volCad');
+                window._leoBikeCharts['volCad'] = new Chart(ctxVolCad, {
+                    type: 'line',
+                    data: {
+                        labels: labelsBike,
+                        datasets: [
+                            {
+                                label: 'Cadência Média (RPM)',
+                                data: cadenciaRpm,
+                                borderColor: '#f59e0b',
+                                backgroundColor: 'rgba(245, 158, 11, 0.15)',
+                                borderWidth: 2,
+                                tension: 0.25,
+                                fill: true
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 10 } } } },
+                        scales: {
+                            x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: 'rgba(51,65,85,0.25)' } },
+                            y: { title: { display: true, text: 'RPM', color: '#f59e0b' }, ticks: { color: '#94a3b8' }, grid: { color: 'rgba(51,65,85,0.3)' } }
+                        }
+                    }
+                });
+            }
+            {% endif %}
+        })();
+    </script>
+    {% else %}
+    <article class="rounded-2xl bg-slate-900 border border-slate-800 p-8 text-center text-sm text-slate-400">
+        Aguardando sincronização de dados históricos do banco Neon PostgreSQL...
+    </article>
+    {% endif %}
+</div>

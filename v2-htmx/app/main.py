@@ -24,6 +24,10 @@ if str(BASE_DIR) not in sys.path:
 
 from app.config import APP_PASSWORD, APP_USER, GROQ_MODEL_TEXT, GROQ_MODEL_VISION, get_now_br
 from app.database import get_engine
+from app.services.bike_dashboard_service import (
+    invalidar_cache_bike,
+    obter_dados_dashboard_bike,
+)
 from app.services.groq_service import (
     analisar_refeicao_groq,
     diagnosticar_chave_groq,
@@ -405,6 +409,7 @@ async def api_intervals_auto_sync(
         eng = get_engine()
         ok_tr, msg_tr = sincronizar_treinos_recentes(engine=eng, dias_retroativos=7)
         ok_pe, msg_pe, qtd_pe = sincronizar_peso_intervals(engine=eng, dias_retroativos=30)
+        invalidar_cache_bike()
 
         if qtd_pe > 0 or (ok_tr and "processado(s)" in msg_tr) or force:
             houve_atualizacao = True
@@ -485,6 +490,53 @@ async def api_intervals_debug_wellness(
 
 
 # ============================================================================
+# PARCIAIS DO DASHBOARD LONGITUDINAL (CICLISMO, PMC, ANTROPOMETRIA E NUTRIÇÃO)
+# ============================================================================
+@app.get("/api/dashboard/kpis", response_class=HTMLResponse)
+async def api_dashboard_kpis(request: Request, force: Optional[int] = Query(default=0)):
+    """
+    Parcial de KPIs longitudinais (dashboardbike.py):
+    Peso Médio + variação, Cintura + variação, Fitness (CTL), Prontidão (TSB) e banner de semana em andamento.
+    """
+    try:
+        bike_dash = obter_dados_dashboard_bike(force_refresh=bool(force))
+    except Exception as exc:
+        return HTMLResponse(
+            content=(
+                f'<div role="alert" class="bg-red-100 border border-red-400 text-red-800 p-4 rounded-lg text-xs font-mono whitespace-pre-wrap">'
+                f"Erro ao carregar KPIs do dashboard de ciclismo: {html.escape(str(exc))}</div>"
+            ),
+            status_code=200,
+        )
+    return _render_template(request, "partials/dashboard_kpis.html", {"bike_dash": bike_dash})
+
+
+@app.get("/api/dashboard/graficos-bike", response_class=HTMLResponse)
+async def api_dashboard_graficos_bike(request: Request, force: Optional[int] = Query(default=0)):
+    """
+    Parcial de Gráficos Chart.js e Tabela Resumo Semanal (W-SUN, closed='left', label='left'):
+    1. Antropometria (Peso e Cintura)
+    2. Dieta (Proteína, Carbo e Kcal/dia)
+    3. Carga e Prontidão (PMC: TSS, CTL, ATL e TSB com zona -10 a +5)
+    4. Volume e Cadência da Bike (Distância km, Horas e RPM)
+    + Tabela Resumo Semanal (S1, S2...)
+    """
+    try:
+        bike_dash = obter_dados_dashboard_bike(force_refresh=bool(force))
+    except Exception as exc:
+        return HTMLResponse(
+            content=(
+                f'<div role="alert" class="bg-red-100 border border-red-400 text-red-800 p-4 rounded-lg text-xs font-mono whitespace-pre-wrap">'
+                f"Erro ao carregar gráficos de ciclismo: {html.escape(str(exc))}</div>"
+            ),
+            status_code=200,
+        )
+    return _render_template(
+        request, "partials/dashboard_graficos_bike.html", {"bike_dash": bike_dash}
+    )
+
+
+# ============================================================================
 # PARCIAIS: RESUMO DO TOPO
 # ============================================================================
 @app.get("/partials/summary", response_class=HTMLResponse)
@@ -524,6 +576,7 @@ async def partial_peso_post(
     try:
         val_kg = float(peso_kg)
         inserir_peso(dt_peso, val_kg)
+        invalidar_cache_bike()
         ok_int, msg_int = enviar_peso_intervals(dt_peso, val_kg)
         if ok_int:
             feedback = f"Peso de {val_kg:.1f} kg salvo no Neon ({dt_peso.strftime('%d/%m/%Y')}) e sincronizado via PUT no Intervals.icu!"

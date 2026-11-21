@@ -141,6 +141,11 @@
             if (tabId === 'diario' && window._leoWeightChart) {
                 window._leoWeightChart.resize();
             }
+            if (tabId === 'bike' && window._leoBikeCharts) {
+                Object.values(window._leoBikeCharts).forEach(ch => {
+                    if (ch && typeof ch.resize === 'function') ch.resize();
+                });
+            }
         }
 
         if ('serviceWorker' in navigator) {

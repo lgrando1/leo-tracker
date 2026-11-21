@@ -1,0 +1,72 @@
+<div
+    id="bike-dashboard-kpis"
+    hx-get="/api/dashboard/kpis"
+    hx-trigger="refreshDashboard from:body"
+    hx-swap="outerHTML"
+    class="space-y-4"
+>
+    {% if bike_dash.semana_em_andamento and bike_dash.aviso_semana_texto %}
+    <aside role="status" class="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs sm:text-sm text-amber-200 flex items-start gap-2.5 shadow-sm">
+        <span class="text-base">⚠️</span>
+        <p class="leading-relaxed">{{ bike_dash.aviso_semana_texto }}</p>
+    </aside>
+    {% endif %}
+
+    <!-- 4 Cards de KPIs Longitudinais (dashboardbike.py linhas 155-166) -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <!-- 1. Peso Médio Atual & Variação -->
+        <article class="rounded-2xl bg-slate-900 border border-slate-800 p-4 shadow-lg flex flex-col justify-between">
+            <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">⚖️ Peso Médio Semanal</span>
+            <div class="my-2">
+                <span class="text-2xl font-extrabold text-white tabular-nums">{{ '%.1f'|format(bike_dash.kpis.peso_atual) }} kg</span>
+            </div>
+            <p class="text-xs font-semibold text-emerald-400 tabular-nums">
+                -{{ '%.1f'|format(bike_dash.kpis.delta_peso) }} kg desde o início
+            </p>
+        </article>
+
+        <!-- 2. Cintura Atual & Variação -->
+        <article class="rounded-2xl bg-slate-900 border border-slate-800 p-4 shadow-lg flex flex-col justify-between">
+            <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">📏 Cintura Atual</span>
+            <div class="my-2">
+                {% if bike_dash.kpis.has_cintura %}
+                <span class="text-2xl font-extrabold text-white tabular-nums">{{ '%.1f'|format(bike_dash.kpis.cintura_atual) }} cm</span>
+                {% else %}
+                <span class="text-lg font-bold text-slate-500">Sem registros</span>
+                {% endif %}
+            </div>
+            <p class="text-xs font-semibold text-amber-400 tabular-nums">
+                {% if bike_dash.kpis.has_cintura and bike_dash.kpis.delta_cintura > 0 %}
+                    -{{ '%.1f'|format(bike_dash.kpis.delta_cintura) }} cm desde o início
+                {% elif bike_dash.kpis.has_cintura %}
+                    0.0 cm desde o início
+                {% else %}
+                    Registre na aba Medidas Corporais
+                {% endif %}
+            </p>
+        </article>
+
+        <!-- 3. Fitness Consolidado (CTL) -->
+        <article class="rounded-2xl bg-slate-900 border border-slate-800 p-4 shadow-lg flex flex-col justify-between">
+            <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">🚴‍♂️ Fitness Consolidado (CTL)</span>
+            <div class="my-2">
+                <span class="text-2xl font-extrabold text-sky-400 tabular-nums">{{ bike_dash.kpis.ctl_atual }}</span>
+            </div>
+            <p class="text-xs text-slate-400">Carga crônica acumulada (Intervals.icu)</p>
+        </article>
+
+        <!-- 4. Prontidão (TSB) + Status -->
+        <article class="rounded-2xl bg-slate-900 border border-slate-800 p-4 shadow-lg flex flex-col justify-between">
+            <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">⚡ Prontidão (TSB)</span>
+            <div class="my-2 flex items-baseline gap-2">
+                <span class="text-2xl font-extrabold text-white tabular-nums">{{ '%+d'|format(bike_dash.kpis.tsb_atual) }}</span>
+                <span class="text-xs text-slate-500">CTL − ATL</span>
+            </div>
+            <div>
+                <span class="inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold {{ bike_dash.kpis.tsb_badge_class }}">
+                    {{ bike_dash.kpis.tsb_status }}
+                </span>
+            </div>
+        </article>
+    </div>
+</div>
